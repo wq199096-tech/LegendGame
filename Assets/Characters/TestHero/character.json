@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "TestHero",
+  "spriteSheet": "Characters/TestHero/sprites/hero_debug.png",
+  "frameWidth": 96,
+  "frameHeight": 96,
+  "visualWidth": 96,
+  "visualHeight": 96,
+  "footprint": { "width": 28, "height": 18, "offsetX": 0, "offsetY": 20 },
+  "pivot": { "x": 0.5, "y": 0.85 },
+  "moveSpeed": 200,
+  "animations": "Characters/TestHero/animations.json"
+}

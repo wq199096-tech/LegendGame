@@ -18,11 +18,38 @@ namespace legend::resource {
 class ResourceManager;
 }
 
+namespace legend::entity {
+class Character;
+}
+
 namespace legend::map {
 
 class Map;
 class MapChunk;
 struct MapObject;
+
+// 统一 Y-Sort 排序项：MapObject 与 Character（以及未来 NPC/Monster）进入同一排序队列
+struct RenderSortItem {
+    enum class Type { MapObject, Character };
+
+    int sortLayer = 0;
+    float sortY = 0.0f;
+    int renderOrder = 0;
+    Type type = Type::MapObject;
+    const MapObject* mapObject = nullptr;
+    const entity::Character* character = nullptr;
+
+    // 排序键：sortLayer -> sortY -> renderOrder（与 MapRenderer::YSortCompare 规则一致）
+    static bool Compare(const RenderSortItem& a, const RenderSortItem& b) {
+        if (a.sortLayer != b.sortLayer) {
+            return a.sortLayer < b.sortLayer;
+        }
+        if (a.sortY != b.sortY) {
+            return a.sortY < b.sortY;
+        }
+        return a.renderOrder < b.renderOrder;
+    }
+};
 
 // 地图渲染器：
 // - Ground 按 Chunk 缓存顶点，仅渲染可见 Chunk（+1 Chunk 边距）
@@ -60,6 +87,8 @@ public:
         m_currentStats.visibleObjects = visibleObjects;
         m_currentStats.totalObjects = totalObjects;
     }
+    // 批渲染访问（CharacterRenderer 等需要直接提交的渲染器复用同一批次）
+    render::SpriteBatch& GetBatch() { return m_batch; }
     void Flush();
     void RenderCollisionOverlay(Map& map);
     void EndFrame();

@@ -7,7 +7,15 @@ set(LEGEND_ENGINE_SOURCES
     Core/Timer.cpp
     Core/Window.cpp
     Debug/Logger.cpp
+    Entity/Character.cpp
+    Entity/CharacterController.cpp
+    Entity/Direction8.cpp
+    Entity/Entity.cpp
     Input/InputManager.cpp
+    Animation/AnimationPlayer.cpp
+    Animation/AnimationStateMachine.cpp
+    Animation/AnimationLoader.cpp
+    Animation/SpriteSheet.cpp
     Map/Map.cpp
     Map/MapLayer.cpp
     Map/MapLoader.cpp
@@ -18,6 +26,7 @@ set(LEGEND_ENGINE_SOURCES
     Map/TileLayer.cpp
     Math/Matrix4x4.cpp
     Render/Camera2D.cpp
+    Render/CharacterRenderer.cpp
     Render/GLApi.cpp
     Render/Renderer.cpp
     Render/Shader.cpp

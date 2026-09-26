@@ -6,6 +6,8 @@ add_executable(LegendClient
     Source/LegendApp.cpp
     Source/GameScene.cpp
     Source/FallbackScene.cpp
+    Character/PlayerCharacter.cpp
+    Character/PlayerController.cpp
 )
 
 target_link_libraries(LegendClient PRIVATE legend_engine)

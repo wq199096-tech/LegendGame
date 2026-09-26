@@ -1,11 +1,12 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Map System V0.2 + Map Editor Prototype**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Character Entity System V0.3**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui）
 - 渲染：OpenGL 3.3 Core（自带精简 GL 函数加载器，不依赖 GLEW/GLAD）
 - 地图：数据驱动（JSON），Tile/Object/Collision/Occlusion 四层，Chunk 可视剔除 + SpriteBatch 批渲染 + Y-Sort
+- 角色：Entity/Character/Controller 体系，8 方向移动，SpriteSheet + UVRect 动画（Idle/Walk × 8 方向 = 16 Clip）
 - 图片解码：stb_image.h（单头文件，公有领域，位于 ThirdParty/stb）
 - 平台：Windows 10 / 11
 
@@ -71,8 +72,9 @@ Build\bin\Debug\LegendMapEditor.exe
 | W / A / S / D | 移动玩家（分轴碰撞，可沿墙滑动；不能穿水/墙/建筑/石头） |
 | 方向键 | 自由移动摄像机（Camera Follow 关闭时） |
 | 鼠标滚轮 | 摄像机缩放（0.25x ~ 4.0x，任意模式下可用） |
-| F | 开启 / 关闭摄像机跟随玩家（默认开启） |
-| F1 | 切换碰撞 Debug 可视化（阻挡 Tile 红色半透明覆盖） |
+| F | 开启 / 关闭摄像机跟随玩家（跟随脚底 Feet Position） |
+| F1 | 切换碰撞 Debug 可视化（Terrain/Manual/Object 合成结果，红色半透明） |
+| F2 | 切换角色 Debug（脚底碰撞盒黄色矩形 + Feet 十字 + 标题显示 Direction/Clip/Frame） |
 | ESC | 退出程序 |
 
 窗口标题实时显示 `Map: TestMap | Chunks: 20 | Tiles: 5120 | DC: 56 | FPS: 60`，
@@ -107,6 +109,17 @@ Build\bin\Debug\LegendMapEditor.exe
 - Tile ID：0=Empty 1=Grass 2=Dirt 3=Stone 4=Water（Water 默认阻挡）
 - 坐标：世界坐标（像素）↔ Tile（64px）↔ Chunk（16x16 Tile = 1024px），负数/越界安全
 - 编辑器保存后，客户端直接重新加载，无需重新编译
+
+## 角色资源（Assets/Characters/TestHero/）
+
+- `character.json`：名称 / SpriteSheet 路径 / 帧尺寸 / 视觉尺寸 / footprint（脚底碰撞区域）/ pivot（脚底锚点）/ 移动速度
+- `animations.json`：16 个 Clip（idle_/walk_ × 8 方向），每帧 `{index, duration}`
+- `sprites/hero_debug.png`：程序生成的 Debug SpriteSheet（6 帧 × 8 方向，48 帧，每方向独立颜色与朝向箭头）
+
+坐标语义：`Character.Position = 脚底点（Feet）`，精灵按 pivot 向上绘制；
+移动管线：`InputManager → PlayerController → CharacterController → Character → Map Collision → Position`。
+
+Tools/gen_hero_sprites.ps1 可重新生成角色资源。
 
 ## 日志
 
