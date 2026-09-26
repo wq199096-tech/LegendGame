@@ -4,13 +4,16 @@
 add_executable(LegendClient
     Source/Main.cpp
     Source/LegendApp.cpp
-    Source/TestScene.cpp
+    Source/GameScene.cpp
+    Source/FallbackScene.cpp
 )
 
 target_link_libraries(LegendClient PRIVATE legend_engine)
 
 if(MSVC)
     target_compile_options(LegendClient PRIVATE /utf-8)
+    # 临时：/MAP 生成链接清单用于崩溃地址符号定位
+    target_link_options(LegendClient PRIVATE "/INCREMENTAL:NO" "/MAP:${PROJECT_SOURCE_DIR}/Build/LegendClient.map")
 endif()
 
 # 在 Visual Studio 中按 F5 调试时，以工程根目录为工作目录（Assets 可被找到）

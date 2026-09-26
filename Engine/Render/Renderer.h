@@ -42,6 +42,12 @@ public:
 
     void SetClearColor(const math::Color& color) { m_clearColor = color; }
 
+    // 共享访问（SpriteBatch / MapRenderer / 编辑器复用同一着色器与上下文）
+    Shader& GetSpriteShader() { return m_spriteShader; }
+    SDL_GLContextState* GetGLContext() const { return m_glContext; }
+    // framebuffer 像素尺寸（HiDPI 下与逻辑窗口尺寸可能不同）
+    void QueryViewportSize(int& outWidth, int& outHeight) const;
+
 private:
     bool CreateGraphicsResources();
     void DestroyGraphicsResources();

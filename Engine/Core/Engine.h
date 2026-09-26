@@ -38,6 +38,9 @@ public:
         m_updateCallback = std::move(callback);
     }
 
+    // 附加状态文本（显示在窗口标题 FPS 之前，如地图统计）
+    void SetStatusText(const std::string& text) { m_statusText = text; }
+
 private:
     Engine() = default;
 
@@ -54,6 +57,7 @@ private:
 
     std::function<void(float)> m_updateCallback;
     std::string m_title;
+    std::string m_statusText;
     bool m_initialized = false;
     bool m_running = false;
     bool m_shutdownCompleted = false;

@@ -112,8 +112,12 @@ void Engine::Run() {
 }
 
 void Engine::UpdateFpsWindowTitle(double elapsedSeconds) {
-    const int fps = static_cast<int>(m_fpsFrames / elapsedSeconds + 0.5);
-    m_window.SetTitle(m_title + " | FPS: " + std::to_string(fps));
+    std::string title = m_title;
+    if (!m_statusText.empty()) {
+        title += " | " + m_statusText;
+    }
+    title += " | FPS: " + std::to_string(static_cast<int>(m_fpsFrames / elapsedSeconds + 0.5));
+    m_window.SetTitle(title);
 }
 
 void Engine::HandleDebugCapture() {

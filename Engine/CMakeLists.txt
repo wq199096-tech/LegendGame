@@ -8,11 +8,20 @@ set(LEGEND_ENGINE_SOURCES
     Core/Window.cpp
     Debug/Logger.cpp
     Input/InputManager.cpp
+    Map/Map.cpp
+    Map/MapLayer.cpp
+    Map/MapLoader.cpp
+    Map/MapRenderer.cpp
+    Map/CollisionLayer.cpp
+    Map/ObjectLayer.cpp
+    Map/OcclusionLayer.cpp
+    Map/TileLayer.cpp
     Math/Matrix4x4.cpp
     Render/Camera2D.cpp
     Render/GLApi.cpp
     Render/Renderer.cpp
     Render/Shader.cpp
+    Render/SpriteBatch.cpp
     Render/Texture.cpp
     Resource/ResourceManager.cpp
     Scene/GameObject.cpp
@@ -33,6 +42,7 @@ target_include_directories(legend_engine PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(legend_engine
     PUBLIC
         SDL3::SDL3
+        nlohmann_json::nlohmann_json
 )
 
 if(WIN32)

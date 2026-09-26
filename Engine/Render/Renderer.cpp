@@ -231,11 +231,25 @@ void Renderer::EndFrame() {
     }
 }
 
+void Renderer::QueryViewportSize(int& outWidth, int& outHeight) const {
+    int width = 1;
+    int height = 1;
+    if (m_window != nullptr) {
+        SDL_GetWindowSizeInPixels(m_window, &width, &height);
+    }
+    outWidth = width < 1 ? 1 : width;
+    outHeight = height < 1 ? 1 : height;
+}
+
 void Renderer::DrawSprite(const Texture& texture, const math::Vector2& centerPosition,
                           const SpriteDrawParams& params) {
     if (!texture.IsValid()) {
         return;
     }
+
+    // 显式绑定自身 VAO/VBO：可与 SpriteBatch 混用而互不干扰
+    gl::glBindVertexArray(m_vao);
+    gl::glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
 
     const float halfWidth = texture.GetWidth() * params.scale.x * 0.5f;
     const float halfHeight = texture.GetHeight() * params.scale.y * 0.5f;

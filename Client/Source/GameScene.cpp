@@ -1,0 +1,358 @@
+#include "Client/Source/GameScene.h"
+
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_scancode.h>
+
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "Engine/Core/Engine.h"
+#include "Engine/Debug/Logger.h"
+#include "Engine/Map/Map.h"
+#include "Engine/Map/MapTypes.h"
+#include "Engine/Render/Renderer.h"
+#include "Engine/Render/Texture.h"
+#include "Engine/Scene/GameObject.h"
+#include "Engine/Scene/SpriteRenderer.h"
+
+GameScene::GameScene(std::shared_ptr<legend::map::Map> map)
+    : legend::scene::Scene("GameScene"), m_map(std::move(map)) {}
+
+void GameScene::OnLoad() {
+    auto& engine = legend::Engine::Get();
+    auto& resources = engine.GetResources();
+    auto& renderer = engine.GetRenderer();
+
+    // 注册 Tile / 物件占位纹理（游戏与编辑器共用）
+    m_mapRenderer.CreateDefaultPlaceholderTextures(resources);
+
+    m_playerTexture = resources.CreateCheckerTexture(
+        "internal/player", 64, 16,
+        legend::math::Color::FromRGBA8(226, 62, 54),
+        legend::math::Color::FromRGBA8(250, 244, 244));
+    m_mapRenderer.RegisterObjectTexture("player", m_playerTexture);
+
+    if (!m_mapRenderer.Initialize(renderer.GetSpriteShader())) {
+        LOG_ERROR("GameScene: MapRenderer initialize failed.");
+        return;
+    }
+
+    // 玩家出生点：从地图中心螺旋寻找可行走 Tile
+    const int centerTileX = m_map->GetWidth() / 2;
+    const int centerTileY = m_map->GetHeight() / 2;
+    int spawnTileX = centerTileX;
+    int spawnTileY = centerTileY;
+    for (int radius = 0; radius < 20; ++radius) {
+        bool found = false;
+        for (int dy = -radius; dy <= radius && !found; ++dy) {
+            for (int dx = -radius; dx <= radius && !found; ++dx) {
+                const int tx = centerTileX + dx;
+                const int ty = centerTileY + dy;
+                if (!m_map->GetCollision().IsBlocked(tx, ty)) {
+                    spawnTileX = tx;
+                    spawnTileY = ty;
+                    found = true;
+                }
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+
+    m_player = CreatePlayer();
+    const float spawnX = legend::map::TileToWorldCenter(spawnTileX, static_cast<float>(m_map->GetTileSize()));
+    const float spawnY = legend::map::TileToWorldCenter(spawnTileY, static_cast<float>(m_map->GetTileSize()));
+    m_player->GetTransform().SetPosition({spawnX, spawnY});
+
+    auto& camera = engine.GetCamera();
+    camera.SetZoom(1.0f);
+    camera.SetPosition({spawnX, spawnY});
+
+    ApplyAutoTestHooks();
+    RunCollisionVerification();
+
+    LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
+             std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + ").");
+}
+
+legend::scene::GameObject* GameScene::CreatePlayer() {
+    m_player = CreateGameObject("Player");
+    auto* sprite = m_player->AddComponent<legend::scene::SpriteRenderer>();
+    sprite->SetTexture(m_playerTexture);
+    sprite->SetRenderOrder(10);
+    return m_player;
+}
+
+bool GameScene::IsFeetBoxBlocked(const legend::math::Vector2& center) const {
+    // 脚底碰撞盒四角采样（中心位于精灵中心下方 kPlayerFeetOffsetY 处）
+    const float boxX = center.x;
+    const float boxY = center.y + kPlayerFeetOffsetY;
+    const float left = boxX - kPlayerFeetHalfWidth;
+    const float right = boxX + kPlayerFeetHalfWidth;
+    const float top = boxY - kPlayerFeetHalfHeight;
+    const float bottom = boxY + kPlayerFeetHalfHeight;
+    return m_map->IsWorldBlocked(left, top) || m_map->IsWorldBlocked(right, top) ||
+           m_map->IsWorldBlocked(left, bottom) || m_map->IsWorldBlocked(right, bottom);
+}
+
+void GameScene::MovePlayerWithCollision(float deltaTime) {
+    if (m_player == nullptr) {
+        return;
+    }
+    auto& input = legend::Engine::Get().GetInput();
+    auto& transform = m_player->GetTransform();
+
+    float inputX = (input.IsKeyDown(SDL_SCANCODE_D) ? 1.0f : 0.0f) -
+                   (input.IsKeyDown(SDL_SCANCODE_A) ? 1.0f : 0.0f);
+    float inputY = (input.IsKeyDown(SDL_SCANCODE_S) ? 1.0f : 0.0f) -
+                   (input.IsKeyDown(SDL_SCANCODE_W) ? 1.0f : 0.0f);
+    if (m_autoWalk) {
+        inputX = 1.0f; // 自动化验收：模拟按住 D
+    }
+
+    legend::math::Vector2 direction(inputX, inputY);
+    if (direction.LengthSq() <= 0.0f) {
+        return;
+    }
+    direction = direction.Normalized();
+
+    const float step = kPlayerSpeed * deltaTime;
+    const legend::math::Vector2 position = transform.GetPosition();
+
+    // 分轴碰撞：X/Y 独立尝试，斜向撞墙时沿墙滑动
+    legend::math::Vector2 moved = position;
+    const legend::math::Vector2 stepX(position.x + direction.x * step, position.y);
+    if (!IsFeetBoxBlocked(stepX)) {
+        moved.x = stepX.x;
+    }
+    const legend::math::Vector2 stepY(moved.x, position.y + direction.y * step);
+    if (!IsFeetBoxBlocked(stepY)) {
+        moved.y = stepY.y;
+    }
+    transform.SetPosition(moved);
+}
+
+void GameScene::ClampCameraToMap() {
+    auto& engine = legend::Engine::Get();
+    auto& camera = engine.GetCamera();
+    int viewportW = 1;
+    int viewportH = 1;
+    engine.GetRenderer().QueryViewportSize(viewportW, viewportH);
+
+    const float halfViewW = static_cast<float>(viewportW) * 0.5f / camera.GetZoom();
+    const float halfViewH = static_cast<float>(viewportH) * 0.5f / camera.GetZoom();
+    const float worldW = m_map->GetWorldWidth();
+    const float worldH = m_map->GetWorldHeight();
+
+    legend::math::Vector2 clamped = camera.GetPosition();
+    // 地图比视口大：限制在地图内；否则固定在地图中心
+    if (worldW > halfViewW * 2.0f) {
+        clamped.x = std::clamp(clamped.x, halfViewW, worldW - halfViewW);
+    } else {
+        clamped.x = worldW * 0.5f;
+    }
+    if (worldH > halfViewH * 2.0f) {
+        clamped.y = std::clamp(clamped.y, halfViewH, worldH - halfViewH);
+    } else {
+        clamped.y = worldH * 0.5f;
+    }
+    camera.SetPosition(clamped);
+}
+
+void GameScene::UpdateCamera(float deltaTime) {
+    auto& engine = legend::Engine::Get();
+    auto& input = engine.GetInput();
+    auto& camera = engine.GetCamera();
+
+    // F 切换跟随
+    if (input.IsKeyPressed(SDL_SCANCODE_F)) {
+        m_cameraFollow = !m_cameraFollow;
+        LOG_INFO(m_cameraFollow ? "Camera follow: enabled (F)" : "Camera follow: disabled (F)");
+    }
+
+    // 鼠标滚轮缩放：无论是否跟随都生效
+    const float wheel = input.GetMouseWheelDelta();
+    if (wheel != 0.0f) {
+        camera.SetZoom(camera.GetZoom() * (wheel > 0.0f ? 1.1f : 1.0f / 1.1f));
+    }
+
+    if (m_cameraFollow) {
+        if (m_player != nullptr) {
+            const legend::math::Vector2 target = m_player->GetTransform().GetPosition();
+            const float smoothing = 1.0f - std::exp(-10.0f * deltaTime);
+            camera.SetPosition(camera.GetPosition() + (target - camera.GetPosition()) * smoothing);
+        }
+    } else {
+        // 方向键自由移动（仅关闭跟随时）
+        const float inputX = (input.IsKeyDown(SDL_SCANCODE_RIGHT) ? 1.0f : 0.0f) -
+                             (input.IsKeyDown(SDL_SCANCODE_LEFT) ? 1.0f : 0.0f);
+        const float inputY = (input.IsKeyDown(SDL_SCANCODE_DOWN) ? 1.0f : 0.0f) -
+                             (input.IsKeyDown(SDL_SCANCODE_UP) ? 1.0f : 0.0f);
+        legend::math::Vector2 direction(inputX, inputY);
+        if (direction.LengthSq() > 0.0f) {
+            direction = direction.Normalized();
+            camera.Move(direction * kCameraSpeed * deltaTime / camera.GetZoom());
+        }
+    }
+
+    ClampCameraToMap();
+}
+
+void GameScene::Update(float deltaTime) {
+    auto& engine = legend::Engine::Get();
+    auto& input = engine.GetInput();
+
+    // F1 切换碰撞可视化
+    if (input.IsKeyPressed(SDL_SCANCODE_F1)) {
+        m_collisionDebug = !m_collisionDebug;
+        LOG_INFO(m_collisionDebug ? "Collision debug: enabled (F1)" : "Collision debug: disabled (F1)");
+    }
+
+    MovePlayerWithCollision(deltaTime);
+    UpdateCamera(deltaTime);
+    LogMapStats(deltaTime);
+}
+
+void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camera2D& camera) {
+    int viewportW = 1;
+    int viewportH = 1;
+    renderer.QueryViewportSize(viewportW, viewportH);
+
+    m_mapRenderer.BeginFrame(camera, static_cast<float>(viewportW), static_cast<float>(viewportH));
+    m_mapRenderer.RenderGround(*m_map);
+
+    // Pass 1：非遮挡物件（地面装饰），按 renderOrder / bottomY 排序
+    std::vector<const legend::map::MapObject*> decorations;
+    std::vector<const legend::map::MapObject*> occluders;
+    for (const auto& object : m_map->GetObjects().Objects()) {
+        if (!m_map->GetOcclusion().IsOccluder(object.id)) {
+            decorations.push_back(&object);
+        } else {
+            occluders.push_back(&object);
+        }
+    }
+    std::sort(decorations.begin(), decorations.end(), legend::map::MapRenderer::YSortCompare);
+    for (const legend::map::MapObject* object : decorations) {
+        m_mapRenderer.DrawMapObject(*object);
+    }
+    m_mapRenderer.Flush();
+
+    // Pass 2：Y-Sort —— 遮挡物件与玩家按底部 Y 合并排序（树冠/建筑遮挡玩家）
+    std::vector<const legend::map::MapObject*> ySortList = occluders;
+    legend::map::MapObject playerProxy;
+    if (m_player != nullptr) {
+        playerProxy.id = 0;
+        playerProxy.name = "Player";
+        playerProxy.textureId = "player";
+        playerProxy.x = m_player->GetTransform().GetPosition().x;
+        playerProxy.y = m_player->GetTransform().GetPosition().y;
+        playerProxy.width = 64.0f;
+        playerProxy.height = 64.0f;
+        playerProxy.renderOrder = 10;
+        ySortList.push_back(&playerProxy);
+    }
+    std::sort(ySortList.begin(), ySortList.end(), legend::map::MapRenderer::YSortCompare);
+
+    bool playerDrawn = false;
+    for (const legend::map::MapObject* object : ySortList) {
+        if (object->id == 0 && !playerDrawn) {
+            // 先冲刷已排在前面的物件，再绘制玩家，保证遮挡顺序正确
+            m_mapRenderer.Flush();
+            renderer.DrawSprite(*m_playerTexture, {object->x, object->y},
+                                legend::render::SpriteDrawParams{});
+            playerDrawn = true;
+        } else {
+            m_mapRenderer.DrawMapObject(*object);
+        }
+    }
+    m_mapRenderer.Flush();
+
+    if (m_collisionDebug) {
+        m_mapRenderer.RenderCollisionOverlay(*m_map);
+    }
+    m_mapRenderer.EndFrame();
+}
+
+void GameScene::RunCollisionVerification() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool expected, bool actual) {
+        const bool pass = expected == actual;
+        LOG_INFO("[CollisionCheck] " + name + ": expected " + (expected ? "blocked" : "walkable") +
+                 ", got " + (actual ? "blocked" : "walkable") + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    // 找一个水域 Tile 与一个草地 Tile
+    bool waterFound = false;
+    bool grassFound = false;
+    legend::map::TilePoint waterTile{};
+    legend::map::TilePoint grassTile{};
+    for (int ty = 0; ty < m_map->GetHeight() && (!waterFound || !grassFound); ++ty) {
+        for (int tx = 0; tx < m_map->GetWidth() && (!waterFound || !grassFound); ++tx) {
+            const uint16_t tile = m_map->GetGroundTile(tx, ty);
+            if (tile == static_cast<uint16_t>(legend::map::TileId::Water) && !waterFound) {
+                waterTile = {tx, ty};
+                waterFound = true;
+            }
+            if (tile == static_cast<uint16_t>(legend::map::TileId::Grass) &&
+                !m_map->GetCollision().IsBlocked(tx, ty) && !grassFound) {
+                grassTile = {tx, ty};
+                grassFound = true;
+            }
+        }
+    }
+
+    const float ts = static_cast<float>(m_map->GetTileSize());
+    if (waterFound) {
+        check("water tile blocked", true,
+              m_map->IsWorldBlocked(legend::map::TileToWorldCenter(waterTile.x, ts),
+                                    legend::map::TileToWorldCenter(waterTile.y, ts)));
+    }
+    if (grassFound) {
+        check("grass tile walkable", false,
+              m_map->IsWorldBlocked(legend::map::TileToWorldCenter(grassTile.x, ts),
+                                    legend::map::TileToWorldCenter(grassTile.y, ts)));
+    }
+    // 地图外视为阻挡
+    check("out-of-bounds blocked", true, m_map->IsWorldBlocked(-9999.0f, -9999.0f));
+    check("out-of-bounds blocked (2)", true,
+          m_map->IsWorldBlocked(m_map->GetWorldWidth() + 9999.0f, 0.0f));
+
+    LOG_INFO("[CollisionCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::ApplyAutoTestHooks() {
+    const char* autoWalk = SDL_getenv("LEGEND_AUTO_WALK");
+    if (autoWalk != nullptr && autoWalk[0] == '1') {
+        m_autoWalk = true;
+        LOG_INFO("Auto-test: walking right enabled (LEGEND_AUTO_WALK=1).");
+    }
+    const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
+    if (collisionDebug != nullptr && collisionDebug[0] == '1') {
+        m_collisionDebug = true;
+        LOG_INFO("Auto-test: collision debug overlay enabled (LEGEND_AUTO_COLLISION=1).");
+    }
+}
+
+void GameScene::LogMapStats(double deltaTime) {
+    m_statsLogTimer += deltaTime;
+    if (m_statsLogTimer < 2.0) {
+        return;
+    }
+    m_statsLogTimer = 0.0;
+
+    const auto& stats = m_mapRenderer.GetLastFrameStats();
+    const std::string status =
+        "Map: " + m_map->GetName() +
+        " | Chunks: " + std::to_string(stats.visibleChunks) +
+        " | Tiles: " + std::to_string(stats.renderedTiles) +
+        " | DC: " + std::to_string(stats.drawCalls);
+    legend::Engine::Get().SetStatusText(status);
+    LOG_INFO("[MapStats] " + status);
+}

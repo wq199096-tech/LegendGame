@@ -1,11 +1,14 @@
 #include "Client/Source/LegendApp.h"
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_scancode.h>
 
-#include "Client/Source/TestScene.h"
-#include "Engine/Debug/Logger.h"
+#include <memory>
+
+#include "Client/Source/FallbackScene.h"
+#include "Client/Source/GameScene.h"
 #include "Engine/Core/Engine.h"
+#include "Engine/Debug/Logger.h"
+#include "Engine/Map/MapLoader.h"
 #include "Shared/Version.h"
 
 const char* LegendApp::GetWindowTitle() const {
@@ -13,7 +16,20 @@ const char* LegendApp::GetWindowTitle() const {
 }
 
 bool LegendApp::OnInitialize(legend::Engine& engine) {
-    engine.GetScenes().SetScene(std::make_shared<TestScene>());
+    // 地图路径允许环境变量覆盖（自动化验收用）
+    const char* mapPathEnv = SDL_getenv("LEGEND_CLIENT_MAP");
+    const std::string mapPath = (mapPathEnv != nullptr && mapPathEnv[0] != '\0')
+                                    ? std::string(mapPathEnv)
+                                    : std::string("Assets/Maps/TestMap/map.json");
+
+    auto map = legend::map::MapLoader::Load(mapPath);
+    if (!map) {
+        LOG_ERROR("Failed to load map '" + mapPath + "'. Entering fallback scene.");
+        engine.GetScenes().SetScene(std::make_shared<FallbackScene>());
+        return true;
+    }
+
+    engine.GetScenes().SetScene(std::make_shared<GameScene>(std::move(map)));
     return true;
 }
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(LegendGame VERSION 0.1.0 LANGUAGES C CXX)
+project(LegendGame VERSION 0.2.0 LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
 # 全局编译设置
@@ -39,12 +39,23 @@ FetchContent_Declare(SDL
     OVERRIDE_FIND_PACKAGE
 )
 
-FetchContent_MakeAvailable(SDL)
+# nlohmann/json：地图 JSON 序列化（header-only）
+FetchContent_Declare(nlohmann_json
+    URL https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.zip
+)
 
-# 图片解码使用 ThirdParty/stb/stb_image.h（单头文件，公有领域），不引入额外构建依赖
+# Dear ImGui：仅用于 Map Editor 开发工具，不用于正式游戏 UI
+FetchContent_Declare(imgui
+    URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.8.zip
+)
+
+FetchContent_MakeAvailable(SDL nlohmann_json imgui)
+
+# 图片解码使用 ThirdParty/stb/stb_image.h（单头文件，公有领域）
 
 # ---------------------------------------------------------------------------
 # 项目模块
 # ---------------------------------------------------------------------------
 add_subdirectory(Engine)
 add_subdirectory(Client)
+add_subdirectory(Tools/MapEditor)

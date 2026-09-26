@@ -1,10 +1,11 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Engine V0.1**（自研客户端引擎）。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Map System V0.2 + Map Editor Prototype**。
 
 - 语言：C++20
-- 构建：CMake + FetchContent（自动下载 SDL3，无需手动安装依赖）
+- 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui）
 - 渲染：OpenGL 3.3 Core（自带精简 GL 函数加载器，不依赖 GLEW/GLAD）
+- 地图：数据驱动（JSON），Tile/Object/Collision/Occlusion 四层，Chunk 可视剔除 + SpriteBatch 批渲染 + Y-Sort
 - 图片解码：stb_image.h（单头文件，公有领域，位于 ThirdParty/stb）
 - 平台：Windows 10 / 11
 
@@ -58,23 +59,54 @@ cmake --build Build --config Debug --parallel
 ```bat
 cd LegendGame
 Build\bin\Debug\LegendClient.exe
+Build\bin\Debug\LegendMapEditor.exe
 ```
 
 建议在工程根目录下运行（这样能读到 `Assets/`，日志写在 `Logs/latest.log`）。
-资源缺失时引擎会自动使用程序生成的占位纹理，不会崩溃。
 
-## Engine V0.1 操作说明
+## Engine V0.2 操作说明
 
 | 按键 | 功能 |
 | --- | --- |
-| W / A / S / D | 移动玩家（支持斜向，速度已归一化：200 units/s） |
+| W / A / S / D | 移动玩家（分轴碰撞，可沿墙滑动；不能穿水/墙/建筑/石头） |
 | 方向键 | 自由移动摄像机（Camera Follow 关闭时） |
-| 鼠标滚轮 | 摄像机缩放（0.25x ~ 4.0x） |
+| 鼠标滚轮 | 摄像机缩放（0.25x ~ 4.0x，任意模式下可用） |
 | F | 开启 / 关闭摄像机跟随玩家（默认开启） |
+| F1 | 切换碰撞 Debug 可视化（阻挡 Tile 红色半透明覆盖） |
 | ESC | 退出程序 |
 
-窗口：1280x720，标题实时显示 FPS（每 0.5 秒刷新）。
-测试世界 3000x3000，程序启动后自动进入 TestScene。
+窗口标题实时显示 `Map: TestMap | Chunks: 20 | Tiles: 5120 | DC: 56 | FPS: 60`，
+用于验证 Chunk 剔除与批渲染（5120 个可见 Tile 只有几十次 DrawCall）。
+
+## Map Editor（LegendMapEditor.exe）
+
+- **File**：New Map / Open Map / Save / Save As（与游戏共用 `Engine/Map/MapLoader`）
+- **View**：Collision Overlay 开关、Grid 开关、重置缩放
+- **Palette**：Ground（绘制 Grass/Dirt/Stone/Water，左键绘制、拖动连刷）、
+  Collision（左键设阻挡、右键清除）、Objects（放 Tree/Rock/Building，点选后可删除）
+- **视口**：滚轮缩放、右/中键拖动平移
+
+## 地图文件格式（Assets/Maps/TestMap/map.json）
+
+```json
+{
+  "version": 1,
+  "name": "TestMap",
+  "tileSize": 64,
+  "width": 100,
+  "height": 100,
+  "layers": [
+    { "name": "Ground",    "type": "tile",      "visible": true, "data": [ ...10000 个 TileID... ] },
+    { "name": "Objects",   "type": "object",    "visible": true, "objects": [ { "id":1, "name":"...", "textureId":"tree", "x":..., "y":..., "width":96, "height":96, "rotation":0, "renderOrder":0, "blocking":true, "occluder":true } ] },
+    { "name": "Collision", "type": "collision", "visible": true, "data": [ ...10000 个 0/1... ] },
+    { "name": "Occlusion", "type": "occlusion", "visible": true, "objects": [ 1, 2 ] }
+  ]
+}
+```
+
+- Tile ID：0=Empty 1=Grass 2=Dirt 3=Stone 4=Water（Water 默认阻挡）
+- 坐标：世界坐标（像素）↔ Tile（64px）↔ Chunk（16x16 Tile = 1024px），负数/越界安全
+- 编辑器保存后，客户端直接重新加载，无需重新编译
 
 ## 日志
 
