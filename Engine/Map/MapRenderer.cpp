@@ -146,6 +146,9 @@ void MapRenderer::RebuildChunkCache(Map& map, MapChunk& chunk, ChunkCache& cache
 }
 
 void MapRenderer::RenderGround(Map& map) {
+    // 每帧重置全部 Chunk 可见状态，保证 visible 真实反映当前帧
+    map.ResetChunkVisibility();
+
     const int chunkCountX = map.GetChunkCountX();
     const int chunkCountY = map.GetChunkCountY();
     if (chunkCountX <= 0 || chunkCountY <= 0) {
@@ -243,11 +246,24 @@ void MapRenderer::RenderCollisionOverlay(Map& map) {
     }
 }
 
+bool MapRenderer::IsObjectVisible(const MapObject& object, float margin) const {
+    const float halfW = object.width * 0.5f;
+    const float halfH = object.height * 0.5f;
+    return object.x + halfW >= m_viewLeft - margin && object.x - halfW <= m_viewRight + margin &&
+           object.y + halfH >= m_viewTop - margin && object.y - halfH <= m_viewBottom + margin;
+}
+
 bool MapRenderer::YSortCompare(const MapObject* a, const MapObject* b) {
-    if (a->renderOrder != b->renderOrder) {
-        return a->renderOrder < b->renderOrder;
+    // 1. 分层：不同 sortLayer 之间不参与 bottomY 互比
+    if (a->sortLayer != b->sortLayer) {
+        return a->sortLayer < b->sortLayer;
     }
-    return a->GetBottomY() < b->GetBottomY();
+    // 2. 同层严格按底部 Y：bottomY 小的先画（在后面），大的后画（在前/遮挡）
+    if (a->GetBottomY() != b->GetBottomY()) {
+        return a->GetBottomY() < b->GetBottomY();
+    }
+    // 3. bottomY 完全相同时才用 renderOrder 平局判定
+    return a->renderOrder < b->renderOrder;
 }
 
 void MapRenderer::EndFrame() {

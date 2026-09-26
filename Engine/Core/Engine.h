@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <functional>
 #include <string>
 
@@ -63,7 +64,13 @@ private:
     bool m_shutdownCompleted = false;
 
     double m_totalElapsed = 0.0;
-    bool m_debugCaptureDone = false;
+
+    // 调试截图调度（LEGEND_AUTO_SCREENSHOT + LEGEND_AUTO_SHOT_TIMES="2.5,5.0"）
+    bool m_shotTimesParsed = false;
+    std::string m_screenshotBase;
+    std::deque<double> m_pendingShots;
+    int m_totalShotCount = 0;
+    int m_shotIndex = 0;
 
     double m_fpsAccumulated = 0.0;
     int m_fpsFrames = 0;

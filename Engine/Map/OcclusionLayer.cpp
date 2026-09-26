@@ -16,4 +16,8 @@ void OcclusionLayer::AddOccluder(uint32_t objectId) {
     }
 }
 
+void OcclusionLayer::RemoveOccluder(uint32_t objectId) {
+    std::erase(m_occluderIds, objectId);
+}
+
 } // namespace legend::map

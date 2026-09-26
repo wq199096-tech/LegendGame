@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -74,6 +75,9 @@ void GameScene::OnLoad() {
 
     ApplyAutoTestHooks();
     RunCollisionVerification();
+    RunYSortVerification();
+    RunCollisionSourceVerification();
+    RunEditedMapCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + ").");
@@ -100,7 +104,7 @@ bool GameScene::IsFeetBoxBlocked(const legend::math::Vector2& center) const {
 }
 
 void GameScene::MovePlayerWithCollision(float deltaTime) {
-    if (m_player == nullptr) {
+    if (m_player == nullptr || m_autoYsort) {
         return;
     }
     auto& input = legend::Engine::Get().GetInput();
@@ -205,6 +209,7 @@ void GameScene::UpdateCamera(float deltaTime) {
 void GameScene::Update(float deltaTime) {
     auto& engine = legend::Engine::Get();
     auto& input = engine.GetInput();
+    m_sceneElapsed += deltaTime;
 
     // F1 切换碰撞可视化
     if (input.IsKeyPressed(SDL_SCANCODE_F1)) {
@@ -213,6 +218,9 @@ void GameScene::Update(float deltaTime) {
     }
 
     MovePlayerWithCollision(deltaTime);
+    if (m_autoYsort) {
+        UpdateAutoYsortWalk(deltaTime);
+    }
     UpdateCamera(deltaTime);
     LogMapStats(deltaTime);
 }
@@ -226,15 +234,24 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     m_mapRenderer.RenderGround(*m_map);
 
     // Pass 1：非遮挡物件（地面装饰），按 renderOrder / bottomY 排序
+    // Object Culling：AABB + 边距，视口外物件不参与排序和绘制
     std::vector<const legend::map::MapObject*> decorations;
     std::vector<const legend::map::MapObject*> occluders;
+    int totalObjects = 0;
+    int visibleObjects = 0;
     for (const auto& object : m_map->GetObjects().Objects()) {
+        ++totalObjects;
+        if (!m_mapRenderer.IsObjectVisible(object)) {
+            continue;
+        }
+        ++visibleObjects;
         if (!m_map->GetOcclusion().IsOccluder(object.id)) {
             decorations.push_back(&object);
         } else {
             occluders.push_back(&object);
         }
     }
+    m_mapRenderer.SetObjectCounts(visibleObjects, totalObjects);
     std::sort(decorations.begin(), decorations.end(), legend::map::MapRenderer::YSortCompare);
     for (const legend::map::MapObject* object : decorations) {
         m_mapRenderer.DrawMapObject(*object);
@@ -252,7 +269,8 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
         playerProxy.y = m_player->GetTransform().GetPosition().y;
         playerProxy.width = 64.0f;
         playerProxy.height = 64.0f;
-        playerProxy.renderOrder = 10;
+        playerProxy.renderOrder = 10; // 仅在 bottomY 相同时作平局判定，不破坏 Y-Sort
+        playerProxy.sortLayer = 0;
         ySortList.push_back(&playerProxy);
     }
     std::sort(ySortList.begin(), ySortList.end(), legend::map::MapRenderer::YSortCompare);
@@ -301,7 +319,7 @@ void GameScene::RunCollisionVerification() {
                 waterFound = true;
             }
             if (tile == static_cast<uint16_t>(legend::map::TileId::Grass) &&
-                !m_map->GetCollision().IsBlocked(tx, ty) && !grassFound) {
+                !m_map->IsTileBlocked(tx, ty) && !grassFound) {
                 grassTile = {tx, ty};
                 grassFound = true;
             }
@@ -338,6 +356,228 @@ void GameScene::ApplyAutoTestHooks() {
         m_collisionDebug = true;
         LOG_INFO("Auto-test: collision debug overlay enabled (LEGEND_AUTO_COLLISION=1).");
     }
+    const char* autoYsort = SDL_getenv("LEGEND_AUTO_YSORT");
+    if (autoYsort != nullptr && autoYsort[0] == '1') {
+        // 找第一棵参与 Y-Sort 的树，玩家在其上方/下方之间切换（配合引擎 2.5s/5.0s 两次截图）
+        for (const auto& object : m_map->GetObjects().Objects()) {
+            if (object.occluder && object.textureId == "tree") {
+                m_autoYsort = true;
+                m_ysortTreeX = object.x;
+                m_ysortTreeY = object.y;
+                break;
+            }
+        }
+        if (m_autoYsort) {
+            LOG_INFO("Auto-test: Y-Sort walk enabled (LEGEND_AUTO_YSORT=1), tree at (" +
+                     std::to_string(m_ysortTreeX) + "," + std::to_string(m_ysortTreeY) + ").");
+        }
+    }
+}
+
+void GameScene::UpdateAutoYsortWalk(float deltaTime) {
+    (void)deltaTime;
+    if (m_player == nullptr) {
+        return;
+    }
+    // 与引擎截图时刻对齐（LEGEND_AUTO_SHOT_TIMES="2.5,5.0"）：
+    // 2.5s 前玩家在树上方（bottomY < 树 -> 玩家被树冠遮挡）；之后在树下方（玩家在前）。
+    const float targetY = (m_sceneElapsed < 2.5) ? (m_ysortTreeY - 70.0f) : (m_ysortTreeY + 70.0f);
+    m_player->GetTransform().SetPosition({m_ysortTreeX, targetY});
+}
+
+void GameScene::RunYSortVerification() {
+    int failures = 0;
+
+    // 找一棵树与一栋建筑（均需参与 Y-Sort 遮挡）
+    const legend::map::MapObject* tree = nullptr;
+    const legend::map::MapObject* building = nullptr;
+    for (const auto& object : m_map->GetObjects().Objects()) {
+        if (!object.occluder) {
+            continue;
+        }
+        if (tree == nullptr && object.textureId == "tree") {
+            tree = &object;
+        }
+        if (building == nullptr && object.textureId == "building") {
+            building = &object;
+        }
+    }
+    if (tree == nullptr || building == nullptr) {
+        LOG_WARN("[YSortCheck] skipped: missing occluder tree/building in map.");
+        return;
+    }
+
+    // 玩家代理：renderOrder = 10（旧的错误实现会因此永远压过 renderOrder=0 的遮挡物）
+    legend::map::MapObject proxy;
+    proxy.id = 0;
+    proxy.sortLayer = 0;
+    proxy.renderOrder = 10;
+    proxy.width = 64.0f;
+    proxy.height = 64.0f;
+
+    auto behindCheck = [&](const char* name, const legend::map::MapObject* occluder,
+                           float playerBottomY) {
+        proxy.x = occluder->x;
+        proxy.y = playerBottomY - 32.0f;
+        std::vector<const legend::map::MapObject*> list = {occluder, &proxy};
+        std::sort(list.begin(), list.end(), legend::map::MapRenderer::YSortCompare);
+        // 玩家 bottomY 更小 -> 玩家先画（被遮挡物遮挡） -> 列表中玩家在前
+        const bool pass = (list.front() == &proxy);
+        LOG_INFO(std::string("[YSortCheck] ") + name + ": player bottomY=" +
+                 std::to_string(playerBottomY) + ", occluder bottomY=" +
+                 std::to_string(occluder->GetBottomY()) + " -> player drawn first: " +
+                 (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    auto frontCheck = [&](const char* name, const legend::map::MapObject* occluder,
+                          float playerBottomY) {
+        proxy.x = occluder->x;
+        proxy.y = playerBottomY - 32.0f;
+        std::vector<const legend::map::MapObject*> list = {occluder, &proxy};
+        std::sort(list.begin(), list.end(), legend::map::MapRenderer::YSortCompare);
+        // 玩家 bottomY 更大 -> 玩家后画（在遮挡物前面）
+        const bool pass = (list.back() == &proxy);
+        LOG_INFO(std::string("[YSortCheck] ") + name + ": player bottomY=" +
+                 std::to_string(playerBottomY) + ", occluder bottomY=" +
+                 std::to_string(occluder->GetBottomY()) + " -> player drawn last: " +
+                 (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    // 树：上方（被遮挡）/下方（在前）
+    behindCheck("player behind tree", tree, tree->GetBottomY() - 100.0f);
+    frontCheck("player in front of tree", tree, tree->GetBottomY() + 100.0f);
+    // 建筑：上方 / 下方
+    behindCheck("player behind building", building, building->GetBottomY() - 100.0f);
+    frontCheck("player in front of building", building, building->GetBottomY() + 100.0f);
+
+    LOG_INFO("[YSortCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunCollisionSourceVerification() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool expected, bool actual) {
+        const bool pass = expected == actual;
+        LOG_INFO("[CollisionSourceCheck] " + name + ": expected " +
+                 (expected ? "blocked" : "walkable") + ", got " +
+                 (actual ? "blocked" : "walkable") + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    // 找一个可用测试 Tile（草地且当前无任何阻挡来源）
+    legend::map::TilePoint freeTile{};
+    bool freeFound = false;
+    legend::map::TilePoint waterTile{};
+    bool waterFound = false;
+    for (int ty = 1; ty < m_map->GetHeight() - 1 && (!freeFound || !waterFound); ++ty) {
+        for (int tx = 1; tx < m_map->GetWidth() - 1 && (!freeFound || !waterFound); ++tx) {
+            if (!freeFound && m_map->GetGroundTile(tx, ty) == static_cast<uint16_t>(legend::map::TileId::Grass) &&
+                !m_map->IsTileBlocked(tx, ty)) {
+                freeTile = {tx, ty};
+                freeFound = true;
+            }
+            if (!waterFound && m_map->GetGroundTile(tx, ty) == static_cast<uint16_t>(legend::map::TileId::Water)) {
+                waterTile = {tx, ty};
+                waterFound = true;
+            }
+        }
+    }
+    if (!freeFound) {
+        LOG_WARN("[CollisionSourceCheck] skipped: no free grass tile found.");
+        return;
+    }
+    const float ts = static_cast<float>(m_map->GetTileSize());
+    const float cx = legend::map::TileToWorldCenter(freeTile.x, ts);
+    const float cy = legend::map::TileToWorldCenter(freeTile.y, ts);
+
+    // 1) 两个 blocking 物件重叠同一 Tile
+    legend::map::MapObject objectA;
+    objectA.id = m_map->GetObjects().GetMaxObjectId() + 100001;
+    objectA.name = "test_overlap_a";
+    objectA.textureId = "rock";
+    objectA.width = 48.0f;
+    objectA.height = 48.0f;
+    objectA.x = cx;
+    objectA.y = cy;
+    objectA.blocking = true;
+    m_map->SpawnObject(objectA);
+
+    legend::map::MapObject objectB = objectA;
+    objectB.id += 1;
+    objectB.name = "test_overlap_b";
+    m_map->SpawnObject(objectB);
+    check("overlapping objects blocked", true, m_map->IsTileBlocked(freeTile.x, freeTile.y));
+
+    // 2) 删除其中一个，剩余物件继续阻挡
+    m_map->DespawnObject(objectA.id);
+    check("delete one object keeps collision", true, m_map->IsTileBlocked(freeTile.x, freeTile.y));
+    m_map->DespawnObject(objectB.id);
+    check("delete both objects => walkable", false, m_map->IsTileBlocked(freeTile.x, freeTile.y));
+
+    // 3) Water 上放 blocking 物件，删除后 Water 仍阻挡（Terrain 来源独立）
+    if (waterFound) {
+        const float wx = legend::map::TileToWorldCenter(waterTile.x, ts);
+        const float wy = legend::map::TileToWorldCenter(waterTile.y, ts);
+        legend::map::MapObject building;
+        building.id = m_map->GetObjects().GetMaxObjectId() + 100001;
+        building.name = "test_water_building";
+        building.textureId = "building";
+        building.width = 192.0f;
+        building.height = 128.0f;
+        building.x = wx;
+        building.y = wy;
+        building.blocking = true;
+        m_map->SpawnObject(building);
+        check("water + building blocked", true, m_map->IsTileBlocked(waterTile.x, waterTile.y));
+        m_map->DespawnObject(building.id);
+        check("water still blocked after delete", true, m_map->IsTileBlocked(waterTile.x, waterTile.y));
+    }
+
+    // 4) 人工碰撞：放物件 -> 删物件 -> 人工 blocked 保留
+    m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, true);
+    check("manual blocked", true, m_map->IsTileBlocked(freeTile.x, freeTile.y));
+    legend::map::MapObject objectC;
+    objectC.id = m_map->GetObjects().GetMaxObjectId() + 100001;
+    objectC.name = "test_manual_overlap";
+    objectC.textureId = "rock";
+    objectC.width = 48.0f;
+    objectC.height = 48.0f;
+    objectC.x = cx;
+    objectC.y = cy;
+    objectC.blocking = true;
+    m_map->SpawnObject(objectC);
+    m_map->DespawnObject(objectC.id);
+    check("manual collision preserved after object delete", true,
+          m_map->IsTileBlocked(freeTile.x, freeTile.y));
+    m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, false);
+    check("manual cleared => walkable", false, m_map->IsTileBlocked(freeTile.x, freeTile.y));
+
+    LOG_INFO("[CollisionSourceCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunEditedMapCheck() {
+    // 编辑器闭环验证：编辑器刷的 Water（Terrain 来源）在客户端加载后必须仍阻挡
+    const char* expectTile = SDL_getenv("LEGEND_EXPECT_BLOCKED_TILE");
+    if (expectTile == nullptr || expectTile[0] == '\0') {
+        return;
+    }
+    int tx = -1;
+    int ty = -1;
+    if (std::sscanf(expectTile, "%d,%d", &tx, &ty) != 2) {
+        LOG_WARN("[EditedMapCheck] invalid LEGEND_EXPECT_BLOCKED_TILE value.");
+        return;
+    }
+    const float ts = static_cast<float>(m_map->GetTileSize());
+    const bool blocked = m_map->IsTileBlocked(tx, ty);
+    LOG_INFO(std::string("[EditedMapCheck] tile (") + std::to_string(tx) + "," +
+             std::to_string(ty) + ") expected blocked, got " +
+             (blocked ? "blocked -> PASS" : "walkable -> FAIL"));
 }
 
 void GameScene::LogMapStats(double deltaTime) {
@@ -352,7 +592,26 @@ void GameScene::LogMapStats(double deltaTime) {
         "Map: " + m_map->GetName() +
         " | Chunks: " + std::to_string(stats.visibleChunks) +
         " | Tiles: " + std::to_string(stats.renderedTiles) +
+        " | Objects: " + std::to_string(stats.visibleObjects) + "/" + std::to_string(stats.totalObjects) +
         " | DC: " + std::to_string(stats.drawCalls);
     legend::Engine::Get().SetStatusText(status);
     LOG_INFO("[MapStats] " + status);
+
+    // [ChunkCheck] 一次性断言：Chunk visible 状态与统计一致（每帧重置生效）
+    if (!m_chunkCheckDone && stats.visibleChunks > 0) {
+        m_chunkCheckDone = true;
+        int counted = 0;
+        for (int cy = 0; cy < m_map->GetChunkCountY(); ++cy) {
+            for (int cx = 0; cx < m_map->GetChunkCountX(); ++cx) {
+                const legend::map::MapChunk* chunk = m_map->GetChunk(cx, cy);
+                if (chunk != nullptr && chunk->IsVisible()) {
+                    ++counted;
+                }
+            }
+        }
+        const bool pass = counted == stats.visibleChunks;
+        LOG_INFO("[ChunkCheck] visible-consistency: counted " + std::to_string(counted) +
+                 ", stats " + std::to_string(stats.visibleChunks) + " -> " +
+                 (pass ? "PASS" : "FAIL"));
+    }
 }

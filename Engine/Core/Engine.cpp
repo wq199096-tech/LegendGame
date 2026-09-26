@@ -121,27 +121,71 @@ void Engine::UpdateFpsWindowTitle(double elapsedSeconds) {
 }
 
 void Engine::HandleDebugCapture() {
-    if (m_debugCaptureDone) {
+    if (!m_shotTimesParsed) {
+        m_shotTimesParsed = true;
+        const char* screenshotPath = SDL_getenv("LEGEND_AUTO_SCREENSHOT");
+        if (screenshotPath == nullptr || screenshotPath[0] == '\0') {
+            return;
+        }
+        m_screenshotBase = screenshotPath;
+        std::string times = "2.5";
+        const char* timesEnv = SDL_getenv("LEGEND_AUTO_SHOT_TIMES");
+        if (timesEnv != nullptr && timesEnv[0] != '\0') {
+            times = timesEnv;
+        }
+        size_t start = 0;
+        while (start <= times.size()) {
+            const size_t comma = times.find(',', start);
+            const std::string token = times.substr(
+                start, comma == std::string::npos ? std::string::npos : comma - start);
+            try {
+                const double t = std::stod(token);
+                if (t > 0.0) {
+                    m_pendingShots.push_back(t);
+                }
+            } catch (...) {
+                // 忽略非法时刻
+            }
+            if (comma == std::string::npos) {
+                break;
+            }
+            start = comma + 1;
+        }
+        m_totalShotCount = static_cast<int>(m_pendingShots.size());
+        if (m_totalShotCount > 0) {
+            LOG_INFO("Debug screenshots scheduled: " + std::to_string(m_totalShotCount));
+        }
+    }
+    if (m_pendingShots.empty()) {
         return;
     }
-    const char* screenshotPath = SDL_getenv("LEGEND_AUTO_SCREENSHOT");
-    if (screenshotPath == nullptr || screenshotPath[0] == '\0') {
-        return;
-    }
-    if (m_totalElapsed < 2.0) {
-        return; // 先渲染约 2 秒，确保画面内容已就绪
-    }
-    m_debugCaptureDone = true;
 
-    if (m_renderer.CaptureScreenshot(screenshotPath)) {
-        LOG_INFO(std::string("Debug screenshot saved: ") + screenshotPath);
-    } else {
-        LOG_ERROR(std::string("Debug screenshot failed: ") + screenshotPath);
+    bool captured = false;
+    while (!m_pendingShots.empty() && m_totalElapsed >= m_pendingShots.front()) {
+        m_pendingShots.pop_front();
+        ++m_shotIndex;
+
+        std::string path = m_screenshotBase;
+        if (m_totalShotCount > 1) {
+            const size_t dot = path.find_last_of('.');
+            const std::string suffix = "_" + std::to_string(m_shotIndex);
+            path = (dot == std::string::npos)
+                       ? path + suffix
+                       : path.substr(0, dot) + suffix + path.substr(dot);
+        }
+        if (m_renderer.CaptureScreenshot(path)) {
+            LOG_INFO("Debug screenshot saved: " + path);
+        } else {
+            LOG_ERROR(std::string("Debug screenshot failed: ") + path);
+        }
+        captured = true;
     }
 
-    if (SDL_getenv("LEGEND_AUTO_QUIT") != nullptr) {
-        LOG_INFO("LEGEND_AUTO_QUIT detected, quitting after screenshot.");
-        m_running = false;
+    if (captured && m_pendingShots.empty()) {
+        if (SDL_getenv("LEGEND_AUTO_QUIT") != nullptr) {
+            LOG_INFO("LEGEND_AUTO_QUIT detected, quitting after screenshots.");
+            m_running = false;
+        }
     }
 }
 

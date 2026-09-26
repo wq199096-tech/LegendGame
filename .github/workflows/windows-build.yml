@@ -1,0 +1,27 @@
+name: windows-build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S . -B build
+
+      - name: Build (LegendClient + LegendMapEditor)
+        run: cmake --build build --config Debug --parallel
+
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'build/bin/Debug/LegendClient.exe')) { Write-Error 'LegendClient.exe missing'; exit 1 }
+          if (-not (Test-Path 'build/bin/Debug/LegendMapEditor.exe')) { Write-Error 'LegendMapEditor.exe missing'; exit 1 }
+          Write-Host 'Both executables built successfully.'

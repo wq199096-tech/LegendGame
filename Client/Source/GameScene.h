@@ -26,8 +26,16 @@ private:
     void MovePlayerWithCollision(float deltaTime);
     void UpdateCamera(float deltaTime);
     void ClampCameraToMap();
+    // 自动化验收：LEGEND_AUTO_YSORT=1 时玩家自动走到树上方/下方验证遮挡切换
+    void UpdateAutoYsortWalk(float deltaTime);
     // 分轴碰撞自检（结果写入日志 PASS/FAIL）
     void RunCollisionVerification();
+    // Y-Sort 遮挡关系自检
+    void RunYSortVerification();
+    // 碰撞来源分离自检（Terrain/Manual/Object）
+    void RunCollisionSourceVerification();
+    // 编辑器闭环检查：LEGEND_EXPECT_BLOCKED_TILE="x,y" 验证编辑后地图该格已阻挡
+    void RunEditedMapCheck();
     void ApplyAutoTestHooks();
     void LogMapStats(double deltaTime);
 
@@ -46,7 +54,12 @@ private:
     bool m_collisionDebug = false;
 
     double m_statsLogTimer = 0.0;
+    double m_sceneElapsed = 0.0;
+    bool m_chunkCheckDone = false;
 
     // 自动化测试钩子（环境变量触发，仅用于验收）
     bool m_autoWalk = false;
+    bool m_autoYsort = false;
+    float m_ysortTreeX = 0.0f;
+    float m_ysortTreeY = 0.0f;
 };

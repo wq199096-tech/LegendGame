@@ -121,6 +121,7 @@ std::unique_ptr<ObjectLayer> ParseObjectLayer(const json& layerJson, const std::
         object.height = objectJson.value("height", 64.0f);
         object.rotationDegrees = objectJson.value("rotation", 0.0f);
         object.renderOrder = objectJson.value("renderOrder", 0);
+        object.sortLayer = objectJson.value("sortLayer", 0);
         object.blocking = objectJson.value("blocking", false);
         object.occluder = objectJson.value("occluder", false);
         layer->AddObject(std::move(object));
@@ -268,6 +269,39 @@ std::shared_ptr<Map> MapLoader::Load(const std::string& filePath) {
         }
     }
 
+    // ---- Collision 数据清洗 ----
+    // collision 层数据仅代表 Manual 碰撞；Terrain（Water）与 Object（物件 footprint）
+    // 碰撞在运行时派生。旧格式可能把 Water/物件碰撞写进 data，这里统一清洗，
+    // 避免"Water 刷回草地后仍然阻挡"或"删除物件后残留碰撞"等来源冲突。
+    {
+        CollisionLayer& manual = map->GetCollision();
+        const TileLayer& ground = map->GetGround();
+        for (int ty = 0; ty < map->GetHeight(); ++ty) {
+            for (int tx = 0; tx < map->GetWidth(); ++tx) {
+                if (ground.GetTile(tx, ty) == static_cast<uint16_t>(TileId::Water)) {
+                    manual.SetBlocked(tx, ty, false);
+                }
+            }
+        }
+        for (const auto& object : map->GetObjects().Objects()) {
+            if (!object.blocking) {
+                continue;
+            }
+            const float tileSize = static_cast<float>(map->GetTileSize());
+            const int x0 = WorldToTileIndex(object.x - object.width * 0.5f + 1.0f, tileSize);
+            const int x1 = WorldToTileIndex(object.x + object.width * 0.5f - 1.0f, tileSize);
+            const int y0 = WorldToTileIndex(object.y - object.height * 0.5f + 1.0f, tileSize);
+            const int y1 = WorldToTileIndex(object.y + object.height * 0.5f - 1.0f, tileSize);
+            for (int ty = y0; ty <= y1; ++ty) {
+                for (int tx = x0; tx <= x1; ++tx) {
+                    manual.SetBlocked(tx, ty, false);
+                }
+            }
+        }
+        // Object Collision 引用计数重建
+        map->RebuildObjectBlockCounts();
+    }
+
     LOG_INFO("Map loaded: '" + map->GetName() + "' (" + filePath + "), " +
              std::to_string(width) + "x" + std::to_string(height) + " tiles, " +
              std::to_string(map->GetObjects().Objects().size()) + " objects.");
@@ -313,6 +347,7 @@ bool MapLoader::Save(const Map& map, const std::string& filePath) {
         objectJson["height"] = object.height;
         objectJson["rotation"] = object.rotationDegrees;
         objectJson["renderOrder"] = object.renderOrder;
+        objectJson["sortLayer"] = object.sortLayer;
         objectJson["blocking"] = object.blocking;
         objectJson["occluder"] = object.occluder;
         objects.push_back(std::move(objectJson));

@@ -19,6 +19,7 @@ struct MapObject {
     float height = 64.0f;
     float rotationDegrees = 0.0f;
     int renderOrder = 0;
+    int sortLayer = 0; // Y-Sort 层：同层内严格按 bottomY 排序，renderOrder 只作平局判定
     bool blocking = false;
     bool occluder = false;
 

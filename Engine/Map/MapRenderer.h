@@ -35,6 +35,8 @@ public:
         int renderedTiles = 0;
         int drawCalls = 0;
         int renderedObjects = 0;
+        int visibleObjects = 0;
+        int totalObjects = 0;
     };
 
     bool Initialize(render::Shader& spriteShader);
@@ -50,7 +52,14 @@ public:
     // 每帧：BeginFrame -> RenderGround -> (DrawMapObject/Flush) -> RenderCollisionOverlay -> EndFrame
     void BeginFrame(render::Camera2D& camera, float viewportWidth, float viewportHeight);
     void RenderGround(Map& map);
+    // 物件视口剔除（AABB + 边距）；返回 false 表示不在可视范围内，调用方跳过排序/绘制
+    bool IsObjectVisible(const MapObject& object, float margin = 192.0f) const;
     void DrawMapObject(const MapObject& object);
+    // 物件剔除统计（由调用方在剔除后提供）
+    void SetObjectCounts(int visibleObjects, int totalObjects) {
+        m_currentStats.visibleObjects = visibleObjects;
+        m_currentStats.totalObjects = totalObjects;
+    }
     void Flush();
     void RenderCollisionOverlay(Map& map);
     void EndFrame();
@@ -63,7 +72,7 @@ public:
     float GetViewRight() const { return m_viewRight; }
     float GetViewBottom() const { return m_viewBottom; }
 
-    // Y-Sort 排序键
+    // Y-Sort：sortLayer 分层 → 同层严格按 bottomY（底部 Y 决定前后）→ renderOrder 仅平局判定
     static bool YSortCompare(const MapObject* a, const MapObject* b);
 
 private:

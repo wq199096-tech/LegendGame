@@ -44,14 +44,24 @@ public:
     uint16_t GetGroundTile(int tileX, int tileY) const { return m_ground->GetTile(tileX, tileY); }
     bool SetGroundTile(int tileX, int tileY, uint16_t id);
 
-    // ---- 碰撞快捷接口 ----
+    // ---- 物件生成/移除（自动维护 Object Collision 引用计数） ----
+    MapObject& SpawnObject(MapObject object);
+    bool DespawnObject(uint32_t objectId);
+    void RebuildObjectBlockCounts();
+
+    // ---- 碰撞：三源合成 ----
+    // Terrain（Water 地形）OR Manual（collision 层数据）OR Object（blocking 物件 footprint）
+    bool IsTileBlocked(int tileX, int tileY) const;
     bool IsWorldBlocked(float worldX, float worldY) const {
-        return m_collision->IsWorldPositionBlocked(static_cast<float>(worldX), static_cast<float>(worldY));
+        return IsTileBlocked(WorldToTileIndex(worldX, static_cast<float>(m_tileSize)),
+                             WorldToTileIndex(worldY, static_cast<float>(m_tileSize)));
     }
 
     // ---- Chunk 网格 ----
     int GetChunkCountX() const { return m_chunkCountX; }
     int GetChunkCountY() const { return m_chunkCountY; }
+    // 帧开始时重置全部 Chunk 可见状态（保证 visible 真实反映当前帧）
+    void ResetChunkVisibility();
     MapChunk* GetChunk(int chunkX, int chunkY) {
         if (chunkX < 0 || chunkY < 0 || chunkX >= m_chunkCountX || chunkY >= m_chunkCountY) {
             return nullptr;
@@ -64,6 +74,13 @@ public:
 
 private:
     void RebuildChunkGrid();
+    void AdjustObjectBlockCount(const MapObject& object, int delta);
+    uint16_t GetObjectBlockCount(int tileX, int tileY) const {
+        if (tileX < 0 || tileY < 0 || tileX >= m_width || tileY >= m_height) {
+            return 0;
+        }
+        return m_objectBlockCounts[static_cast<size_t>(tileY) * m_width + tileX];
+    }
 
     std::string m_name;
     int m_tileSize = 64;
@@ -72,9 +89,10 @@ private:
 
     std::unique_ptr<TileLayer> m_ground;
     std::unique_ptr<ObjectLayer> m_objects;
-    std::unique_ptr<CollisionLayer> m_collision;
+    std::unique_ptr<CollisionLayer> m_collision;   // 仅存 Manual 碰撞
     std::unique_ptr<OcclusionLayer> m_occlusion;
 
+    std::vector<uint16_t> m_objectBlockCounts; // Object Collision 引用计数（同格多物件叠加）
     std::vector<MapChunk> m_chunks;
     int m_chunkCountX = 0;
     int m_chunkCountY = 0;

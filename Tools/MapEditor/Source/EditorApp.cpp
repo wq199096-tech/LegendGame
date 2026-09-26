@@ -226,8 +226,8 @@ bool LegendMapEditorApp::Initialize() {
         tree.name = "smoke_tree";
         tree.x = legend::map::TileToWorldCenter(52, 64.0f);
         tree.y = legend::map::TileToWorldCenter(45, 64.0f);
-        m_map->GetObjects().AddObject(tree);
-        SyncObjectCollision(m_map->GetObjects().Objects().back(), tree.blocking);
+        // SpawnObject 自动维护 Object Collision 引用计数
+        m_map->SpawnObject(tree);
         if (tree.occluder) {
             m_map->GetOcclusion().AddOccluder(tree.id);
         }
@@ -333,8 +333,17 @@ void LegendMapEditorApp::HandleMapEditing() {
         legend::map::WorldToTile(world.x, world.y, static_cast<float>(m_map->GetTileSize()));
 
     if (m_mode == EditMode::Ground) {
-        if (lmb && m_map->SetGroundTile(tile.x, tile.y, m_selectedTile)) {
-            m_mapDirty = true;
+        if (lmb) {
+            const uint16_t oldTile = m_map->GetGroundTile(tile.x, tile.y);
+            if (m_map->SetGroundTile(tile.x, tile.y, m_selectedTile)) {
+                // Water 地形碰撞由运行时派生（Terrain 来源），无需写 Manual；
+                // Water 刷回其他地形时清除该格 Manual 标记（地形遗留），恢复可行走
+                if (m_selectedTile != static_cast<uint16_t>(legend::map::TileId::Water) &&
+                    oldTile == static_cast<uint16_t>(legend::map::TileId::Water)) {
+                    m_map->GetCollision().SetBlocked(tile.x, tile.y, false);
+                }
+                m_mapDirty = true;
+            }
         }
     } else if (m_mode == EditMode::Collision) {
         if (lmb) {
@@ -366,8 +375,8 @@ void LegendMapEditorApp::HandleMapEditing() {
                 object.name = m_selectedObjectType + "_" + std::to_string(object.id);
                 object.x = world.x;
                 object.y = world.y;
-                m_map->GetObjects().AddObject(object);
-                SyncObjectCollision(m_map->GetObjects().Objects().back(), object.blocking);
+                // SpawnObject 自动维护 Object Collision 引用计数（三源碰撞）
+                m_map->SpawnObject(object);
                 if (object.occluder) {
                     m_map->GetOcclusion().AddOccluder(object.id);
                 }
@@ -548,9 +557,11 @@ void LegendMapEditorApp::DrawPalettePanel() {
             if (ImGui::Button("Delete Selected", ImVec2(180, 0))) {
                 if (const legend::map::MapObject* object =
                         m_map->GetObjects().FindObject(m_selectedObjectId)) {
-                    SyncObjectCollision(*object, false);
                     const std::string name = object->name;
-                    m_map->GetObjects().RemoveObject(m_selectedObjectId);
+                    // DespawnObject 只递减 Object Collision 引用计数，
+                    // 不会误清 Water 地形碰撞或其他物件的阻挡
+                    m_map->DespawnObject(m_selectedObjectId);
+                    m_map->GetOcclusion().RemoveOccluder(m_selectedObjectId);
                     m_mapDirty = true;
                     m_selectedObjectId = 0;
                     LOG_INFO("Editor: deleted object '" + name + "'.");
@@ -634,23 +645,6 @@ void LegendMapEditorApp::NewMap() {
     m_selectedObjectId = 0;
     m_camera.SetPosition({map->GetWorldWidth() * 0.5f, map->GetWorldHeight() * 0.5f});
     LOG_INFO("Editor: new 100x100 map created.");
-}
-
-void LegendMapEditorApp::SyncObjectCollision(const legend::map::MapObject& object, bool blocked) {
-    if (!object.blocking || !m_map) {
-        return;
-    }
-    const float tileSize = static_cast<float>(m_map->GetTileSize());
-    // 内缩 1 单位，避免边缘恰好相邻的 Tile 被误阻挡
-    const int x0 = legend::map::WorldToTileIndex(object.x - object.width * 0.5f + 1.0f, tileSize);
-    const int x1 = legend::map::WorldToTileIndex(object.x + object.width * 0.5f - 1.0f, tileSize);
-    const int y0 = legend::map::WorldToTileIndex(object.y - object.height * 0.5f + 1.0f, tileSize);
-    const int y1 = legend::map::WorldToTileIndex(object.y + object.height * 0.5f - 1.0f, tileSize);
-    for (int ty = y0; ty <= y1; ++ty) {
-        for (int tx = x0; tx <= x1; ++tx) {
-            m_map->GetCollision().SetBlocked(tx, ty, blocked);
-        }
-    }
 }
 
 void LegendMapEditorApp::UpdateWindowTitle() {

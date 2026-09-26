@@ -41,7 +41,6 @@ private:
     bool OpenMap(const std::string& path);
     bool SaveMapTo(const std::string& path);
     void NewMap();
-    void SyncObjectCollision(const legend::map::MapObject& object, bool blocked);
     void UpdateWindowTitle();
 
     legend::Window m_window;

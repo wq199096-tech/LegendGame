@@ -15,6 +15,7 @@ public:
 
     bool IsOccluder(uint32_t objectId) const;
     void AddOccluder(uint32_t objectId);
+    void RemoveOccluder(uint32_t objectId);
     void SetOccluderIds(const std::vector<uint32_t>& ids) { m_occluderIds = ids; }
 
     const std::vector<uint32_t>& GetOccluderIds() const { return m_occluderIds; }
