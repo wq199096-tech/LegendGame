@@ -32,7 +32,7 @@ private:
     void RunCollisionVerification();
     // Y-Sort 遮挡关系自检
     void RunYSortVerification();
-    // 碰撞来源分离自检（Terrain/Manual/Object）
+    // 碰撞来源分离自检（Terrain/Manual/Object）—— 8 项组合 + flags 断言
     void RunCollisionSourceVerification();
     // 编辑器闭环检查：LEGEND_EXPECT_BLOCKED_TILE="x,y" 验证编辑后地图该格已阻挡
     void RunEditedMapCheck();

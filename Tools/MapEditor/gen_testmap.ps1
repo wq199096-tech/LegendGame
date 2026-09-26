@@ -57,7 +57,8 @@ for ($y = 43; $y -le 57; $y++) {
     }
 }
 
-# 5. Water: lake (ellipse) + pond (water is blocked by default)
+# 5. Water: lake (ellipse) + pond. Water blocking is TERRAIN-derived at runtime,
+#    NOT written into the Manual collision data.
 $lakes = @(@{cx=72; cy=28; rx=11; ry=7}, @{cx=25; cy=62; rx=5; ry=4})
 foreach ($l in $lakes) {
     for ($y = $l.cy - $l.ry; $y -le $l.cy + $l.ry; $y++) {
@@ -66,7 +67,6 @@ foreach ($l in $lakes) {
             $dy = ($y - $l.cy) / $l.ry
             if ($dx * $dx + $dy * $dy -le 1.0) {
                 Set-Ground $x $y 4
-                Set-Collision $x $y 1
             }
         }
     }
@@ -101,17 +101,14 @@ function Add-BlockingObject([string]$type, [string]$texId, [int]$w, [int]$h, [bo
         }
         $script:objects.Add($obj) | Out-Null
         if ($occluder) { $script:occluders.Add($id) | Out-Null }
-        $x0 = [int][math]::Floor(($tx * $TILE + 32 - $w / 2 + 1) / $TILE)
-        $x1 = [int][math]::Floor(($tx * $TILE + 32 + $w / 2 - 1) / $TILE)
-        $y0 = [int][math]::Floor(($ty * $TILE + 32 - $h / 2 + 1) / $TILE)
-        $y1 = [int][math]::Floor(($ty * $TILE + 32 + $h / 2 - 1) / $TILE)
-        for ($yy = $y0; $yy -le $y1; $yy++) { for ($xx = $x0; $xx -le $x1; $xx++) { Set-Collision $xx $yy 1 } }
+        # NOTE: object collision is runtime-derived (Object source), not written into Manual data
         return $true
     }
     return $false
 }
 
 # 5 buildings (3x2 tiles = 192x128), hand-picked spread positions
+# NOTE: building collision is runtime-derived (Object source), not written into Manual data
 $buildingTiles = @(@(18,20), @(62,18), @(15,68), @(82,80), @(64,72))
 foreach ($b in $buildingTiles) {
     $tx = $b[0]; $ty = $b[1]
@@ -124,7 +121,6 @@ foreach ($b in $buildingTiles) {
     }
     $objects.Add($obj) | Out-Null
     $occluders.Add($id) | Out-Null
-    for ($yy = $ty; $yy -le $ty + 1; $yy++) { for ($xx = $tx; $xx -le $tx + 2; $xx++) { Set-Collision $xx $yy 1 } }
 }
 
 # 20 trees (96x96, blocking + occluder)
@@ -196,4 +192,4 @@ Write-Host "Map generated: $outFile ($size bytes)"
 Write-Host "Objects: $($objects.Count), Occluders: $($occluders.Count)"
 $waterCount = ($ground | Where-Object { $_ -eq 4 }).Count
 $blockedCount = ($collision | Where-Object { $_ -eq 1 }).Count
-Write-Host "Water tiles: $waterCount, Blocked tiles: $blockedCount"
+Write-Host "Water tiles: $waterCount, Manual collision tiles (border only): $blockedCount"

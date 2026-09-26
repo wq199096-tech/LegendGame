@@ -334,14 +334,9 @@ void LegendMapEditorApp::HandleMapEditing() {
 
     if (m_mode == EditMode::Ground) {
         if (lmb) {
-            const uint16_t oldTile = m_map->GetGroundTile(tile.x, tile.y);
+            // Ground 编辑只负责 Ground：Water 的阻挡由 Terrain 派生，
+            // Manual Collision 数据完全不跟随 Ground 编辑改变
             if (m_map->SetGroundTile(tile.x, tile.y, m_selectedTile)) {
-                // Water 地形碰撞由运行时派生（Terrain 来源），无需写 Manual；
-                // Water 刷回其他地形时清除该格 Manual 标记（地形遗留），恢复可行走
-                if (m_selectedTile != static_cast<uint16_t>(legend::map::TileId::Water) &&
-                    oldTile == static_cast<uint16_t>(legend::map::TileId::Water)) {
-                    m_map->GetCollision().SetBlocked(tile.x, tile.y, false);
-                }
                 m_mapDirty = true;
             }
         }

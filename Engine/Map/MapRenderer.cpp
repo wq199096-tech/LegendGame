@@ -223,7 +223,6 @@ void MapRenderer::RenderCollisionOverlay(Map& map) {
         return;
     }
 
-    const CollisionLayer& collision = map.GetCollision();
     const float tileSize = static_cast<float>(map.GetTileSize());
 
     const int tx0 = std::max(0, WorldToTileIndex(m_viewLeft, tileSize));
@@ -235,7 +234,8 @@ void MapRenderer::RenderCollisionOverlay(Map& map) {
     int count = 0;
     for (int ty = ty0; ty <= ty1; ++ty) {
         for (int tx = tx0; tx <= tx1; ++tx) {
-            if (!collision.IsBlocked(tx, ty)) {
+            // F1 显示最终真实阻挡结果：Terrain / Manual / Object 三源合成
+            if (!map.IsTileBlocked(tx, ty)) {
                 continue;
             }
             const float cx = TileToWorldCenter(tx, tileSize);

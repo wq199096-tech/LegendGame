@@ -17,6 +17,13 @@ enum class TileId : uint16_t {
 constexpr int kMapFormatVersion = 1;
 constexpr int kChunkSizeTiles = 16; // 每 Chunk 16x16 Tile
 
+// 碰撞来源 bitmask（GetCollisionFlags 返回值）
+enum CollisionSourceFlags : uint8_t {
+    CollisionSourceTerrain = 1, // 地形派生（Water 等）
+    CollisionSourceManual = 2,  // collision 层人工标记
+    CollisionSourceObject = 4,  // blocking 物件 footprint
+};
+
 // ---- 坐标工具（负数/越界安全：一律使用 floor 除法） ----
 
 inline int FloorDiv(int a, int b) {

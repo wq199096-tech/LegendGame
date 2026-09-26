@@ -460,17 +460,24 @@ void GameScene::RunYSortVerification() {
 
 void GameScene::RunCollisionSourceVerification() {
     int failures = 0;
-    auto check = [&failures](const std::string& name, bool expected, bool actual) {
-        const bool pass = expected == actual;
-        LOG_INFO("[CollisionSourceCheck] " + name + ": expected " +
-                 (expected ? "blocked" : "walkable") + ", got " +
-                 (actual ? "blocked" : "walkable") + " -> " + (pass ? "PASS" : "FAIL"));
+    auto check = [&failures](const std::string& name, bool expected, bool actual,
+                             uint8_t flags, uint8_t expectedFlags) {
+        const bool pass = expected == actual && flags == expectedFlags;
+        LOG_INFO("[CollisionFinalCheck] " + name + ": blocked=" +
+                 (actual ? std::string("true") : std::string("false")) +
+                 ", flags=" + std::to_string(flags) + " (expected " +
+                 std::to_string(expectedFlags) + ")" + " -> " +
+                 ((expected == actual) ? (pass ? "PASS" : "FLAGS-FAIL")
+                                       : std::string("FAIL")));
         if (!pass) {
             ++failures;
         }
     };
+    constexpr uint8_t kTerrain = legend::map::CollisionSourceTerrain;
+    constexpr uint8_t kManual = legend::map::CollisionSourceManual;
+    constexpr uint8_t kObject = legend::map::CollisionSourceObject;
 
-    // 找一个可用测试 Tile（草地且当前无任何阻挡来源）
+    // 找一个可用测试 Tile（草地且当前无任何阻挡来源）与一个 Water Tile
     legend::map::TilePoint freeTile{};
     bool freeFound = false;
     legend::map::TilePoint waterTile{};
@@ -488,77 +495,82 @@ void GameScene::RunCollisionSourceVerification() {
             }
         }
     }
-    if (!freeFound) {
-        LOG_WARN("[CollisionSourceCheck] skipped: no free grass tile found.");
+    if (!freeFound || !waterFound) {
+        LOG_WARN("[CollisionFinalCheck] skipped: missing test tiles.");
         return;
     }
     const float ts = static_cast<float>(m_map->GetTileSize());
     const float cx = legend::map::TileToWorldCenter(freeTile.x, ts);
     const float cy = legend::map::TileToWorldCenter(freeTile.y, ts);
+    const float wx = legend::map::TileToWorldCenter(waterTile.x, ts);
+    const float wy = legend::map::TileToWorldCenter(waterTile.y, ts);
 
-    // 1) 两个 blocking 物件重叠同一 Tile
-    legend::map::MapObject objectA;
-    objectA.id = m_map->GetObjects().GetMaxObjectId() + 100001;
-    objectA.name = "test_overlap_a";
-    objectA.textureId = "rock";
-    objectA.width = 48.0f;
-    objectA.height = 48.0f;
-    objectA.x = cx;
-    objectA.y = cy;
-    objectA.blocking = true;
-    m_map->SpawnObject(objectA);
+    // ---- 1. Water + Manual=false + Object=0 => blocked (Terrain) ----
+    check("1 water terrain blocked", true, m_map->IsTileBlocked(waterTile.x, waterTile.y),
+          m_map->GetCollisionFlags(waterTile.x, waterTile.y), kTerrain);
 
-    legend::map::MapObject objectB = objectA;
-    objectB.id += 1;
-    objectB.name = "test_overlap_b";
-    m_map->SpawnObject(objectB);
-    check("overlapping objects blocked", true, m_map->IsTileBlocked(freeTile.x, freeTile.y));
-
-    // 2) 删除其中一个，剩余物件继续阻挡
-    m_map->DespawnObject(objectA.id);
-    check("delete one object keeps collision", true, m_map->IsTileBlocked(freeTile.x, freeTile.y));
-    m_map->DespawnObject(objectB.id);
-    check("delete both objects => walkable", false, m_map->IsTileBlocked(freeTile.x, freeTile.y));
-
-    // 3) Water 上放 blocking 物件，删除后 Water 仍阻挡（Terrain 来源独立）
-    if (waterFound) {
-        const float wx = legend::map::TileToWorldCenter(waterTile.x, ts);
-        const float wy = legend::map::TileToWorldCenter(waterTile.y, ts);
-        legend::map::MapObject building;
-        building.id = m_map->GetObjects().GetMaxObjectId() + 100001;
-        building.name = "test_water_building";
-        building.textureId = "building";
-        building.width = 192.0f;
-        building.height = 128.0f;
-        building.x = wx;
-        building.y = wy;
-        building.blocking = true;
-        m_map->SpawnObject(building);
-        check("water + building blocked", true, m_map->IsTileBlocked(waterTile.x, waterTile.y));
-        m_map->DespawnObject(building.id);
-        check("water still blocked after delete", true, m_map->IsTileBlocked(waterTile.x, waterTile.y));
-    }
-
-    // 4) 人工碰撞：放物件 -> 删物件 -> 人工 blocked 保留
+    // ---- 2. Grass + Manual=true + Object=0 => blocked (Manual) ----
     m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, true);
-    check("manual blocked", true, m_map->IsTileBlocked(freeTile.x, freeTile.y));
-    legend::map::MapObject objectC;
-    objectC.id = m_map->GetObjects().GetMaxObjectId() + 100001;
-    objectC.name = "test_manual_overlap";
-    objectC.textureId = "rock";
-    objectC.width = 48.0f;
-    objectC.height = 48.0f;
-    objectC.x = cx;
-    objectC.y = cy;
-    objectC.blocking = true;
-    m_map->SpawnObject(objectC);
-    m_map->DespawnObject(objectC.id);
-    check("manual collision preserved after object delete", true,
-          m_map->IsTileBlocked(freeTile.x, freeTile.y));
-    m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, false);
-    check("manual cleared => walkable", false, m_map->IsTileBlocked(freeTile.x, freeTile.y));
+    check("2 grass manual blocked", true, m_map->IsTileBlocked(freeTile.x, freeTile.y),
+          m_map->GetCollisionFlags(freeTile.x, freeTile.y), kManual);
 
-    LOG_INFO("[CollisionSourceCheck] completed, failures = " + std::to_string(failures));
+    // ---- 3. Grass + Manual=false + Object>0 => blocked (Object) ----
+    m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, false);
+    legend::map::MapObject rock;
+    rock.id = m_map->GetObjects().GetMaxObjectId() + 100001;
+    rock.name = "test_final_rock";
+    rock.textureId = "rock";
+    rock.width = 48.0f;
+    rock.height = 48.0f;
+    rock.x = cx;
+    rock.y = cy;
+    rock.blocking = true;
+    m_map->SpawnObject(rock);
+    check("3 grass object blocked", true, m_map->IsTileBlocked(freeTile.x, freeTile.y),
+          m_map->GetCollisionFlags(freeTile.x, freeTile.y), kObject);
+
+    // ---- 4. Water + Manual=true + Object>0 => blocked (Terrain|Manual|Object = 7) ----
+    legend::map::MapObject building;
+    building.id = m_map->GetObjects().GetMaxObjectId() + 100001;
+    building.name = "test_final_building";
+    building.textureId = "building";
+    building.width = 192.0f;
+    building.height = 128.0f;
+    building.x = wx;
+    building.y = wy;
+    building.blocking = true;
+    m_map->SpawnObject(building);
+    m_map->GetCollision().SetBlocked(waterTile.x, waterTile.y, true);
+    check("4 water+manual+object blocked", true, m_map->IsTileBlocked(waterTile.x, waterTile.y),
+          m_map->GetCollisionFlags(waterTile.x, waterTile.y),
+          kTerrain | kManual | kObject);
+
+    // ---- 5. Water 改 Grass，Manual=true => 仍然 blocked (Manual|Object，Terrain 消失) ----
+    m_map->SetGroundTile(waterTile.x, waterTile.y, static_cast<uint16_t>(legend::map::TileId::Grass));
+    check("5 water->grass manual kept blocked", true,
+          m_map->IsTileBlocked(waterTile.x, waterTile.y),
+          m_map->GetCollisionFlags(waterTile.x, waterTile.y), kManual | kObject);
+
+    // ---- 6. Water 改 Grass 后 Manual=false + Object=0 => walkable ----
+    m_map->GetCollision().SetBlocked(waterTile.x, waterTile.y, false);
+    m_map->DespawnObject(building.id);
+    check("6 grass cleared => walkable", false, m_map->IsTileBlocked(waterTile.x, waterTile.y),
+          m_map->GetCollisionFlags(waterTile.x, waterTile.y), 0);
+
+    // ---- 7. Object 删除，Manual=true => 仍 blocked ----
+    m_map->DespawnObject(rock.id);
+    m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, true);
+    check("7 object deleted, manual kept blocked", true,
+          m_map->IsTileBlocked(freeTile.x, freeTile.y),
+          m_map->GetCollisionFlags(freeTile.x, freeTile.y), kManual);
+
+    // ---- 8. Object 删除，Manual=false，Terrain=Grass => walkable ----
+    m_map->GetCollision().SetBlocked(freeTile.x, freeTile.y, false);
+    check("8 all sources cleared => walkable", false,
+          m_map->IsTileBlocked(freeTile.x, freeTile.y),
+          m_map->GetCollisionFlags(freeTile.x, freeTile.y), 0);
+
+    LOG_INFO("[CollisionFinalCheck] completed, failures = " + std::to_string(failures));
 }
 
 void GameScene::RunEditedMapCheck() {

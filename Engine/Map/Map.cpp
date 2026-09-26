@@ -106,19 +106,28 @@ bool Map::IsTileBlocked(int tileX, int tileY) const {
     if (!m_collision->IsValidPosition(tileX, tileY)) {
         return true;
     }
+    return GetCollisionFlags(tileX, tileY) != 0;
+}
+
+uint8_t Map::GetCollisionFlags(int tileX, int tileY) const {
+    // 越界：按边界阻挡处理（无来源细分）
+    if (!m_collision->IsValidPosition(tileX, tileY)) {
+        return CollisionSourceTerrain;
+    }
+    uint8_t flags = 0;
     // 1. Terrain：Water 地形默认阻挡
     if (m_ground->GetTile(tileX, tileY) == static_cast<uint16_t>(TileId::Water)) {
-        return true;
+        flags |= CollisionSourceTerrain;
     }
     // 2. Manual：collision 层数据（仅人工标记）
     if (m_collision->IsBlocked(tileX, tileY)) {
-        return true;
+        flags |= CollisionSourceManual;
     }
     // 3. Object：blocking 物件 footprint（引用计数，删除单件不影响其他来源）
     if (GetObjectBlockCount(tileX, tileY) > 0) {
-        return true;
+        flags |= CollisionSourceObject;
     }
-    return false;
+    return flags;
 }
 
 void Map::ResetChunkVisibility() {

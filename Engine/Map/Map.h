@@ -52,6 +52,8 @@ public:
     // ---- 碰撞：三源合成 ----
     // Terrain（Water 地形）OR Manual（collision 层数据）OR Object（blocking 物件 footprint）
     bool IsTileBlocked(int tileX, int tileY) const;
+    // 碰撞来源 bitmask（Terrain=1 / Manual=2 / Object=4），用于测试、日志与未来编辑器
+    uint8_t GetCollisionFlags(int tileX, int tileY) const;
     bool IsWorldBlocked(float worldX, float worldY) const {
         return IsTileBlocked(WorldToTileIndex(worldX, static_cast<float>(m_tileSize)),
                              WorldToTileIndex(worldY, static_cast<float>(m_tileSize)));
