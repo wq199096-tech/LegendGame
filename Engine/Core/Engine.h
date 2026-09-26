@@ -42,6 +42,8 @@ private:
     Engine() = default;
 
     void UpdateFpsWindowTitle(double elapsedSeconds);
+    // 调试验证：环境变量 LEGEND_AUTO_SCREENSHOT 触发截图，LEGEND_AUTO_QUIT 触发退出
+    void HandleDebugCapture();
 
     Window m_window;
     render::Renderer m_renderer;
@@ -54,6 +56,10 @@ private:
     std::string m_title;
     bool m_initialized = false;
     bool m_running = false;
+    bool m_shutdownCompleted = false;
+
+    double m_totalElapsed = 0.0;
+    bool m_debugCaptureDone = false;
 
     double m_fpsAccumulated = 0.0;
     int m_fpsFrames = 0;

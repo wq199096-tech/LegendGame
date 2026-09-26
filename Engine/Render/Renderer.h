@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "Engine/Math/Color.h"
 #include "Engine/Math/Vector2.h"
 #include "Engine/Render/Shader.h"
@@ -35,11 +37,15 @@ public:
     void DrawSprite(const Texture& texture, const math::Vector2& centerPosition,
                     const SpriteDrawParams& params);
 
+    // 调试用：把当前帧内容保存为 BMP（必须在 EndFrame 之前调用）
+    bool CaptureScreenshot(const std::string& filePath);
+
     void SetClearColor(const math::Color& color) { m_clearColor = color; }
 
 private:
     bool CreateGraphicsResources();
     void DestroyGraphicsResources();
+    void DestroyContext();
 
     SDL_Window* m_window = nullptr;
     SDL_GLContextState* m_glContext = nullptr;

@@ -24,6 +24,8 @@ private:
     void CreateTestObjects(std::shared_ptr<legend::render::Texture> blockTexture,
                            std::shared_ptr<legend::render::Texture> pillarTexture);
     void CreatePlayer(std::shared_ptr<legend::render::Texture> playerTexture);
+    // Camera 坐标定义自检：结果写入日志（PASS/FAIL）
+    void RunCameraVerification();
 
     static constexpr float kWorldSize = 3000.0f;
     static constexpr float kPlayerSpeed = 200.0f;   // world units / second

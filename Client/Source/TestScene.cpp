@@ -43,6 +43,7 @@ void TestScene::OnLoad() {
     CreateGround(groundTexture, wallTexture);
     CreateTestObjects(blockTexture, pillarTexture);
     CreatePlayer(playerTexture);
+    RunCameraVerification();
 
     auto& camera = engine.GetCamera();
     camera.SetZoom(1.0f);
@@ -125,6 +126,58 @@ void TestScene::CreatePlayer(std::shared_ptr<legend::render::Texture> playerText
     m_player->GetTransform().SetPosition({kWorldSize * 0.5f, kWorldSize * 0.5f});
 }
 
+void TestScene::RunCameraVerification() {
+    auto& camera = legend::Engine::Get().GetCamera();
+    constexpr float vw = 1280.0f;
+    constexpr float vh = 720.0f;
+    int failures = 0;
+
+    auto check = [&failures](const char* name, const legend::math::Vector2& expected,
+                             const legend::math::Vector2& actual) {
+        constexpr float kEpsilon = 0.01f;
+        const bool pass = std::fabs(expected.x - actual.x) < kEpsilon &&
+                          std::fabs(expected.y - actual.y) < kEpsilon;
+        LOG_INFO(std::string("[CameraCheck] ") + name + ": expected(" +
+                 std::to_string(expected.x) + "," + std::to_string(expected.y) + ") got(" +
+                 std::to_string(actual.x) + "," + std::to_string(actual.y) + ") -> " +
+                 (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    // 1. 玩家(1500,1500) == Camera(1500,1500) -> 屏幕正中心 (640,360)
+    camera.SetZoom(1.0f);
+    camera.SetPosition({1500.0f, 1500.0f});
+    check("camera==player at center", {640.0f, 360.0f},
+          camera.WorldToScreen({1500.0f, 1500.0f}, vw, vh));
+
+    // 2. Camera 移到 1600 -> 玩家出现在中心左侧 100 world units 处 (540,360)
+    camera.SetPosition({1600.0f, 1500.0f});
+    check("camera+100 => player left", {540.0f, 360.0f},
+          camera.WorldToScreen({1500.0f, 1500.0f}, vw, vh));
+
+    // 3. ScreenToWorld 与 WorldToScreen 互逆
+    check("screen->world inverse", {1500.0f, 1500.0f},
+          camera.ScreenToWorld({540.0f, 360.0f}, vw, vh));
+
+    // 4. Zoom=2 时视觉距离放大 2 倍：100 world -> 200 px
+    camera.SetPosition({1500.0f, 1500.0f});
+    camera.SetZoom(2.0f);
+    check("zoom2 doubles distance", {840.0f, 360.0f},
+          camera.WorldToScreen({1600.0f, 1500.0f}, vw, vh));
+    check("zoom2 camera center", {640.0f, 360.0f},
+          camera.WorldToScreen({1500.0f, 1500.0f}, vw, vh));
+
+    // 恢复运行状态：跟随玩家，1:1 缩放
+    camera.SetZoom(1.0f);
+    if (m_player != nullptr) {
+        camera.SetPosition(m_player->GetTransform().GetPosition());
+    }
+
+    LOG_INFO(std::string("[CameraCheck] completed, failures = ") + std::to_string(failures));
+}
+
 void TestScene::Update(float deltaTime) {
     auto& engine = legend::Engine::Get();
     auto& input = engine.GetInput();
@@ -158,6 +211,12 @@ void TestScene::Update(float deltaTime) {
                                 : "Camera follow: disabled (F)");
     }
 
+    // ---- 鼠标滚轮缩放：无论是否跟随都生效 ----
+    const float wheel = input.GetMouseWheelDelta();
+    if (wheel != 0.0f) {
+        camera.SetZoom(camera.GetZoom() * (wheel > 0.0f ? 1.1f : 1.0f / 1.1f));
+    }
+
     if (m_cameraFollow) {
         // 平滑跟随玩家
         if (m_player != nullptr) {
@@ -166,7 +225,7 @@ void TestScene::Update(float deltaTime) {
             camera.SetPosition(camera.GetPosition() + (target - camera.GetPosition()) * smoothing);
         }
     } else {
-        // 方向键自由移动摄像机
+        // 方向键自由移动摄像机（仅关闭跟随时生效）
         const float inputX = (input.IsKeyDown(SDL_SCANCODE_RIGHT) ? 1.0f : 0.0f) -
                              (input.IsKeyDown(SDL_SCANCODE_LEFT) ? 1.0f : 0.0f);
         const float inputY = (input.IsKeyDown(SDL_SCANCODE_DOWN) ? 1.0f : 0.0f) -
@@ -175,12 +234,6 @@ void TestScene::Update(float deltaTime) {
         if (direction.LengthSq() > 0.0f) {
             direction = direction.Normalized();
             camera.Move(direction * kCameraSpeed * deltaTime / camera.GetZoom());
-        }
-
-        // 鼠标滚轮缩放
-        const float wheel = input.GetMouseWheelDelta();
-        if (wheel != 0.0f) {
-            camera.SetZoom(camera.GetZoom() * (wheel > 0.0f ? 1.1f : 1.0f / 1.1f));
         }
     }
 }

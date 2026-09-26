@@ -26,11 +26,14 @@ bool Engine::Initialize(const std::string& windowTitle, int windowWidth, int win
 
     if (!m_window.Create(windowTitle, windowWidth, windowHeight)) {
         LOG_ERROR("Engine initialization failed: could not create window.");
+        debug::Logger::Shutdown();
         return false;
     }
 
     if (!m_renderer.Initialize(m_window.GetHandle())) {
         LOG_ERROR("Engine initialization failed: could not initialize renderer.");
+        m_window.Destroy();
+        debug::Logger::Shutdown();
         return false;
     }
 
@@ -78,6 +81,7 @@ void Engine::Run() {
         if (deltaTime < 0.0) {
             deltaTime = 0.0;
         }
+        m_totalElapsed += deltaTime;
 
         // 3. 应用层逻辑 -> 场景更新
         if (m_updateCallback) {
@@ -85,8 +89,10 @@ void Engine::Run() {
         }
         m_scenes.Update(static_cast<float>(deltaTime));
 
-        // 4. 渲染 + Present
+        // 4. 渲染：设置每帧状态 -> 绘制场景 -> Present
+        m_renderer.BeginFrame(m_camera);
         m_scenes.Render(m_renderer, m_camera);
+        HandleDebugCapture();
         m_renderer.EndFrame();
 
         // 5. 清除本帧输入状态
@@ -110,10 +116,36 @@ void Engine::UpdateFpsWindowTitle(double elapsedSeconds) {
     m_window.SetTitle(m_title + " | FPS: " + std::to_string(fps));
 }
 
-void Engine::Shutdown() {
-    if (!m_initialized) {
+void Engine::HandleDebugCapture() {
+    if (m_debugCaptureDone) {
         return;
     }
+    const char* screenshotPath = SDL_getenv("LEGEND_AUTO_SCREENSHOT");
+    if (screenshotPath == nullptr || screenshotPath[0] == '\0') {
+        return;
+    }
+    if (m_totalElapsed < 2.0) {
+        return; // 先渲染约 2 秒，确保画面内容已就绪
+    }
+    m_debugCaptureDone = true;
+
+    if (m_renderer.CaptureScreenshot(screenshotPath)) {
+        LOG_INFO(std::string("Debug screenshot saved: ") + screenshotPath);
+    } else {
+        LOG_ERROR(std::string("Debug screenshot failed: ") + screenshotPath);
+    }
+
+    if (SDL_getenv("LEGEND_AUTO_QUIT") != nullptr) {
+        LOG_INFO("LEGEND_AUTO_QUIT detected, quitting after screenshot.");
+        m_running = false;
+    }
+}
+
+void Engine::Shutdown() {
+    if (m_shutdownCompleted) {
+        return;
+    }
+    m_shutdownCompleted = true;
 
     LOG_INFO("Engine shutting down.");
     m_scenes.Shutdown();
