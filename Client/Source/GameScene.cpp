@@ -240,6 +240,12 @@ void GameScene::Update(float deltaTime) {
     legend::animation::AnimationStateMachine asmState;
     asmState.Update(*m_player);
 
+    // 断言时机：动画状态机已按最终 direction/moving 选好 Clip
+    if (m_autoDirCycle && m_cycleVerifyPending) {
+        m_cycleVerifyPending = false;
+        RunDirectionCycleAssertion(m_cycleDirIdx, m_cycleWalk);
+    }
+
     UpdateCamera(deltaTime);
     LogMapStats(deltaTime);
 }
@@ -632,13 +638,21 @@ void GameScene::UpdateDirectionCycle() {
     const int dirIdx = segment % 8;
     const double phase = m_sceneElapsed - segment * kSegmentLength;
     const bool walkPhase = phase >= 0.6;
+    const auto targetDirection = static_cast<legend::entity::Direction8>(dirIdx);
 
     static const legend::math::Vector2 kDirVectors[8] = {
         {0.0f, 1.0f},  { -1.0f, 1.0f }, { -1.0f, 0.0f }, { -1.0f, -1.0f },
         {0.0f, -1.0f}, {1.0f, -1.0f},  {1.0f, 0.0f},   {1.0f, 1.0f},
     };
-    m_playerController.SetVirtualInput(walkPhase ? kDirVectors[dirIdx]
-                                                 : legend::math::Vector2{0.0f, 0.0f});
+
+    if (walkPhase) {
+        // Walk：对应方向向量走正常 PlayerController / CharacterController 移动管线
+        m_playerController.SetVirtualInput(kDirVectors[dirIdx]);
+    } else {
+        // Idle：零输入会保留上一方向，必须显式设置目标方向 -> Idle + 当前目标 Direction
+        m_player->SetDirection(targetDirection);
+        m_playerController.SetVirtualInput(legend::math::Vector2{0.0f, 0.0f});
+    }
 
     const int stateKey = segment * 2 + (walkPhase ? 1 : 0);
     if (stateKey != m_lastCycleSegment) {
@@ -646,8 +660,35 @@ void GameScene::UpdateDirectionCycle() {
         static const char* kNames[8] = {"South", "SouthWest", "West", "NorthWest",
                                         "North", "NorthEast", "East", "SouthEast"};
         LOG_INFO(std::string("[DirectionCycle] ") + kNames[dirIdx] + (walkPhase ? " WALK" : " IDLE") +
-                 " (virtual input " + std::to_string(kDirVectors[dirIdx].x) + "," +
-                 std::to_string(kDirVectors[dirIdx].y) + ")");
+                 " (virtual input " + std::to_string(walkPhase ? kDirVectors[dirIdx].x : 0.0f) + "," +
+                 std::to_string(walkPhase ? kDirVectors[dirIdx].y : 0.0f) + ")");
+        // 断言挂起：动画状态机更新后执行（Clip 在本帧稍后才会切换）
+        m_cycleVerifyPending = true;
+        m_cycleDirIdx = dirIdx;
+        m_cycleWalk = walkPhase;
+    }
+}
+
+void GameScene::RunDirectionCycleAssertion(int dirIdx, bool walkPhase) {
+    static const char* kNames[8] = {"South", "SouthWest", "West", "NorthWest",
+                                    "North", "NorthEast", "East", "SouthEast"};
+    const auto expectedDir = static_cast<legend::entity::Direction8>(dirIdx);
+    const std::string expectedClip =
+        std::string(walkPhase ? "walk_" : "idle_") + legend::entity::Direction8Name(expectedDir);
+
+    // 同时验证 Direction 变量与 Animation Clip 名称
+    const bool dirOK = m_player->GetDirection() == expectedDir;
+    const std::string actualClip = m_player->GetAnimationPlayer().GetCurrentClipName();
+    const bool clipOK = actualClip == expectedClip;
+    const bool pass = dirOK && clipOK;
+
+    LOG_INFO(std::string("[DirectionCycleCheck] ") + kNames[dirIdx] +
+             (walkPhase ? " Walk" : " Idle") + " -> expected '" + expectedClip + "', got '" +
+             actualClip + "' (direction " + (dirOK ? "ok" : "MISMATCH") + ") -> " +
+             (pass ? "PASS" : "FAIL"));
+    ++m_dirCycleChecks;
+    if (!pass) {
+        ++m_dirCycleFailures;
     }
 }
 
@@ -915,6 +956,13 @@ void GameScene::LogMapStats(double deltaTime) {
 
     legend::Engine::Get().SetStatusText(status);
     LOG_INFO("[MapStats] " + status);
+
+    // [DirectionCycleCheck] 汇总：16 种状态（8 方向 x Idle/Walk）全部跑完后输出一次
+    if (m_autoDirCycle && !m_dirCycleSummaryDone && m_dirCycleChecks >= 16) {
+        m_dirCycleSummaryDone = true;
+        LOG_INFO("[DirectionCycleCheck] completed, checks = " + std::to_string(m_dirCycleChecks) +
+                 ", failures = " + std::to_string(m_dirCycleFailures));
+    }
 
     if (!m_chunkCheckDone && stats.visibleChunks > 0) {
         m_chunkCheckDone = true;

@@ -41,6 +41,8 @@ private:
     void LogMapStats(double deltaTime);
     // LEGEND_AUTO_DIRECTION_CYCLE=1：8 方向循环（每方向 Idle/Walk 各一段）
     void UpdateDirectionCycle();
+    // 断言当前 Direction 与 Animation Clip 均为期望状态（在动画状态机更新后调用）
+    void RunDirectionCycleAssertion(int dirIdx, bool walkPhase);
     // F2：脚底碰撞盒 + Feet 十字
     void DrawCharacterDebug(legend::render::SpriteBatch& batch);
 
@@ -68,6 +70,13 @@ private:
     bool m_autoYsort = false;
     bool m_autoDirCycle = false;
     int m_lastCycleSegment = -1;
+    // [DirectionCycleCheck] 断言调度与统计
+    bool m_cycleVerifyPending = false;
+    int m_cycleDirIdx = 0;
+    bool m_cycleWalk = false;
+    int m_dirCycleChecks = 0;
+    int m_dirCycleFailures = 0;
+    bool m_dirCycleSummaryDone = false;
     float m_ysortTreeX = 0.0f;
     float m_ysortTreeY = 0.0f;
 };
