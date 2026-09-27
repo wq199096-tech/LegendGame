@@ -7,16 +7,16 @@
     "visualWidth":  96,
     "visualHeight":  96,
     "footprint":  {
-                      "offsetY":  4,
-                      "offsetX":  0,
                       "width":  28,
-                      "height":  18
+                      "height":  18,
+                      "offsetX":  0,
+                      "offsetY":  4
                   },
     "pivot":  {
-                  "y":  0.85,
-                  "x":  0.5
+                  "x":  0.5,
+                  "y":  0.85
               },
-    "moveSpeed":  90,
+    "moveSpeed":  200,
     "direction":  "south",
     "animations":  "Monsters/Slime/animations.json"
 }

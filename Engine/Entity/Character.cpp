@@ -16,11 +16,27 @@ Character::Character(EntityId id, std::string name, ActorType actorType, float m
 }
 
 void Character::UpdateAnimation(float deltaTime) {
-    // 1) 选择 Clip：按最终 moving/direction（idle_/walk_ + 方向）；同名 Play 保持进度
+    // 1) 选择 Clip：优先级 Dead > HitReact > Attacking > Walk > Idle；同名 Play 保持进度
     legend::animation::AnimationStateMachine stateMachine;
     stateMachine.Update(*this);
-    // 2) 推进帧：真正消耗 deltaTime，驱动 Frame 0 -> 1 -> ... -> Loop
+    // 2) 推进帧：真正消耗 deltaTime，驱动 Frame 0 -> 1 -> ... -> Loop/Finished
     m_animationPlayer.Update(deltaTime);
+}
+
+void Character::EnterDead() {
+    m_actionState = CharacterActionState::Dead;
+    m_moving = false;
+    m_velocity = math::Vector2{0.0f, 0.0f};
+    // active/visible 保持：死亡动画仍需渲染；Despawn 由 WorldActorManager 处理
+}
+
+void Character::EnterHitReact() {
+    if (m_actionState == CharacterActionState::Dead) {
+        return; // 死亡不可被打断
+    }
+    m_actionState = CharacterActionState::HitReact; // 覆盖 Attacking：攻击取消，事件不再产生伤害
+    m_moving = false;
+    m_velocity = math::Vector2{0.0f, 0.0f};
 }
 
 } // namespace legend::entity

@@ -3,6 +3,7 @@
 #include <random>
 #include <cstdint>
 
+#include "Client/Combat/MonsterCombatController.h"
 #include "Client/World/AggroTable.h"
 #include "Engine/Entity/ActorRegistry.h"
 #include "Engine/Entity/CharacterController.h"
@@ -11,6 +12,10 @@
 
 namespace legend::map {
 class Map;
+}
+
+namespace legend::combat {
+class CombatSystem;
 }
 
 namespace legend::world {
@@ -35,10 +40,12 @@ public:
     // 更新一步；rng 由 WorldActorManager 统一持有（LEGEND_AI_SEED 可复现）
     void Update(MonsterCharacter& monster, const map::Map& map,
                 const entity::ActorRegistry& registry,
-                const entity::CharacterController& controller, std::mt19937& rng,
-                float deltaTime);
+                const entity::CharacterController& controller,
+                combat::CombatSystem& combat, std::mt19937& rng, float deltaTime);
 
     const AggroTable& GetAggroTable() const { return m_aggro; }
+    // 阶段5：受到伤害 -> AddThreat(sourceId, damage) 并切换目标（被打必反击，含 ReturnHome 途中）
+    void OnDamaged(MonsterCharacter& monster, legend::entity::EntityId sourceId, float amount);
     // F3 Debug
     const math::Vector2& GetWanderTarget() const { return m_context.wanderTarget; }
     bool HasWanderTarget() const { return m_context.hasWanderTarget; }
@@ -66,6 +73,7 @@ private:
 
     Context m_context;
     AggroTable m_aggro;
+    MonsterCombatController m_combat; // 战斗推进/攻击请求（AI 只决策）
 };
 
 } // namespace legend::world

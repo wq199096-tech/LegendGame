@@ -35,6 +35,12 @@ public:
                                                              const map::Map& map,
                                                              std::mt19937& rng) const;
 
+    // 按模板 id 生成单只怪物（重生用）：区域内随机合法点；失败返回 nullptr
+    std::unique_ptr<MonsterCharacter> SpawnSingle(const std::string& templateId,
+                                                  const map::MapSpawnArea& area,
+                                                  const map::Map& map,
+                                                  std::mt19937& rng) const;
+
     const MonsterDefinition* GetDefinition(const std::string& templateId) const;
     bool HasDefinition(const std::string& templateId) const {
         return m_templates.count(templateId) > 0;

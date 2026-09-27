@@ -7,6 +7,8 @@ add_executable(LegendClient
     Source/GameScene.cpp
     Source/FallbackScene.cpp
     Character/PlayerCharacter.cpp
+    Combat/MonsterCombatController.cpp
+    Combat/PlayerCombatController.cpp
     Character/PlayerController.cpp
     World/AggroTable.cpp
     World/MonsterAIController.cpp

@@ -2,6 +2,10 @@
 # legend_engine：自研引擎静态库
 # ---------------------------------------------------------------------------
 set(LEGEND_ENGINE_SOURCES
+    Combat/CombatResolver.cpp
+    Combat/CombatStats.cpp
+    Combat/CombatSystem.cpp
+    Combat/CombatTarget.cpp
     Core/Application.cpp
     Core/Engine.cpp
     Core/Timer.cpp

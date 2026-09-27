@@ -15,4 +15,5 @@ NPCCharacter::NPCCharacter(
       m_definition(definition) {
     SetSpriteSheet(std::move(spriteSheet));
     SetDirection(facing); // 固定朝向：NPC 不移动，方向永不改变
+    // NPC 不参与战斗（阶段5）：combatEnabled 默认 false，不可被攻击/锁定
 }

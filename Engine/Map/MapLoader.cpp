@@ -288,6 +288,7 @@ std::shared_ptr<Map> MapLoader::Load(const std::string& filePath) {
             area.y = spawnJson.value("y", 0.0f);
             area.count = spawnJson.value("count", 0);
             area.radius = spawnJson.value("radius", 0.0f);
+            area.respawnSeconds = spawnJson.value("respawnSeconds", 5.0f); // 旧地图兼容
             if (area.monsterId.empty() || area.count <= 0) {
                 LOG_WARN("MapLoader: monsterSpawns entry " + std::to_string(area.id) +
                          " missing 'monster' or 'count', skipped.");
@@ -409,6 +410,7 @@ bool MapLoader::Save(const Map& map, const std::string& filePath) {
         areaJson["y"] = area.y;
         areaJson["count"] = area.count;
         areaJson["radius"] = area.radius;
+        areaJson["respawnSeconds"] = area.respawnSeconds;
         monsterSpawns.push_back(std::move(areaJson));
     }
     if (!monsterSpawns.empty()) {

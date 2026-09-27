@@ -52,6 +52,19 @@ bool LoadCharacterDefinition(const std::string& filePath, CharacterDefinition& o
     out.visualHeight = root.value("visualHeight", static_cast<float>(out.frameHeight));
     out.moveSpeed = root.value("moveSpeed", 200.0f);
     out.defaultDirection = root.value("direction", std::string("south"));
+    if (root.contains("combat") && root["combat"].is_object()) {
+        const json& c = root["combat"];
+        out.combat.maxHp = c.value("maxHp", 100.0f);
+        out.combat.hp = out.combat.maxHp;
+        out.combat.attack = c.value("attack", 0.0f);
+        out.combat.defense = c.value("defense", 0.0f);
+        out.combat.attackRange = c.value("attackRange", 80.0f);
+        out.combat.attackInterval = c.value("attackInterval", 1.0f);
+        out.hasCombat = out.combat.IsValid();
+        if (!out.hasCombat) {
+            LOG_WARN("AnimationLoader: invalid combat block in " + filePath + ", combat disabled.");
+        }
+    }
 
     if (root.contains("footprint")) {
         const json& fp = root["footprint"];
@@ -112,7 +125,8 @@ std::unordered_map<std::string, AnimationClip> LoadAnimationClips(const std::str
             AnimationFrame frame;
             frame.frameIndex = frameJson.value("index", 0);
             frame.duration = frameJson.value("duration", 0.1f);
-            clip.frames.push_back(frame);
+            frame.event = frameJson.value("event", std::string()); // 老 JSON 兼容：缺省空
+            clip.frames.push_back(std::move(frame));
         }
         clips[clip.name] = std::move(clip);
     }

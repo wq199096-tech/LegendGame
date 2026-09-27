@@ -12,6 +12,20 @@ namespace {
 using json = nlohmann::json;
 constexpr int kSupportedVersion = 1;
 
+bool ParseCombatBlock(const json& cmb, combat::CombatStats& out) {
+    out.maxHp = cmb.value("maxHp", 100.0f);
+    out.hp = out.maxHp;
+    out.attack = cmb.value("attack", 10.0f);
+    out.defense = cmb.value("defense", 0.0f);
+    out.attackRange = cmb.value("attackRange", 80.0f);
+    out.attackInterval = cmb.value("attackInterval", 1.0f);
+    if (!out.IsValid()) {
+        LOG_ERROR("MonsterDefinition: invalid combat block (maxHp>0, range>0, interval>0 required).");
+        return false;
+    }
+    return true;
+}
+
 bool ParseAiBlock(const json& ai, MonsterAIDefinition& out) {
     out.aggroRange = ai.value("aggroRange", 300.0f);
     out.leashRange = ai.value("leashRange", 600.0f);
@@ -74,6 +88,27 @@ bool LoadMonsterRegistry(const std::string& filePath,
         definition.id = entry["id"].get<std::string>();
         definition.name = entry.value("name", definition.id);
         definition.characterPath = entry["character"].get<std::string>();
+        // combat 块：数据驱动战斗属性；缺省给保守默认（可配置原则）
+        if (entry.contains("combat") && entry["combat"].is_object()) {
+            const json& cb = entry["combat"];
+            definition.combat.maxHp = cb.value("maxHp", 100.0f);
+            definition.combat.hp = definition.combat.maxHp;
+            definition.combat.attack = cb.value("attack", 10.0f);
+            definition.combat.defense = cb.value("defense", 0.0f);
+            definition.combat.attackRange = cb.value("attackRange", 70.0f);
+            definition.combat.attackInterval = cb.value("attackInterval", 1.5f);
+            if (!definition.combat.IsValid()) {
+                LOG_ERROR("MonsterDefinition: '" + definition.id +
+                          "' has invalid combat block, template skipped.");
+                ++skipped;
+                continue;
+            }
+            // 停步距离必须 <= attackRange（否则永远打不到目标）
+            if (definition.ai.stopDistance > definition.combat.attackRange + 1.0f) {
+                LOG_WARN("MonsterDefinition: '" + definition.id +
+                         "' stopDistance > attackRange, chase may stop out of range.");
+            }
+        }
         if (entry.contains("ai") && entry["ai"].is_object()) {
             if (!ParseAiBlock(entry["ai"], definition.ai)) {
                 ++skipped;

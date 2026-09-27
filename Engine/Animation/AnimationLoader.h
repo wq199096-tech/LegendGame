@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "Engine/Animation/AnimationClip.h"
+#include "Engine/Combat/CombatStats.h"
 #include "Engine/Animation/SpriteSheet.h"
 #include "Engine/Entity/Character.h"
 
@@ -28,6 +29,9 @@ struct CharacterDefinition {
     float moveSpeed = 200.0f;
     // character.json "direction" 字段：默认朝向（south 等 8 方向小写名），NPC 用作固定朝向
     std::string defaultDirection = "south";
+    // character.json "combat" 块（阶段5）：缺省时 hasCombat=false（NPC 不参战）
+    bool hasCombat = false;
+    combat::CombatStats combat;
 };
 
 // character.json -> CharacterDefinition（失败返回 false + 明确日志，不崩溃）

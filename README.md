@@ -150,3 +150,23 @@ Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites
 账号 / 登录 / 网关 / 数据库 / 正式地图 / 正式战斗（攻击 / 伤害 / HP / 技能 / 死亡 / 掉落）/ 装备 / 背包 /
 聊天 / 商城 / 任务 / 公会 / 交易 / 组队 / 排行榜等 MMORPG 玩法功能，
 将在引擎稳定后的后续阶段逐步实现。
+
+## 战斗系统（阶段5：Combat Core System V0.5）
+
+- Engine/Combat：`CombatStats`（maxHp/hp/attack/defense/attackRange/attackInterval，TakeDamage 下限1/Heal上限/IsAlive）、
+  `CombatTarget`（EntityId 句柄，存在+active+alive 才有效）、`CombatResolver`（max(1, Attack-Defense)）、
+  `CombatSystem`（ValidateAttack/ResolveAttack/ApplyDamage，统一伤害入口 + DamageEvent 队列）
+- 动作状态：`CharacterActionState` Normal/Attacking/HitReact/Dead；Movement Lock（非 Normal 禁止移动）；
+  动画优先级 Dead > HitReact > Attacking > Walk > Idle（NonLoop 播完自动恢复）
+- 动画事件：AnimationFrame `event` 字段（如 attack_hit），`AnimationPlayer::ConsumeEvents()` 每帧消费一次
+- 数据驱动：character.json `combat` 块（Player 500/80/20/90/0.8）；monster.json `combat` 块
+  （Slime 120/20/5/65/1.5，Wolf 180/35/8/70/1.2，Boar 260/45/15/75/1.6）；map.json `respawnSeconds`（缺省 5）
+- 目标选择：鼠标左键点怪（视觉 AABB HitTest）/ TAB 最近活怪（1000 内）/ 点空地清目标；NPC 不参战
+- 仇恨：受击 `OnDamaged(sourceId, damage)` -> AddThreat，被打必反击
+- 死亡/重生：HP=0 -> Dead（active 保持播放死亡动画）-> Corpse 1.5s -> Registry 注销 -> respawnSeconds 后
+  原 SpawnArea 重生（新 EntityId，数量守恒）；Player 死亡 2s 后 Debug 复活（回出生点满血）
+- 调试：F4（HP/Target/冷却/ActionState、攻击距离圈、最近 3 只怪状态）；选中目标红圈；怪物头顶血条；
+  窗口标题 `HP: x/y`
+- 自动验收：LEGEND_AUTO_COMBAT_TEST=1（选怪/连击/反击/死亡/despawn/重生/玩家复活）；静态自检
+  [CombatStatsCheck]/[CombatResolverCheck]/[AttackCooldownCheck]/[AttackRangeCheck]/[AnimationEventCheck]/[DeathCheck]
+- 动画资源：SpriteSheet 扩展为 15列x8行=120帧（idle2/walk4/attack4/hit1/death4 每方向行）

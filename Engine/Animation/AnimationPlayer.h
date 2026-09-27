@@ -3,12 +3,13 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "Engine/Animation/AnimationClip.h"
 
 namespace legend::animation {
 
-// 动画播放器：推进时间、处理 Loop/NonLoop、切换片段。
+// 动画播放器：推进时间、处理 Loop/NonLoop、切换片段、帧事件。
 // 重复 Play 同名 Clip 不会重置进度。
 class AnimationPlayer {
 public:
@@ -25,6 +26,13 @@ public:
     float GetSpeed() const { return m_speed; }
     bool IsPlaying() const { return m_current != nullptr && !m_paused; }
 
+    // NonLoop Clip 是否已播放到最后一帧播完（Loop Clip 永远 false）
+    bool IsFinished() const { return m_finished; }
+
+    // 取出并清空本帧累积的动画事件（如 "attack_hit"）。
+    // 同一帧不会因 Update(0) 重复触发：事件只在跨入新帧时产生一次。
+    std::vector<std::string> ConsumeEvents();
+
     const std::string& GetCurrentClipName() const { return m_currentName; }
     // 当前帧在 SpriteSheet 中的帧序号（贴图索引）
     int GetCurrentFrameIndex() const;
@@ -33,13 +41,17 @@ public:
     int GetCurrentFrameCount() const { return m_current ? m_current->GetFrameCount() : 0; }
 
 private:
+    void EmitFrameEvent();
+
     std::shared_ptr<const std::unordered_map<std::string, AnimationClip>> m_clips;
     const AnimationClip* m_current = nullptr;
     std::string m_currentName;
     float m_elapsed = 0.0f;
     float m_speed = 1.0f;
     bool m_paused = false;
+    bool m_finished = false;
     int m_frameOrdinal = 0;
+    std::vector<std::string> m_pendingEvents;
 };
 
 } // namespace legend::animation

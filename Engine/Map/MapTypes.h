@@ -29,6 +29,7 @@ struct MapSpawnArea {
     float y = 0.0f;
     int count = 0;   // 生成数量
     float radius = 0.0f; // 随机分布半径
+    float respawnSeconds = 5.0f; // 怪物死亡到重生间隔（阶段5；旧地图缺省 5 秒）
 };
 
 // NPC 出生点：静态站立角色，direction 为固定朝向

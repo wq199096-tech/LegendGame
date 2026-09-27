@@ -2,9 +2,12 @@
 
 #include <cmath>
 
+#include "Client/Combat/MonsterCombatController.h"
 #include "Client/World/MonsterCharacter.h"
 #include "Client/World/SpawnArea.h"
+#include "Engine/Combat/CombatSystem.h"
 #include "Engine/Debug/Logger.h"
+#include "Engine/Entity/Character.h"
 #include "Engine/Map/Map.h"
 
 namespace legend::world {
@@ -28,21 +31,33 @@ float RandomRange(std::mt19937& rng, float minValue, float maxValue) {
 void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
                                  const entity::ActorRegistry& registry,
                                  const entity::CharacterController& controller,
-                                 std::mt19937& rng, float deltaTime) {
+                                 combat::CombatSystem& combat, std::mt19937& rng,
+                                 float deltaTime) {
+    // ---- 战斗状态推进（冷却 / 攻击事件 / 恢复 Normal）——每帧必须执行 ----
+    m_combat.Update(monster, registry, combat, deltaTime);
+
+    // ---- Movement Lock：Attacking / HitReact / Dead 禁止 AI 移动 ----
+    // 动画仍由 WorldActorManager 驱动；HitReact 打断攻击（事件在 combat 内被丢弃）
+    if (monster.GetActionState() != entity::CharacterActionState::Normal) {
+        controller.Move(monster, math::Vector2{0.0f, 0.0f}, deltaTime, map);
+        return;
+    }
+
     m_context.stateTimer += deltaTime;
 
     // ---- 感知节流：0.15s 一次，DistanceSquared 判定 ----
     m_context.perceptionTimer -= deltaTime;
     if (m_context.perceptionTimer <= 0.0f) {
         m_context.perceptionTimer = kPerceptionInterval;
-        // ReturnHome 途中不重新 Aggro（防止无限来回抖动）
+        // ReturnHome 途中不重新 Aggro（防止无限来回抖动）；被击伤害仇恨走 OnDamaged
         if (monster.GetAIState() != MonsterAIState::ReturnHome) {
             RunPerception(monster, registry);
         }
     }
 
-    // ---- 目标失效安全检查：Actor 不存在 / inactive / 太远 -> 清目标 ----
-    const bool hasValidTarget = monster.GetTargetHandle().IsValid(registry);
+    // ---- 目标失效安全检查：Actor 不存在 / inactive / 已死 -> 清目标 ----
+    const bool hasValidTarget = monster.GetTargetHandle().IsValid(registry) &&
+                                monster.GetTargetHandle().Resolve(registry)->IsCombatAlive();
     if (!hasValidTarget && !monster.GetTargetHandle().IsEmpty()) {
         monster.GetTargetHandle().Clear();
         m_aggro.Clear();
@@ -53,17 +68,15 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
 
     switch (monster.GetAIState()) {
     case MonsterAIState::Idle: {
-        // 站立不动；等待随机时间后进入 Wander
         controller.Move(monster, math::Vector2{0.0f, 0.0f}, deltaTime, map);
         if (!monster.GetTargetHandle().IsEmpty()) {
-            EnterChase(monster); // 感知到目标立即 Chase
+            EnterChase(monster);
         } else if (m_context.stateTimer >= m_context.idleDuration) {
             EnterWander(monster, map, rng);
         }
         break;
     }
     case MonsterAIState::Wander: {
-        // 已有目标 -> 立即 Chase
         if (!monster.GetTargetHandle().IsEmpty()) {
             EnterChase(monster);
             break;
@@ -78,19 +91,15 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
             EnterReturnHome(monster);
             break;
         }
-        // 持续向 wander target 直线移动（非每帧随机方向）+ 地图碰撞
-        const math::Vector2 toTarget =
-            m_context.wanderTarget - monster.GetPosition();
+        const math::Vector2 toTarget = m_context.wanderTarget - monster.GetPosition();
         controller.Move(monster, toTarget, deltaTime, map);
-        // 到达 / 超时 / 持续撞墙 -> 放弃目标回 Idle
         const bool arrived = (toTarget.x * toTarget.x + toTarget.y * toTarget.y) <
                              kArriveDistance * kArriveDistance;
         const bool timeout = m_context.stateTimer >= kWanderTimeout;
         m_context.stuckCheckTimer += deltaTime;
         bool stuck = false;
         if (m_context.stuckCheckTimer >= kStuckCheckInterval) {
-            const math::Vector2 delta =
-                monster.GetPosition() - m_context.lastStuckCheckPos;
+            const math::Vector2 delta = monster.GetPosition() - m_context.lastStuckCheckPos;
             stuck = delta.LengthSq() < kStuckDistance * kStuckDistance;
             m_context.lastStuckCheckPos = monster.GetPosition();
             m_context.stuckCheckTimer = 0.0f;
@@ -101,7 +110,7 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
         break;
     }
     case MonsterAIState::Chase: {
-        // Leash：距 home 超限 -> 清目标回出生点（怪物不能追遍整张地图）
+        // Leash：距 home 超限 -> 清目标回出生点
         if (DistanceSq(monster.GetPosition(), monster.GetHomePosition()) >
             monster.GetLeashRange() * monster.GetLeashRange()) {
             LOG_INFO("[AI] " + monster.GetName() + " leash exceeded (>" +
@@ -112,29 +121,36 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
             break;
         }
         entity::Character* target = monster.GetTargetHandle().Resolve(registry);
-        if (target == nullptr) {
-            // 目标失效（已在上方统一清理，此处兜底）
+        if (target == nullptr || !target->IsCombatAlive()) {
             monster.GetTargetHandle().Clear();
             EnterIdle(monster, rng);
             break;
         }
-        const float distToTargetSq = DistanceSq(monster.GetPosition(), target->GetPosition());
-        // 离开 loseTargetRange -> 放弃目标（DistanceSquared 判定）
+        const float distSqToTarget = DistanceSq(monster.GetPosition(), target->GetPosition());
+        const float attackRange = monster.GetCombatStats().attackRange;
+        // 离开 loseTargetRange -> 放弃目标
         const float loseTargetRange = monster.GetAggroRange() * kLoseTargetMultiplier;
-        if (distToTargetSq > loseTargetRange * loseTargetRange) {
+        if (distSqToTarget > loseTargetRange * loseTargetRange) {
             monster.GetTargetHandle().Clear();
             m_aggro.Clear();
             EnterIdle(monster, rng);
             break;
         }
-        // stopDistance / resumeDistance 滞回：贴近后停步，拉开 resume 距离才继续
-        if (distToTargetSq <= monster.GetStopDistance() * monster.GetStopDistance()) {
+        // 攻击范围停步：Chase Combat Stop = attackRange（进入即停步并尝试攻击）
+        if (distSqToTarget <= attackRange * attackRange) {
+            controller.Move(monster, math::Vector2{0.0f, 0.0f}, deltaTime, map);
+            m_combat.RequestAttack(monster, registry, combat); // 冷却/状态内部校验
+            break;
+        }
+        // stop/resume 滞回：贴近（stopDistance）停步，拉开 resume 距离才继续追
+        if (distSqToTarget <= monster.GetStopDistance() * monster.GetStopDistance()) {
             m_context.chasePaused = true;
-        } else if (distToTargetSq > monster.GetResumeDistance() * monster.GetResumeDistance()) {
+        } else if (distSqToTarget > monster.GetResumeDistance() * monster.GetResumeDistance()) {
             m_context.chasePaused = false;
         }
         if (m_context.chasePaused) {
             controller.Move(monster, math::Vector2{0.0f, 0.0f}, deltaTime, map);
+            m_combat.RequestAttack(monster, registry, combat); // 停步贴近时也尝试攻击
         } else {
             const math::Vector2 toTarget = target->GetPosition() - monster.GetPosition();
             controller.Move(monster, toTarget, deltaTime, map);
@@ -145,7 +161,7 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
         const math::Vector2 toHome = monster.GetHomePosition() - monster.GetPosition();
         if ((toHome.x * toHome.x + toHome.y * toHome.y) <
             kHomeArriveDistance * kHomeArriveDistance) {
-            EnterIdle(monster, rng); // 到家
+            EnterIdle(monster, rng);
         } else {
             controller.Move(monster, toHome, deltaTime, map);
         }
@@ -156,23 +172,37 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
     }
 }
 
+void MonsterAIController::OnDamaged(MonsterCharacter& monster, entity::EntityId sourceId,
+                                    float amount) {
+    if (!monster.IsCombatAlive()) {
+        return; // 尸体不产生仇恨
+    }
+    // 受到伤害 -> AddThreat(sourceId, damage)：被打必反击（含 ReturnHome 途中）
+    m_aggro.AddThreat(sourceId, amount);
+    monster.GetTargetHandle().Set(sourceId);
+    if (monster.GetAIState() != MonsterAIState::Chase) {
+        EnterChase(monster);
+        LOG_INFO("[AI] " + monster.GetName() + "#" + std::to_string(monster.GetId()) +
+                 " aggroed by damage from " + std::to_string(sourceId));
+    }
+}
+
 void MonsterAIController::RunPerception(MonsterCharacter& monster,
                                         const entity::ActorRegistry& registry) {
     ++m_context.scanCount;
     const float aggroSq = monster.GetAggroRange() * monster.GetAggroRange();
     for (const entity::Character* player : registry.GetByType(entity::ActorType::Player)) {
-        if (!player->IsActive()) {
-            continue;
+        if (player == nullptr || !player->IsActive() || !player->IsCombatAlive()) {
+            continue; // 死亡 Player 不进入 Aggro
         }
         const math::Vector2 delta = player->GetPosition() - monster.GetPosition();
         if (delta.LengthSq() <= aggroSq) {
             m_aggro.AddThreat(player->GetId(), 1.0f);
         }
     }
-    // 目标选择：仇恨最高者
     if (monster.GetTargetHandle().IsEmpty()) {
-        const legend::entity::EntityId best = m_aggro.GetHighestThreat();
-        if (best != legend::entity::kInvalidEntityId) {
+        const entity::EntityId best = m_aggro.GetHighestThreat();
+        if (best != entity::kInvalidEntityId) {
             monster.GetTargetHandle().Set(best);
             LOG_INFO("[AI] " + monster.GetName() + " acquired target (player " +
                      std::to_string(best) + "), enter chase.");
@@ -186,18 +216,15 @@ void MonsterAIController::EnterIdle(MonsterCharacter& monster, std::mt19937& rng
     m_context.stateTimer = 0.0f;
     m_context.hasWanderTarget = false;
     m_context.chasePaused = false;
-    // Idle 等待时长数据驱动：来自 monster.json wanderIntervalMin/Max（禁止硬编码）
     m_context.idleDuration = RandomRange(rng, monster.GetWanderIntervalMin(),
                                          monster.GetWanderIntervalMax());
 }
 
 void MonsterAIController::EnterWander(MonsterCharacter& monster, const map::Map& map,
                                       std::mt19937& rng) {
-    // 从出生点附近 wanderRadius 内随机一个目标位置；不可达则留在 Idle
     math::Vector2 target{0.0f, 0.0f};
-    if (SpawnArea::FindWalkablePosition(map, monster.GetFootprint(),
-                                        monster.GetHomePosition(), monster.GetWanderRadius(),
-                                        rng, 8, target)) {
+    if (SpawnArea::FindWalkablePosition(map, monster.GetFootprint(), monster.GetHomePosition(),
+                                        monster.GetWanderRadius(), rng, 8, target)) {
         monster.SetAIState(MonsterAIState::Wander);
         m_context.stateTimer = 0.0f;
         m_context.wanderTarget = target;
@@ -205,7 +232,7 @@ void MonsterAIController::EnterWander(MonsterCharacter& monster, const map::Map&
         m_context.stuckCheckTimer = 0.0f;
         m_context.lastStuckCheckPos = monster.GetPosition();
     } else {
-        EnterIdle(monster, rng); // 全部尝试失败：继续等待
+        EnterIdle(monster, rng);
     }
 }
 

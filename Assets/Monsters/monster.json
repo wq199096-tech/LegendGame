@@ -13,6 +13,13 @@
                 "wanderIntervalMax": 5,
                 "stopDistance": 55,
                 "resumeDistance": 75
+            },
+            "combat": {
+                "maxHp": 120,
+                "attack": 20,
+                "defense": 5,
+                "attackRange": 65,
+                "attackInterval": 1.5
             }
         },
         {
@@ -27,6 +34,13 @@
                 "wanderIntervalMax": 6,
                 "stopDistance": 60,
                 "resumeDistance": 85
+            },
+            "combat": {
+                "maxHp": 180,
+                "attack": 35,
+                "defense": 8,
+                "attackRange": 70,
+                "attackInterval": 1.2
             }
         },
         {
@@ -41,6 +55,13 @@
                 "wanderIntervalMax": 5.5,
                 "stopDistance": 60,
                 "resumeDistance": 80
+            },
+            "combat": {
+                "maxHp": 260,
+                "attack": 45,
+                "defense": 15,
+                "attackRange": 75,
+                "attackInterval": 1.6
             }
         }
     ]

@@ -7,13 +7,15 @@
 
 namespace legend::animation {
 
-// 动画状态机：根据 Character 的 moving / direction 集中选择 Clip。
-// 集中管理状态选择，GameScene 不允许手写 if(direction==...) play(...)。
+// 动画状态机：集中选择 Clip，禁止 GameScene 手写 if(direction==...) play(...)。
+// 阶段5优先级（严格）：Dead > HitReact > Attacking > Walk(moving) > Idle。
 class AnimationStateMachine {
 public:
-    static std::string SelectClip(bool moving, entity::Direction8 direction);
+    // 根据 Character 的 actionState / moving / direction 选择 Clip 名
+    static std::string SelectClip(const entity::Character& character);
+    static std::string SelectClip(bool moving, entity::Direction8 direction); // 兼容旧接口（仅 idle/walk）
 
-    // 每帧调用：按 Character 当前状态切换/推进动画
+    // 每帧调用：按 Character 当前状态切换动画
     void Update(entity::Character& character) const;
 };
 

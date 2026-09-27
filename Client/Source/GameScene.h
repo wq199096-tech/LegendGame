@@ -5,6 +5,7 @@
 
 #include "Client/Character/PlayerCharacter.h"
 #include "Client/Character/PlayerController.h"
+#include "Client/Combat/PlayerCombatController.h"
 #include "Client/World/WorldActorManager.h"
 #include "Engine/Entity/CharacterController.h"
 #include "Engine/Entity/EntityId.h"
@@ -68,6 +69,43 @@ private:
                     float radius, const legend::math::Color& color);
     // LEGEND_AUTO_AI_TEST=1：AI 验收时间线（Aggro -> Leash -> Wander）
     void UpdateAITest(float deltaTime);
+
+    // ---- 阶段5：Combat Core ----
+    // 静态自检：属性/公式/冷却/攻击距离/动画事件/死亡
+    void RunCombatStatsCheck();
+    void RunCombatResolverCheck();
+    void RunAttackCooldownCheck();
+    void RunAttackRangeCheck();
+    void RunAnimationEventCheck();
+    void RunDeathCheck();
+    // LEGEND_AUTO_COMBAT_TEST=1：战斗验收时间线（选怪/连击/反击/死亡/重生/玩家复活）
+    void UpdateCombatTest(float deltaTime);
+    // Player 死亡后 Debug 复活：回出生点满血 Normal South
+    void UpdatePlayerRespawn(float deltaTime);
+    // F4：Combat Debug 覆盖层（目标圈/攻击距离圈/连线/最近3只怪血条与状态）
+    void DrawCombatDebugOverlay(legend::render::SpriteBatch& batch);
+    // Monster 头顶血条（受伤/选中/F4 时显示）
+    void DrawMonsterHealthBars(legend::render::SpriteBatch& batch);
+    // 选中目标红圈
+    void DrawTargetRing(legend::render::SpriteBatch& batch);
+
+    legend::world::PlayerCombatController m_playerCombat;
+    legend::math::Vector2 m_playerSpawnPosition{0.0f, 0.0f};
+    float m_playerRespawnTimer = 0.0f; // 死亡后复活倒计时
+    bool m_combatDebug = false;        // F4
+
+    // LEGEND_AUTO_COMBAT_TEST 时间线状态
+    bool m_autoCombatTest = false;
+    int m_combatTestStage = 0;
+    double m_combatTestElapsed = 0.0;
+    double m_combatTestStageElapsed = 0.0;
+    bool m_combatTestStageEntered = false;
+    legend::entity::EntityId m_combatTestSlimeId = 0;
+    float m_combatTestLastSlimeHp = 0.0f;
+    bool m_combatTestSawDamage = false;
+    bool m_combatTestSawCounter = false;
+    int m_combatTestFailures = 0;
+    bool m_combatTestSummaryDone = false;
 
     std::shared_ptr<legend::map::Map> m_map;
     legend::map::MapRenderer m_mapRenderer;

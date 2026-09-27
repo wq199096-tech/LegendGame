@@ -99,6 +99,25 @@ std::vector<std::unique_ptr<MonsterCharacter>> MonsterSpawner::SpawnArea(
     return spawned;
 }
 
+std::unique_ptr<MonsterCharacter> MonsterSpawner::SpawnSingle(
+    const std::string& templateId, const map::MapSpawnArea& area, const map::Map& map,
+    std::mt19937& rng) const {
+    const auto it = m_templates.find(templateId);
+    if (it == m_templates.end()) {
+        return nullptr; // 模板不存在/加载失败
+    }
+    const TemplateAssets& assets = it->second;
+    math::Vector2 position{0.0f, 0.0f};
+    if (!SpawnArea::FindWalkableSpawnPosition(map, assets.charDefinition.footprint, area, rng,
+                                              position)) {
+        LOG_WARN("MonsterSpawner: respawn find position failed for \x27" + templateId + "\x27.");
+        return nullptr;
+    }
+    return std::make_unique<MonsterCharacter>(
+        legend::entity::EntityIdAllocator::Next(), assets.definition, assets.charDefinition,
+        assets.clips, assets.sheet, area.id, position);
+}
+
 const MonsterDefinition* MonsterSpawner::GetDefinition(const std::string& templateId) const {
     const auto it = m_templates.find(templateId);
     if (it == m_templates.end()) {

@@ -12,4 +12,9 @@ PlayerCharacter::PlayerCharacter(
                                 std::move(clips)),
       m_definition(definition) {
     SetSpriteSheet(std::move(spriteSheet));
+    // 战斗组件：来自 character.json combat 块（NPC 无 combat 块则不参战）
+    SetCombatEnabled(definition.hasCombat);
+    if (definition.hasCombat) {
+        GetCombatStats() = definition.combat;
+    }
 }

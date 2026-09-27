@@ -1,6 +1,10 @@
 #pragma once
 
 #include <string>
+
+#include "Engine/Combat/CombatStats.h"
+
+#include "Engine/Combat/CombatStats.h"
 #include <unordered_map>
 #include <vector>
 
@@ -23,6 +27,7 @@ struct MonsterDefinition {
     std::string name;    // 显示名，如 "Slime"
     std::string characterPath; // character.json 相对 Assets 根路径
     MonsterAIDefinition ai;
+    combat::CombatStats combat; // monster.json "combat" 块（阶段5数据驱动，不写死 AI）
 };
 
 // Assets/Monsters/monster.json -> 模板表（version 1）。

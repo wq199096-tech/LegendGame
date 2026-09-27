@@ -11,6 +11,9 @@
 #include <vector>
 
 #include "Engine/Animation/AnimationStateMachine.h"
+#include "Engine/Combat/CombatResolver.h"
+#include "Engine/Combat/CombatStats.h"
+#include "Engine/Combat/CombatSystem.h"
 #include "Client/World/MonsterCharacter.h"
 #include "Engine/Core/Engine.h"
 #include "Engine/Debug/Logger.h"
@@ -72,6 +75,7 @@ void GameScene::OnLoad() {
     }
     m_player->SetPosition({legend::map::TileToWorldCenter(spawnTileX, ts),
                            legend::map::TileToWorldCenter(spawnTileY, ts)});
+    m_playerSpawnPosition = m_player->GetPosition(); // Debug 复活回此点
 
     // ---- 阶段4：世界角色（NPC + Monster + AI） ----
     if (!m_worldActors.Initialize(resources)) {
@@ -103,6 +107,12 @@ void GameScene::OnLoad() {
     RunMonsterConfigCheck();
     RunMonsterTemplateFailureCheck();
     RunAnimationRuntimeCheck();
+    RunCombatStatsCheck();
+    RunCombatResolverCheck();
+    RunAttackCooldownCheck();
+    RunAttackRangeCheck();
+    RunAnimationEventCheck();
+    RunDeathCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -245,9 +255,23 @@ void GameScene::Update(float deltaTime) {
         m_aiDebug = !m_aiDebug;
         LOG_INFO(m_aiDebug ? "AI debug: enabled (F3)" : "AI debug: disabled (F3)");
     }
+    if (input.IsKeyPressed(SDL_SCANCODE_F4)) {
+        m_combatDebug = !m_combatDebug;
+        LOG_INFO(m_combatDebug ? "Combat debug: enabled (F4)" : "Combat debug: disabled (F4)");
+    }
 
-    // 输入 -> 控制器 -> 角色 -> 地图碰撞 -> 位置
-    if (m_autoDirCycle) {
+    // ---- 玩家战斗：目标选择 / 攻击请求 / 状态推进（先于移动，MovementLock 生效） ----
+    int combatVpW = 1280;
+    int combatVpH = 720;
+    engine.GetRenderer().QueryViewportSize(combatVpW, combatVpH);
+    m_playerCombat.Update(*m_player, m_worldActors.GetRegistry(), m_worldActors.GetCombatSystem(),
+                          input, static_cast<float>(combatVpW), static_cast<float>(combatVpH),
+                          deltaTime);
+
+    // ---- Movement Lock：Attacking / HitReact / Dead 禁止移动 ----
+    if (m_player->GetActionState() != legend::entity::CharacterActionState::Normal) {
+        // 攻击/受击/死亡动画期间不执行移动（保持站立，动画由 UpdateAnimation 驱动）
+    } else if (m_autoDirCycle) {
         UpdateDirectionCycle();
         m_playerController.Update(input, m_characterController, *m_player, *m_map, deltaTime);
     } else if (m_autoYsort) {
@@ -277,6 +301,14 @@ void GameScene::Update(float deltaTime) {
     if (m_aiTest) {
         UpdateAITest(deltaTime);
     }
+
+    // 阶段5：LEGEND_AUTO_COMBAT_TEST=1 战斗验收时间线
+    if (m_autoCombatTest) {
+        UpdateCombatTest(deltaTime);
+    }
+
+    // Player 死亡 -> Debug 复活（回出生点满血）
+    UpdatePlayerRespawn(deltaTime);
 
     UpdateCamera(deltaTime);
     LogMapStats(deltaTime);
@@ -337,6 +369,13 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     if (m_aiDebug) {
         DrawAIDebugOverlay(m_mapRenderer.GetBatch());
     }
+    if (m_combatDebug || m_playerCombat.GetTarget().IsEmpty() == false) {
+        DrawTargetRing(m_mapRenderer.GetBatch()); // 选中目标红圈（死亡自动消失）
+    }
+    DrawMonsterHealthBars(m_mapRenderer.GetBatch()); // 受伤/选中/F4 怪物头顶血条
+    if (m_combatDebug) {
+        DrawCombatDebugOverlay(m_mapRenderer.GetBatch());
+    }
     m_mapRenderer.EndFrame();
 }
 
@@ -375,6 +414,12 @@ void GameScene::ApplyAutoTestHooks() {
         m_aiTest = true;
         LOG_INFO("Auto-test: AI acceptance timeline enabled (LEGEND_AUTO_AI_TEST=1), "
                  "stages: Aggro -> Leash -> Wander.");
+    }
+    const char* combatTest = SDL_getenv("LEGEND_AUTO_COMBAT_TEST");
+    if (combatTest != nullptr && combatTest[0] == '1') {
+        m_autoCombatTest = true;
+        LOG_INFO("Auto-test: combat acceptance timeline enabled (LEGEND_AUTO_COMBAT_TEST=1), "
+                 "stages: Select -> Attack -> Death -> Respawn -> PlayerRespawn.");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {
@@ -469,7 +514,7 @@ void GameScene::RunAnimationCheck() {
             }
         }
     }
-    check("16 direction clips present", allPresent);
+    check("40 combat clips present", allPresent);
 
     if (m_playerClips->empty() || !m_player) {
         LOG_INFO("[AnimationCheck] completed, failures = " + std::to_string(failures));
@@ -578,9 +623,9 @@ void GameScene::RunSpriteSheetCheck() {
         LOG_ERROR("[SpriteSheetCheck] sprite sheet invalid.");
         return;
     }
-    check("Columns: 6", sheet->GetColumns() == 6);
+    check("Columns: 15", sheet->GetColumns() == 15);
     check("Rows: 8", sheet->GetRows() == 8);
-    check("Frames: 48", sheet->GetFrameCount() == 48);
+    check("Frames: 120", sheet->GetFrameCount() == 120);
     LOG_INFO("[SpriteSheetCheck] completed, failures = " + std::to_string(failures));
 }
 
@@ -609,7 +654,7 @@ void GameScene::RunAnimationDirectionFrameCheck() {
                 continue;
             }
             for (const auto& frame : it->second.frames) {
-                const int frameRow = frame.frameIndex / 6;
+                const int frameRow = frame.frameIndex / 15;
                 rowMask |= 1 << frameRow;
                 if (frameRow != row) {
                     check(std::string(prefix) + kDirNames[row] + " frame " +
@@ -653,7 +698,7 @@ void GameScene::RunCharacterRenderCheck() {
     // 整张图集 576x768，但角色 Quad 世界尺寸必须恒等于 visualWidth x visualHeight（96x96）
     check("quad width == visualWidth (96)", std::fabs(quadW - visual.width) < 0.01f);
     check("quad height == visualHeight (96)", std::fabs(quadH - visual.height) < 0.01f);
-    check("atlas texture is 576x768", std::fabs(texW - 576.0f) < 0.01f && std::fabs(texH - 768.0f) < 0.01f);
+    check("atlas texture is 1440x768", std::fabs(texW - 1440.0f) < 0.01f && std::fabs(texH - 768.0f) < 0.01f);
     check("draw size != atlas size", quadW < texW && quadH < texH);
 
     LOG_INFO("[CharacterRenderCheck] completed, failures = " + std::to_string(failures));
@@ -971,7 +1016,12 @@ void GameScene::LogMapStats(double deltaTime) {
         " | Actors: " + std::to_string(m_worldActors.GetRegistry().Count()) +
         " | Visible: " + std::to_string(m_lastVisibleActors) +
         " | AI: " + std::to_string(m_worldActors.GetMonsterCount()) +
-        " | Scans: " + std::to_string(m_worldActors.GetTotalScanCount());
+        " | Scans: " + std::to_string(m_worldActors.GetTotalScanCount()) +
+        // 阶段5：玩家血条（Debug 阶段窗口标题显示）
+        (m_player && m_player->IsCombatEnabled()
+             ? " | HP: " + std::to_string(static_cast<int>(m_player->GetCombatStats().hp)) +
+                   "/" + std::to_string(static_cast<int>(m_player->GetCombatStats().maxHp))
+             : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame
     if (m_characterDebug && m_player) {
@@ -1617,4 +1667,611 @@ void GameScene::RunMonsterTemplateFailureCheck() {
     check("valid templates still 3", m_worldActors.GetSpawner().TemplateCount() == 3);
 
     LOG_INFO("[MonsterTemplateFailureCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== 阶段5：Combat Core 自检与验收 ====================
+
+void GameScene::RunCombatStatsCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[CombatStatsCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    legend::combat::CombatStats stats;
+    stats.maxHp = 100.0f;
+    stats.hp = 100.0f;
+    stats.attack = 10.0f;
+    stats.defense = 50.0f; // Defense > Attack：FinalDamage 仍至少 1
+    stats.attackRange = 80.0f;
+    stats.attackInterval = 1.0f;
+    check("stats valid", stats.IsValid());
+
+    // 最低 1 伤害由 CombatResolver 保证（5-50=-45 -> 1），TakeDamage 收到最终伤害
+    const float resolvedMin = legend::combat::CombatResolver::ComputeFinalDamage(5.0f, 50.0f);
+    const float d1 = stats.TakeDamage(resolvedMin);
+    check("minimum 1 damage when defense dominates", d1 == 1.0f && stats.hp == 99.0f);
+
+    stats.hp = 3.0f;
+    const float d2 = stats.TakeDamage(10.0f); // HP 下限 0
+    check("hp clamped to 0", d2 == 10.0f && stats.hp == 0.0f);
+    check("dead when hp <= 0", !stats.IsAlive());
+    const float d3 = stats.TakeDamage(10.0f); // 尸体不可再次受击
+    check("dead takes no damage", d3 == 0.0f);
+
+    stats.hp = 50.0f;
+    stats.Heal(1000.0f); // Heal 不超过 MaxHP
+    check("heal clamped to maxHp", stats.hp == stats.maxHp);
+    stats.SetHp(-5.0f);
+    check("setHp clamped to 0", stats.hp == 0.0f);
+    stats.SetHp(stats.maxHp);
+    check("alive again", stats.IsAlive());
+
+    LOG_INFO("[CombatStatsCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunCombatResolverCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, float actual, float expected) {
+        const bool pass = std::fabs(actual - expected) < 0.001f;
+        LOG_INFO("[CombatResolverCheck] " + name + " expected " + std::to_string(expected) +
+                 ", got " + std::to_string(actual) + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    // Attack 80 / Defense 20 => 60
+    check("80-20", legend::combat::CombatResolver::ComputeFinalDamage(80.0f, 20.0f), 60.0f);
+    // Attack 10 / Defense 100 => 1（最低伤害）
+    check("10-100", legend::combat::CombatResolver::ComputeFinalDamage(10.0f, 100.0f), 1.0f);
+    // Attack 0 / Defense 0 => 1
+    check("0-0", legend::combat::CombatResolver::ComputeFinalDamage(0.0f, 0.0f), 1.0f);
+    LOG_INFO("[CombatResolverCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunAttackCooldownCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[AttackCooldownCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    if (!m_player) {
+        check("player available", false);
+        LOG_INFO("[AttackCooldownCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    // 找最近 alive Slime 并传送到攻击距离内（静态验收用传送钩子）
+    const auto monsters = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    legend::entity::Character* target = nullptr;
+    for (legend::entity::Character* monster : monsters) {
+        if (monster != nullptr && monster->IsCombatAlive() &&
+            monster->GetName() == "Slime") {
+            target = monster;
+            break;
+        }
+    }
+    if (target == nullptr) {
+        check("slime target available", false);
+        LOG_INFO("[AttackCooldownCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    // 保存现场（测试后还原）
+    const auto playerPos = m_player->GetPosition();
+    const auto targetPos = target->GetPosition();
+    const auto playerState = m_player->GetActionState();
+    const float savedCooldown = m_player->GetAttackCooldownRemaining();
+
+    target->SetPosition(playerPos + legend::math::Vector2(60.0f, 0.0f)); // 60 <= attackRange 90
+    m_player->SetAttackCooldownRemaining(0.0f);
+    m_player->ReturnToNormal();
+    m_playerCombat.GetTarget().SetTarget(target->GetId());
+
+    const bool first = m_playerCombat.RequestAttack(*m_player, m_worldActors.GetRegistry(),
+                                                    m_worldActors.GetCombatSystem());
+    check("first attack accepted", first);
+    check("cooldown set to attackInterval",
+          std::fabs(m_player->GetAttackCooldownRemaining() -
+                    m_player->GetCombatStats().attackInterval) < 0.001f);
+    // 攻击动画结束状态还原后，冷却期内再请求必须 Rejected
+    m_player->ReturnToNormal();
+    const bool second = m_playerCombat.RequestAttack(*m_player, m_worldActors.GetRegistry(),
+                                                     m_worldActors.GetCombatSystem());
+    check("immediate re-request rejected (cooldown)", !second);
+    // 等待 attackInterval 后 Accepted
+    m_player->TickCooldown(m_player->GetCombatStats().attackInterval + 0.01f);
+    m_player->GetAnimationPlayer().Stop();
+    const bool third = m_playerCombat.RequestAttack(*m_player, m_worldActors.GetRegistry(),
+                                                    m_worldActors.GetCombatSystem());
+    check("request accepted after attackInterval", third);
+
+    // 还原现场
+    m_player->SetPosition(playerPos);
+    target->SetPosition(targetPos);
+    m_player->SetActionState(playerState);
+    m_player->SetAttackCooldownRemaining(savedCooldown);
+    m_player->GetAnimationPlayer().Stop();
+    m_playerCombat.GetTarget().ClearTarget();
+    LOG_INFO("[AttackCooldownCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunAttackRangeCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[AttackRangeCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    if (!m_player) {
+        check("player available", false);
+        LOG_INFO("[AttackRangeCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const auto monsters = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    legend::entity::Character* target = nullptr;
+    for (legend::entity::Character* monster : monsters) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            target = monster; // 用 Boar（区别于 CooldownCheck 的 Slime）
+            break;
+        }
+    }
+    if (target == nullptr) {
+        check("boar target available", false);
+        LOG_INFO("[AttackRangeCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const auto playerPos = m_player->GetPosition();
+    const auto targetPos = target->GetPosition();
+    const auto playerState = m_player->GetActionState();
+    const float savedCooldown = m_player->GetAttackCooldownRemaining();
+
+    // 超范围：不能开始攻击
+    target->SetPosition(playerPos +
+                        legend::math::Vector2(m_player->GetCombatStats().attackRange + 200.0f, 0.0f));
+    m_player->SetAttackCooldownRemaining(0.0f);
+    m_player->ReturnToNormal();
+    m_playerCombat.GetTarget().SetTarget(target->GetId());
+    const bool outOfRange = m_playerCombat.RequestAttack(*m_player, m_worldActors.GetRegistry(),
+                                                         m_worldActors.GetCombatSystem());
+    check("out of range rejected", !outOfRange);
+    // 进入范围：允许攻击
+    target->SetPosition(playerPos + legend::math::Vector2(50.0f, 0.0f));
+    const bool inRange = m_playerCombat.RequestAttack(*m_player, m_worldActors.GetRegistry(),
+                                                      m_worldActors.GetCombatSystem());
+    check("in range accepted", inRange);
+
+    m_player->SetPosition(playerPos);
+    target->SetPosition(targetPos);
+    m_player->SetActionState(playerState);
+    m_player->SetAttackCooldownRemaining(savedCooldown);
+    m_player->GetAnimationPlayer().Stop();
+    m_playerCombat.GetTarget().ClearTarget();
+    LOG_INFO("[AttackRangeCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunAnimationEventCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[AnimationEventCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    if (!m_player) {
+        check("player available", false);
+        LOG_INFO("[AnimationEventCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    auto& anim = m_player->GetAnimationPlayer();
+    // attack_east：NonLoop，仅在 event 帧产生一次 attack_hit
+    m_player->SetDirection(legend::entity::Direction8::East);
+    anim.Play("attack_east");
+    check("attack clip non-loop", anim.GetCurrentFrameCount() == 4 && !anim.IsFinished());
+
+    int hitEvents = 0;
+    float advanced = 0.0f;
+    while (advanced < 2.0f) {
+        anim.Update(0.05f);
+        advanced += 0.05f;
+        for (const auto& eventName : anim.ConsumeEvents()) {
+            if (eventName == "attack_hit") {
+                ++hitEvents;
+            }
+        }
+    }
+    check("attack_hit fired exactly once", hitEvents == 1);
+    check("non-loop finished after playthrough", anim.IsFinished());
+
+    // Update(0) 不重复触发
+    anim.Play("attack_east");
+    anim.Update(0.0f);
+    anim.Update(0.0f);
+    check("update(0) does not fire events", anim.ConsumeEvents().empty());
+
+    m_player->SetDirection(legend::entity::Direction8::South);
+    anim.Stop();
+    LOG_INFO("[AnimationEventCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunDeathCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[DeathCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    const auto monsters = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    legend::entity::Character* target = nullptr;
+    for (legend::entity::Character* monster : monsters) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Slime") {
+            target = monster;
+            break;
+        }
+    }
+    if (target == nullptr || !m_player) {
+        check("target available", false);
+        LOG_INFO("[DeathCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const auto savedPos = target->GetPosition();
+    const auto savedHp = target->GetCombatStats().hp;
+
+    // HP 归 0 -> Dead：不可成为有效 CombatTarget、不可再次 TakeDamage
+    target->GetCombatStats().SetHp(0.0f);
+    target->EnterDead();
+    check("dead state entered", target->GetActionState() == legend::entity::CharacterActionState::Dead);
+    check("dead is not combat alive", !target->IsCombatAlive());
+    legend::combat::CombatTarget deadTarget;
+    deadTarget.SetTarget(target->GetId());
+    check("dead cannot be combat target", !deadTarget.IsValid(m_worldActors.GetRegistry()));
+    const float noDamage = target->GetCombatStats().TakeDamage(10.0f);
+    check("dead takes no damage", noDamage == 0.0f);
+
+    // 还原（真正的死亡由运行时时间线验证：DeathCheck 静态部分只验证语义）
+    target->GetCombatStats().SetHp(savedHp);
+    target->ReturnToNormal();
+    target->SetPosition(savedPos);
+    LOG_INFO("[DeathCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::UpdatePlayerRespawn(float deltaTime) {
+    if (!m_player) {
+        return;
+    }
+    if (m_player->GetActionState() != legend::entity::CharacterActionState::Dead) {
+        m_playerRespawnTimer = 0.0f;
+        return;
+    }
+    // 死亡动画播完后开始 2 秒倒计时
+    if (m_player->GetAnimationPlayer().IsFinished()) {
+        m_playerRespawnTimer += deltaTime;
+        if (m_playerRespawnTimer >= 2.0f) {
+            // Debug 复活：回出生点、满血、清目标、状态 Normal、方向 South
+            m_player->SetPosition(m_playerSpawnPosition);
+            m_player->GetCombatStats().SetHp(m_player->GetCombatStats().maxHp);
+            m_playerCombat.GetTarget().ClearTarget();
+            m_player->ReturnToNormal();
+            m_player->SetDirection(legend::entity::Direction8::South);
+            m_player->GetAnimationPlayer().Stop();
+            m_playerRespawnTimer = 0.0f;
+            LOG_INFO("[PlayerRespawn] player respawned at spawn point with full HP.");
+        }
+    }
+}
+
+void GameScene::DrawTargetRing(legend::render::SpriteBatch& batch) {
+    if (!m_player || !m_whiteTexture) {
+        return;
+    }
+    auto* target = m_playerCombat.GetTarget().Resolve(m_worldActors.GetRegistry());
+    if (target == nullptr) {
+        return; // 死亡/失效后红圈自动消失
+    }
+    DrawCircle(batch, target->GetPosition(), 24.0f,
+               legend::math::Color(1.0f, 0.25f, 0.25f, 0.9f));
+}
+
+void GameScene::DrawMonsterHealthBars(legend::render::SpriteBatch& batch) {
+    if (!m_whiteTexture) {
+        return;
+    }
+    const legend::entity::EntityId selectedId = m_playerCombat.GetTarget().GetTargetId();
+    for (const legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster == nullptr || !monster->IsVisible()) {
+            continue;
+        }
+        const bool damaged = monster->GetCombatStats().hp < monster->GetCombatStats().maxHp;
+        const bool selected = monster->GetId() == selectedId;
+        if (!damaged && !selected && !m_combatDebug) {
+            continue; // 仅受伤 / 选中 / F4 显示
+        }
+        const auto& visual = monster->GetVisual();
+        const legend::math::Vector2& feet = monster->GetPosition();
+        const float barW = 60.0f;
+        const float barH = 6.0f;
+        const legend::math::Vector2 center(feet.x, feet.y - visual.height * visual.pivot.y - 12.0f);
+        // 黑底
+        batch.DrawQuad(*m_whiteTexture, center, {barW / 64.0f, barH / 64.0f}, 0.0f,
+                       legend::math::Color(0.0f, 0.0f, 0.0f, 0.7f));
+        // 红色 HP
+        const float hpRatio = monster->GetCombatStats().GetHpPercent();
+        if (hpRatio > 0.0f) {
+            const float fillW = barW * hpRatio;
+            const legend::math::Vector2 fillCenter(center.x - (barW - fillW) * 0.5f, center.y);
+            batch.DrawQuad(*m_whiteTexture, fillCenter, {fillW / 64.0f, barH / 64.0f}, 0.0f,
+                           legend::math::Color(0.9f, 0.15f, 0.15f, 0.95f));
+        }
+    }
+}
+
+void GameScene::DrawCombatDebugOverlay(legend::render::SpriteBatch& batch) {
+    if (!m_player || !m_whiteTexture) {
+        return;
+    }
+    // Player AttackRange 圈
+    const float range = m_player->GetCombatStats().attackRange;
+    DrawCircle(batch, m_player->GetPosition(), range,
+               legend::math::Color(0.4f, 0.8f, 1.0f, 0.5f));
+    // Target 连线
+    auto* target = m_playerCombat.GetTarget().Resolve(m_worldActors.GetRegistry());
+    if (target != nullptr) {
+        DrawLine(batch, m_player->GetPosition(), target->GetPosition(), 3.0f,
+                 legend::math::Color(1.0f, 0.8f, 0.2f, 0.9f));
+    }
+    // 最近 3 只怪：AttackRange 圈 + 状态
+    const legend::math::Vector2 playerPos = m_player->GetPosition();
+    auto monsters = m_worldActors.GetMonsters();
+    std::sort(monsters.begin(), monsters.end(),
+              [&playerPos](const legend::world::MonsterCharacter* a,
+                           const legend::world::MonsterCharacter* b) {
+                  const legend::math::Vector2 da = a->GetPosition() - playerPos;
+                  const legend::math::Vector2 db = b->GetPosition() - playerPos;
+                  return da.LengthSq() < db.LengthSq();
+              });
+    const int count = static_cast<int>(std::min<size_t>(monsters.size(), 3));
+    for (int i = 0; i < count; ++i) {
+        const legend::world::MonsterCharacter* monster = monsters[i];
+        DrawCircle(batch, monster->GetPosition(), monster->GetCombatStats().attackRange,
+                   legend::math::Color(1.0f, 0.5f, 0.3f, 0.45f));
+        const auto* controller = m_worldActors.GetAIController(monster->GetId());
+        std::string stateName = legend::world::MonsterAIStateName(monster->GetAIState());
+        if (monster->GetActionState() == legend::entity::CharacterActionState::Attacking) {
+            stateName += "+ATK";
+        } else if (monster->GetActionState() == legend::entity::CharacterActionState::HitReact) {
+            stateName += "+HIT";
+        } else if (monster->GetActionState() == legend::entity::CharacterActionState::Dead) {
+            stateName += "+DEAD";
+        }
+        LOG_INFO("[CombatDebug] " + monster->GetName() + "#" +
+                 std::to_string(monster->GetId()) + " HP " +
+                 std::to_string(monster->GetCombatStats().hp) + "/" +
+                 std::to_string(monster->GetCombatStats().maxHp) + " state=" + stateName +
+                 " cd=" + std::to_string(monster->GetAttackCooldownRemaining()));
+    }
+}
+
+void GameScene::UpdateCombatTest(float deltaTime) {
+    if (m_combatTestStage >= 7) {
+        return;
+    }
+    m_combatTestElapsed += deltaTime;
+    m_combatTestStageElapsed += deltaTime;
+    auto monsters = m_worldActors.GetMonsters();
+    auto nextStage = [this]() {
+        ++m_combatTestStage;
+        m_combatTestStageEntered = false;
+        m_combatTestStageElapsed = 0.0;
+    };
+    auto fail = [this](const std::string& check, const std::string& reason) {
+        ++m_combatTestFailures;
+        LOG_INFO("[CombatTest] " + check + " FAILED: " + reason);
+    };
+    if (!m_player) {
+        LOG_ERROR("[CombatTest] player missing, abort.");
+        m_combatTestStage = 7;
+        return;
+    }
+
+    switch (m_combatTestStage) {
+    case 0: { // 选最近 Slime 并传送到攻击距离内（固定 AI seed 已由 env 保证）
+        if (!m_combatTestStageEntered) {
+            m_combatTestStageEntered = true;
+            legend::entity::Character* slime = nullptr;
+            float bestSq = 1e9f;
+            for (legend::world::MonsterCharacter* monster : monsters) {
+                if (monster == nullptr || !monster->IsCombatAlive() ||
+                    monster->GetMonsterTemplateId() != "slime") {
+                    continue;
+                }
+                const float distSq = (monster->GetPosition() - m_player->GetPosition()).LengthSq();
+                if (distSq < bestSq) {
+                    bestSq = distSq;
+                    slime = monster;
+                }
+            }
+            if (slime == nullptr) {
+                fail("[CombatTargetCheck]", "no alive slime found.");
+                nextStage();
+                break;
+            }
+            m_combatTestSlimeId = slime->GetId();
+            m_player->SetPosition(slime->GetPosition() + legend::math::Vector2(-60.0f, 0.0f));
+            m_playerCombat.SelectNearestMonster(*m_player, m_worldActors.GetRegistry());
+            LOG_INFO("[CombatTest] stage 0: selected Slime#" +
+                     std::to_string(m_combatTestSlimeId) + ", player teleported to attack range.");
+            m_combatTestLastSlimeHp = slime->GetCombatStats().hp;
+            nextStage();
+        }
+        break;
+    }
+    case 1: { // 连续攻击：Space 模拟（每帧 RequestAttack，冷却控制节奏）
+        if (!m_combatTestStageEntered) {
+            m_combatTestStageEntered = true;
+            LOG_INFO("[CombatTest] stage 1: continuous attack, watching HP drop + counter.");
+        }
+        auto* slime = static_cast<legend::world::MonsterCharacter*>(
+            m_worldActors.GetRegistry().Get(m_combatTestSlimeId));
+        if (slime == nullptr) {
+            fail("[CombatAttackCheck]", "slime missing (unexpected despawn).");
+            nextStage();
+            break;
+        }
+        // 模拟按住 Space：Normal 且有目标且在范围内就请求攻击
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Normal) {
+            m_playerCombat.RequestAttack(*m_player, m_worldActors.GetRegistry(),
+                                         m_worldActors.GetCombatSystem());
+        }
+        // Slime HP 逐次下降验证
+        const float currentHp = slime->GetCombatStats().hp;
+        if (currentHp < m_combatTestLastSlimeHp) {
+            m_combatTestSawDamage = true;
+            m_combatTestLastSlimeHp = currentHp;
+        }
+        // Player HP 下降（Slime 反击）验证
+        if (m_player->GetCombatStats().hp < m_player->GetCombatStats().maxHp) {
+            if (!m_combatTestSawCounter) {
+                m_combatTestSawCounter = true;
+                LOG_INFO("[CombatTest] slime counterattack confirmed, player HP " +
+                         std::to_string(m_player->GetCombatStats().hp) + "/" +
+                         std::to_string(m_player->GetCombatStats().maxHp));
+            }
+        }
+        if (slime->GetActionState() == legend::entity::CharacterActionState::Dead) {
+            if (!m_combatTestSawDamage) {
+                fail("[CombatAttackCheck]", "slime died without observed HP drop.");
+            } else {
+                LOG_INFO("[CombatTest] slime died after " +
+                         std::to_string(m_combatTestStageElapsed) + "s of attacks -> PASS");
+                LOG_INFO("[DeathCheck] slime entered Dead after player attacks -> PASS");
+            }
+            nextStage();
+        } else if (m_combatTestStageElapsed > 60.0) {
+            fail("[CombatAttackCheck]", "slime not dead within 60s.");
+            nextStage();
+        }
+        break;
+    }
+    case 2: { // 死亡动画 -> Corpse 1.5s -> Despawn：Registry 移除
+        if (!m_combatTestStageEntered) {
+            m_combatTestStageEntered = true;
+            LOG_INFO("[CombatTest] stage 2: waiting despawn (corpse delay 1.5s).");
+        }
+        if (m_worldActors.GetRegistry().Get(m_combatTestSlimeId) == nullptr) {
+            const int aliveCount = m_worldActors.GetAliveMonsterCount();
+            LOG_INFO("[DeathCheck] slime removed from registry after death animation -> PASS");
+            LOG_INFO("[CombatTest] despawn confirmed, alive monsters: " +
+                     std::to_string(aliveCount) + " (was 17) -> PASS");
+            nextStage();
+        } else if (m_combatTestStageElapsed > 15.0) {
+            fail("[DeathCheck]", "slime not despawned within 15s.");
+            nextStage();
+        }
+        break;
+    }
+    case 3: { // Respawn：respawnSeconds(5) 后数量恢复，新 EntityId
+        if (!m_combatTestStageEntered) {
+            m_combatTestStageEntered = true;
+            m_combatTestLastSlimeHp = -1.0f; // 日志哨兵：首次发现新 slime 才打印
+            LOG_INFO("[CombatTest] stage 3: waiting respawn (5s).");
+        }
+        // 检查是否出现新的 slime（id != 旧 id）
+        bool newSlimeFound = false;
+        for (legend::world::MonsterCharacter* monster : monsters) {
+            if (monster != nullptr && monster->IsCombatAlive() &&
+                monster->GetMonsterTemplateId() == "slime" &&
+                monster->GetId() != m_combatTestSlimeId) {
+                newSlimeFound = true;
+                if (m_combatTestLastSlimeHp < 0.0f) { // 仅首次发现打印，避免每帧刷屏
+                    m_combatTestLastSlimeHp = 0.0f;
+                    LOG_INFO("[RespawnCheck] new slime entity #" +
+                             std::to_string(monster->GetId()) + " (old #" +
+                             std::to_string(m_combatTestSlimeId) + ") -> PASS");
+                }
+                break;
+            }
+        }
+        const int slimeAreaAlive = m_worldActors.GetAreaAliveCount(1);
+        if (newSlimeFound && slimeAreaAlive == 8) {
+            LOG_INFO("[RespawnCheck] area count restored to 8 -> PASS");
+            nextStage();
+        } else if (m_combatTestStageElapsed > 20.0) {
+            fail("[RespawnCheck]", "respawn not confirmed within 20s (area alive=" +
+                                       std::to_string(slimeAreaAlive) + ").");
+            nextStage();
+        }
+        break;
+    }
+    case 4: { // Player 死亡：SetHp(1) + ApplyDamage 致死事件（Debug 驱动，验证完整链路）
+        if (!m_combatTestStageEntered) {
+            m_combatTestStageEntered = true;
+            m_player->GetCombatStats().SetHp(1.0f);
+            legend::combat::DamageEvent lethal;
+            lethal.sourceId = m_combatTestSlimeId;
+            lethal.targetId = m_player->GetId();
+            lethal.rawDamage = 10.0f;
+            lethal.finalDamage = 10.0f;
+            lethal.sequence = 99999;
+            m_worldActors.GetCombatSystem().ApplyDamage(lethal);
+            LOG_INFO("[CombatTest] stage 4: lethal damage applied to player.");
+        }
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Dead) {
+            LOG_INFO("[PlayerRespawnCheck] player entered Dead -> PASS");
+            // 禁止移动验证：传送期望位置不变
+            const auto before = m_player->GetPosition();
+            m_playerController.Update(legend::Engine::Get().GetInput(), m_characterController,
+                                      *m_player, *m_map, deltaTime);
+            if ((m_player->GetPosition() - before).LengthSq() < 0.01f) {
+                LOG_INFO("[PlayerRespawnCheck] dead player cannot move -> PASS");
+            } else {
+                fail("[PlayerRespawnCheck]", "dead player moved.");
+            }
+            nextStage();
+        } else if (m_combatTestStageElapsed > 5.0) {
+            fail("[PlayerRespawnCheck]", "player not dead after lethal damage.");
+            nextStage();
+        }
+        break;
+    }
+    case 5: { // Player 复活：2 秒后回出生点满血 Normal South
+        if (!m_combatTestStageEntered) {
+            m_combatTestStageEntered = true;
+            LOG_INFO("[CombatTest] stage 5: waiting player respawn (2s after death anim).");
+        }
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Normal &&
+            m_player->GetCombatStats().hp == m_player->GetCombatStats().maxHp) {
+            const bool atSpawn =
+                (m_player->GetPosition() - m_playerSpawnPosition).LengthSq() < 100.0f;
+            const bool facingSouth =
+                m_player->GetDirection() == legend::entity::Direction8::South;
+            if (atSpawn && facingSouth) {
+                LOG_INFO("[PlayerRespawnCheck] player respawned at spawn, full HP, Normal, "
+                         "facing South -> PASS");
+                nextStage();
+            } else if (m_combatTestStageElapsed > 15.0) {
+                fail("[PlayerRespawnCheck]", "respawn state wrong.");
+                nextStage();
+            }
+        } else if (m_combatTestStageElapsed > 15.0) {
+            fail("[PlayerRespawnCheck]", "player not respawned within 15s.");
+            nextStage();
+        }
+        break;
+    }
+    case 6: { // 汇总
+        if (!m_combatTestSummaryDone) {
+            m_combatTestSummaryDone = true;
+            LOG_INFO("[CombatTest] completed, elapsed " + std::to_string(m_combatTestElapsed) +
+                     "s, failures = " + std::to_string(m_combatTestFailures));
+        }
+        nextStage();
+        break;
+    }
+    default:
+        break;
+    }
 }
