@@ -26,6 +26,8 @@ struct CharacterDefinition {
     entity::CharacterFootprint footprint;
     math::Vector2 pivot{0.5f, 0.85f};
     float moveSpeed = 200.0f;
+    // character.json "direction" 字段：默认朝向（south 等 8 方向小写名），NPC 用作固定朝向
+    std::string defaultDirection = "south";
 };
 
 // character.json -> CharacterDefinition（失败返回 false + 明确日志，不崩溃）

@@ -7,10 +7,12 @@ set(LEGEND_ENGINE_SOURCES
     Core/Timer.cpp
     Core/Window.cpp
     Debug/Logger.cpp
+    Entity/ActorRegistry.cpp
     Entity/Character.cpp
     Entity/CharacterController.cpp
     Entity/Direction8.cpp
     Entity/Entity.cpp
+    Entity/TargetHandle.cpp
     Input/InputManager.cpp
     Animation/AnimationPlayer.cpp
     Animation/AnimationStateMachine.cpp

@@ -1,0 +1,15 @@
+{
+    "version":  1,
+    "id":  "slime",
+    "name":  "Slime",
+    "character":  "Monsters/Slime/character.json",
+    "ai":  {
+               "aggroRange":  260,
+               "leashRange":  520,
+               "wanderRadius":  160,
+               "wanderIntervalMin":  2,
+               "wanderIntervalMax":  5,
+               "stopDistance":  55,
+               "resumeDistance":  75
+           }
+}

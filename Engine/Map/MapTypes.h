@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 namespace legend::map {
 
@@ -16,6 +17,28 @@ enum class TileId : uint16_t {
 
 constexpr int kMapFormatVersion = 1;
 constexpr int kChunkSizeTiles = 16; // 每 Chunk 16x16 Tile
+
+// 世界角色出生数据（map.json 顶层 monsterSpawns / npcSpawns，阶段4新增；
+// 旧地图无此字段时保持为空数组，不报错）
+
+// 怪物出生区域：在 center 附近 radius 范围内找合法点生成 count 只指定模板怪物
+struct MapSpawnArea {
+    uint32_t id = 0;
+    std::string monsterId; // monster.json 模板 id，如 "slime"
+    float x = 0.0f;        // center（世界坐标）
+    float y = 0.0f;
+    int count = 0;   // 生成数量
+    float radius = 0.0f; // 随机分布半径
+};
+
+// NPC 出生点：静态站立角色，direction 为固定朝向
+struct MapNPCSpawn {
+    std::string name;         // 显示名，如 "Guard"
+    std::string characterPath; // character.json 相对 Assets 根路径
+    float x = 0.0f;
+    float y = 0.0f;
+    std::string direction = "south";
+};
 
 // 碰撞来源 bitmask（GetCollisionFlags 返回值）
 enum CollisionSourceFlags : uint8_t {

@@ -1,0 +1,15 @@
+{
+    "version":  1,
+    "id":  "wolf",
+    "name":  "Wolf",
+    "character":  "Monsters/Wolf/character.json",
+    "ai":  {
+               "aggroRange":  340,
+               "leashRange":  700,
+               "wanderRadius":  200,
+               "wanderIntervalMin":  2.5,
+               "wanderIntervalMax":  6,
+               "stopDistance":  60,
+               "resumeDistance":  85
+           }
+}

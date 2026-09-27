@@ -184,7 +184,20 @@ for ($y = 0; $y -lt $H; $y++) {
 [void]$sb.Append(($occluders | ForEach-Object { $_ }) -join ',')
 [void]$sb.Append(']}')
 
-[void]$sb.Append(']}')
+# (187 old double-close removed: layers ] + spawns + root } handled below)
+
+# close layers array, then add spawn data before root close
+[void]$sb.Append(']')# Monster spawn areas: Slime x8, Wolf x5, Boar x4 (17 total) + 3 NPCs near central plaza
+[void]$sb.Append(',"monsterSpawns":[')
+[void]$sb.Append('{"id":1,"monster":"slime","x":2400,"y":2600,"count":8,"radius":240},')
+[void]$sb.Append('{"id":2,"monster":"wolf","x":4400,"y":3400,"count":5,"radius":260},')
+[void]$sb.Append('{"id":3,"monster":"boar","x":1600,"y":4800,"count":4,"radius":220}]')
+[void]$sb.Append(',"npcSpawns":[')
+[void]$sb.Append('{"name":"Guard","character":"Characters/TestNPC/character.json","x":3232,"y":3104,"direction":"south"},')
+[void]$sb.Append('{"name":"Merchant","character":"Characters/TestNPC/character.json","x":3392,"y":3296,"direction":"west"},')
+[void]$sb.Append('{"name":"Villager","character":"Characters/TestNPC/character.json","x":3072,"y":3360,"direction":"east"}]')
+
+[void]$sb.Append('}')
 
 [System.IO.File]::WriteAllText($outFile, $sb.ToString())
 $size = (Get-Item $outFile).Length

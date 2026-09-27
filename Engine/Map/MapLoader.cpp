@@ -274,6 +274,52 @@ std::shared_ptr<Map> MapLoader::Load(const std::string& filePath) {
     // 不写入也不清洗 Manual 数据；这里仅重建 Object 碰撞引用计数。
     map->RebuildObjectBlockCounts();
 
+    // ---- 世界角色出生数据（可选字段；缺失时不报错，保持为空） ----
+    if (root.contains("monsterSpawns") && root["monsterSpawns"].is_array()) {
+        for (const auto& spawnJson : root["monsterSpawns"]) {
+            if (!spawnJson.is_object()) {
+                LOG_WARN("MapLoader: invalid monsterSpawns entry skipped.");
+                continue;
+            }
+            MapSpawnArea area;
+            area.id = spawnJson.value("id", 0u);
+            area.monsterId = spawnJson.value("monster", std::string());
+            area.x = spawnJson.value("x", 0.0f);
+            area.y = spawnJson.value("y", 0.0f);
+            area.count = spawnJson.value("count", 0);
+            area.radius = spawnJson.value("radius", 0.0f);
+            if (area.monsterId.empty() || area.count <= 0) {
+                LOG_WARN("MapLoader: monsterSpawns entry " + std::to_string(area.id) +
+                         " missing 'monster' or 'count', skipped.");
+                continue;
+            }
+            map->GetMonsterSpawns().push_back(std::move(area));
+        }
+    }
+    if (root.contains("npcSpawns") && root["npcSpawns"].is_array()) {
+        for (const auto& spawnJson : root["npcSpawns"]) {
+            if (!spawnJson.is_object()) {
+                LOG_WARN("MapLoader: invalid npcSpawns entry skipped.");
+                continue;
+            }
+            MapNPCSpawn spawn;
+            spawn.name = spawnJson.value("name", std::string());
+            spawn.characterPath = spawnJson.value("character", std::string());
+            spawn.x = spawnJson.value("x", 0.0f);
+            spawn.y = spawnJson.value("y", 0.0f);
+            spawn.direction = spawnJson.value("direction", std::string("south"));
+            if (spawn.name.empty() || spawn.characterPath.empty()) {
+                LOG_WARN("MapLoader: npcSpawns entry missing 'name' or 'character', skipped.");
+                continue;
+            }
+            map->GetNPCSpawns().push_back(std::move(spawn));
+        }
+    }
+    if (!map->GetMonsterSpawns().empty() || !map->GetNPCSpawns().empty()) {
+        LOG_INFO("Map spawns: " + std::to_string(map->GetMonsterSpawns().size()) +
+                 " monster area(s), " + std::to_string(map->GetNPCSpawns().size()) + " NPC(s).");
+    }
+
     LOG_INFO("Map loaded: '" + map->GetName() + "' (" + filePath + "), " +
              std::to_string(width) + "x" + std::to_string(height) + " tiles, " +
              std::to_string(map->GetObjects().Objects().size()) + " objects.");
@@ -352,6 +398,35 @@ bool MapLoader::Save(const Map& map, const std::string& filePath) {
     layers.push_back(std::move(occlusionLayer));
 
     root["layers"] = std::move(layers);
+
+    // 世界角色出生数据（原样写回；编辑器保存不丢 spawn 配置）
+    json monsterSpawns = json::array();
+    for (const auto& area : map.GetMonsterSpawns()) {
+        json areaJson;
+        areaJson["id"] = area.id;
+        areaJson["monster"] = area.monsterId;
+        areaJson["x"] = area.x;
+        areaJson["y"] = area.y;
+        areaJson["count"] = area.count;
+        areaJson["radius"] = area.radius;
+        monsterSpawns.push_back(std::move(areaJson));
+    }
+    if (!monsterSpawns.empty()) {
+        root["monsterSpawns"] = std::move(monsterSpawns);
+    }
+    json npcSpawns = json::array();
+    for (const auto& spawn : map.GetNPCSpawns()) {
+        json spawnJson;
+        spawnJson["name"] = spawn.name;
+        spawnJson["character"] = spawn.characterPath;
+        spawnJson["x"] = spawn.x;
+        spawnJson["y"] = spawn.y;
+        spawnJson["direction"] = spawn.direction;
+        npcSpawns.push_back(std::move(spawnJson));
+    }
+    if (!npcSpawns.empty()) {
+        root["npcSpawns"] = std::move(npcSpawns);
+    }
 
     std::ofstream file(filePath, std::ios::trunc);
     if (!file.is_open()) {

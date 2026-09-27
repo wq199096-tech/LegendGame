@@ -59,6 +59,12 @@ public:
                              WorldToTileIndex(worldY, static_cast<float>(m_tileSize)));
     }
 
+    // ---- 世界角色出生数据（可选字段；旧地图为空，编辑器保存时原样写回） ----
+    const std::vector<MapSpawnArea>& GetMonsterSpawns() const { return m_monsterSpawns; }
+    std::vector<MapSpawnArea>& GetMonsterSpawns() { return m_monsterSpawns; }
+    const std::vector<MapNPCSpawn>& GetNPCSpawns() const { return m_npcSpawns; }
+    std::vector<MapNPCSpawn>& GetNPCSpawns() { return m_npcSpawns; }
+
     // ---- Chunk 网格 ----
     int GetChunkCountX() const { return m_chunkCountX; }
     int GetChunkCountY() const { return m_chunkCountY; }
@@ -98,6 +104,10 @@ private:
     std::vector<MapChunk> m_chunks;
     int m_chunkCountX = 0;
     int m_chunkCountY = 0;
+
+    // 世界角色出生数据（非图层，随 map.json 顶层字段保存）
+    std::vector<MapSpawnArea> m_monsterSpawns;
+    std::vector<MapNPCSpawn> m_npcSpawns;
 };
 
 } // namespace legend::map

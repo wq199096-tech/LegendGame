@@ -119,7 +119,26 @@ Build\bin\Debug\LegendMapEditor.exe
 坐标语义：`Character.Position = 脚底点（Feet）`，精灵按 pivot 向上绘制；
 移动管线：`InputManager → PlayerController → CharacterController → Character → Map Collision → Position`。
 
-Tools/gen_hero_sprites.ps1 可重新生成角色资源。
+Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites.ps1 可重新生成 NPC/怪物资源。
+
+## 世界角色（阶段4：World Actor System V0.4）
+
+- Engine/Entity：`ActorType`（Player/NPC/Monster/Pet/Summon）、`EntityIdAllocator`（统一递增 ID）、
+  `ActorRegistry`（Register/Unregister/Get/GetByType/FindInRadius）、`TargetHandle`（EntityId 句柄，注销后安全失效，不留野指针）
+- Client/World：`NPCCharacter`（静态站立 + 固定朝向）、`MonsterCharacter`（模板数据 + 出生信息 + 目标句柄 + AI 参数）、
+  `MonsterSpawner`（monster.json 模板缓存 + 按 map.json 生成）、`MonsterAIController`（Idle/Wander/Chase/ReturnHome）、
+  `AggroTable`（基础仇恨框架）、`WorldActorManager`（所有权 + 注册表 + 统一更新 + 渲染收集）
+- 数据驱动：`Assets/Monsters/monster.json`（aggro/leash/wander/stop/resume 参数）；
+  `map.json` 顶层 `monsterSpawns`（模板/中心/数量/半径）与 `npcSpawns`（名称/character.json/朝向），旧地图缺字段不报错，编辑器保存原样写回
+- AI 规则：感知 0.15s 节流 + DistanceSquared；Chase 复用 CharacterController 分轴碰撞；
+  stop/resume 距离滞回（贴近停步，拉开 resume 才继续）；距 home > leashRange 清目标回出生点；
+  回家途中不再 Aggro；Wander 持续走向单个目标（到达/超时/持续撞墙放弃）
+- 调试：F3 显示最近 6 只怪的 Aggro 圈（黄）/ Leash 圈（红）/ Home 十字（绿）/ Wander 目标（蓝）/ 目标连线（橙）；
+  窗口标题统计 `Actors/Visible/AI/Scans`
+- 自动验收：`LEGEND_AUTO_AI_TEST=1` 时间线（Aggro -> Leash -> Wander），输出 [AggroCheck] / [LeashCheck] / [WanderCheck]；
+  静态自检 [ActorRegistryCheck] / [TargetHandleCheck] / [SpawnerCheck]（Requested 17 / Spawned 17 / Failed 0）
+- 测试地图：TestMap 生成 3 NPC（Guard/Merchant/Villager）+ 17 怪物（Slime x8 / Wolf x5 / Boar x4）
+- `LEGEND_AI_SEED` 固定随机种子，可复现 AI 行为
 
 ## 日志
 
@@ -128,6 +147,6 @@ Tools/gen_hero_sprites.ps1 可重新生成角色资源。
 
 ## 本阶段明确不包含
 
-账号 / 登录 / 网关 / 数据库 / 正式地图 / 怪物AI / 装备 / 背包 / 技能 / 战斗 /
+账号 / 登录 / 网关 / 数据库 / 正式地图 / 正式战斗（攻击 / 伤害 / HP / 技能 / 死亡 / 掉落）/ 装备 / 背包 /
 聊天 / 商城 / 任务 / 公会 / 交易 / 组队 / 排行榜等 MMORPG 玩法功能，
 将在引擎稳定后的后续阶段逐步实现。

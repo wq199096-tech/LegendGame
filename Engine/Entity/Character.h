@@ -6,6 +6,7 @@
 
 #include "Engine/Animation/AnimationPlayer.h"
 #include "Engine/Animation/SpriteSheet.h"
+#include "Engine/Entity/ActorType.h"
 #include "Engine/Entity/Direction8.h"
 #include "Engine/Entity/Entity.h"
 #include "Engine/Math/Vector2.h"
@@ -32,9 +33,11 @@ struct CharacterVisual {
 // 以后 Player / NPC / Monster / Pet / Summon 复用此类。
 class Character : public Entity {
 public:
-    Character(EntityId id, std::string name, float moveSpeed, const CharacterFootprint& footprint,
-              const CharacterVisual& visual,
+    Character(EntityId id, std::string name, ActorType actorType, float moveSpeed,
+              const CharacterFootprint& footprint, const CharacterVisual& visual,
               std::shared_ptr<const std::unordered_map<std::string, animation::AnimationClip>> clips);
+
+    ActorType GetActorType() const { return m_actorType; }
 
     Direction8 GetDirection() const { return m_direction; }
     void SetDirection(Direction8 direction) { m_direction = direction; }
@@ -59,6 +62,7 @@ public:
     }
 
 private:
+    ActorType m_actorType = ActorType::Player;
     Direction8 m_direction = Direction8::South;
     math::Vector2 m_velocity{0.0f, 0.0f};
     bool m_moving = false;

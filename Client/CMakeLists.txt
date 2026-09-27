@@ -8,6 +8,14 @@ add_executable(LegendClient
     Source/FallbackScene.cpp
     Character/PlayerCharacter.cpp
     Character/PlayerController.cpp
+    World/AggroTable.cpp
+    World/MonsterAIController.cpp
+    World/MonsterCharacter.cpp
+    World/MonsterDefinition.cpp
+    World/MonsterSpawner.cpp
+    World/NPCCharacter.cpp
+    World/SpawnArea.cpp
+    World/WorldActorManager.cpp
 )
 
 target_link_libraries(LegendClient PRIVATE legend_engine)

@@ -1,10 +1,12 @@
-#include "Client/Character/PlayerCharacter.h"
+#include "Client/World/NPCCharacter.h"
 
-PlayerCharacter::PlayerCharacter(
-    legend::entity::EntityId id, const legend::animation::CharacterDefinition& definition,
+NPCCharacter::NPCCharacter(
+    legend::entity::EntityId id, std::string displayName,
+    const legend::animation::CharacterDefinition& definition,
     std::shared_ptr<const std::unordered_map<std::string, legend::animation::AnimationClip>> clips,
-    std::shared_ptr<legend::animation::SpriteSheet> spriteSheet)
-    : legend::entity::Character(id, definition.name, legend::entity::ActorType::Player,
+    std::shared_ptr<legend::animation::SpriteSheet> spriteSheet,
+    legend::entity::Direction8 facing)
+    : legend::entity::Character(id, std::move(displayName), legend::entity::ActorType::NPC,
                                 definition.moveSpeed, definition.footprint,
                                 legend::entity::CharacterVisual{definition.visualWidth,
                                                                 definition.visualHeight,
@@ -12,4 +14,5 @@ PlayerCharacter::PlayerCharacter(
                                 std::move(clips)),
       m_definition(definition) {
     SetSpriteSheet(std::move(spriteSheet));
+    SetDirection(facing); // 固定朝向：NPC 不移动，方向永不改变
 }

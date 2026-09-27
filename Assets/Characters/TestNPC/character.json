@@ -1,0 +1,22 @@
+{
+    "version":  1,
+    "name":  "TestNPC",
+    "spriteSheet":  "Characters/TestNPC/sprites/actor_debug.png",
+    "frameWidth":  96,
+    "frameHeight":  96,
+    "visualWidth":  96,
+    "visualHeight":  96,
+    "footprint":  {
+                      "offsetY":  4,
+                      "offsetX":  0,
+                      "width":  28,
+                      "height":  18
+                  },
+    "pivot":  {
+                  "y":  0.85,
+                  "x":  0.5
+              },
+    "moveSpeed":  0,
+    "direction":  "south",
+    "animations":  "Characters/TestNPC/animations.json"
+}

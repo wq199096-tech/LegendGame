@@ -11,9 +11,11 @@
 #include <vector>
 
 #include "Engine/Animation/AnimationStateMachine.h"
+#include "Client/World/MonsterCharacter.h"
 #include "Engine/Core/Engine.h"
 #include "Engine/Debug/Logger.h"
 #include "Engine/Entity/Direction8.h"
+#include "Engine/Entity/EntityIdAllocator.h"
 #include "Engine/Map/Map.h"
 #include "Engine/Map/MapTypes.h"
 #include "Engine/Render/SpriteBatch.h"
@@ -71,6 +73,15 @@ void GameScene::OnLoad() {
     m_player->SetPosition({legend::map::TileToWorldCenter(spawnTileX, ts),
                            legend::map::TileToWorldCenter(spawnTileY, ts)});
 
+    // ---- 阶段4：世界角色（NPC + Monster + AI） ----
+    if (!m_worldActors.Initialize(resources)) {
+        LOG_ERROR("GameScene: world actor manager initialize failed.");
+        return; // 世界角色初始化失败不能静默继续
+    }
+    m_worldActors.RegisterPlayer(m_player.get());
+    const int npcSpawned = m_worldActors.SpawnNPCs(*m_map);
+    const legend::world::WorldSpawnStats monsterStats = m_worldActors.SpawnMonsters(*m_map);
+
     auto& camera = engine.GetCamera();
     camera.SetZoom(1.0f);
     camera.SetPosition(m_player->GetPosition()); // 跟随脚底位置
@@ -86,9 +97,14 @@ void GameScene::OnLoad() {
     RunYSortVerification();
     RunCollisionSourceVerification();
     RunEditedMapCheck();
+    RunActorRegistryCheck();
+    RunTargetHandleCheck();
+    RunSpawnerCheck(monsterStats);
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
-             std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + ").");
+             std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
+             std::to_string(npcSpawned) + ", monsters: " + std::to_string(monsterStats.spawned) +
+             "/" + std::to_string(monsterStats.requested) + ".");
 }
 
 bool GameScene::LoadPlayerCharacter() {
@@ -108,7 +124,8 @@ bool GameScene::LoadPlayerCharacter() {
         if (sheet && !clipsMap.empty()) {
             m_playerClips = std::make_shared<const std::unordered_map<std::string, legend::animation::AnimationClip>>(
                 std::move(clipsMap));
-            m_player = std::make_unique<PlayerCharacter>(1, definition, m_playerClips, sheet);
+            m_player = std::make_unique<PlayerCharacter>(legend::entity::EntityIdAllocator::Next(),
+                                                         definition, m_playerClips, sheet);
             LOG_INFO("Player character created from assets: '" + definition.name + "'.");
             return true;
         }
@@ -137,7 +154,8 @@ bool GameScene::LoadPlayerCharacter() {
     clips[idle.name] = idle;
     m_playerClips = std::make_shared<const std::unordered_map<std::string, legend::animation::AnimationClip>>(
         std::move(clips));
-    m_player = std::make_unique<PlayerCharacter>(1, fallback, m_playerClips, sheet);
+    m_player = std::make_unique<PlayerCharacter>(legend::entity::EntityIdAllocator::Next(),
+                                                 fallback, m_playerClips, sheet);
     LOG_WARN("Using fallback debug character.");
     return true;
 }
@@ -220,6 +238,10 @@ void GameScene::Update(float deltaTime) {
         m_characterDebug = !m_characterDebug;
         LOG_INFO(m_characterDebug ? "Character debug: enabled (F2)" : "Character debug: disabled (F2)");
     }
+    if (input.IsKeyPressed(SDL_SCANCODE_F3)) {
+        m_aiDebug = !m_aiDebug;
+        LOG_INFO(m_aiDebug ? "AI debug: enabled (F3)" : "AI debug: disabled (F3)");
+    }
 
     // 输入 -> 控制器 -> 角色 -> 地图碰撞 -> 位置
     if (m_autoDirCycle) {
@@ -240,10 +262,18 @@ void GameScene::Update(float deltaTime) {
     legend::animation::AnimationStateMachine asmState;
     asmState.Update(*m_player);
 
+    // ---- 世界角色统一更新：NPC 动画 / Monster AI + 动画 ----
+    m_worldActors.Update(*m_map, deltaTime);
+
     // 断言时机：动画状态机已按最终 direction/moving 选好 Clip
     if (m_autoDirCycle && m_cycleVerifyPending) {
         m_cycleVerifyPending = false;
         RunDirectionCycleAssertion(m_cycleDirIdx, m_cycleWalk);
+    }
+
+    // LEGEND_AUTO_AI_TEST=1：AI 验收时间线
+    if (m_aiTest) {
+        UpdateAITest(deltaTime);
     }
 
     UpdateCamera(deltaTime);
@@ -258,7 +288,7 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     m_mapRenderer.BeginFrame(camera, static_cast<float>(viewportW), static_cast<float>(viewportH));
     m_mapRenderer.RenderGround(*m_map);
 
-    // ---- 统一 Y-Sort 队列：MapObject + Character ----
+    // ---- 统一 Y-Sort 队列：MapObject + 世界角色（Player/NPC/Monster） ----
     std::vector<legend::map::RenderSortItem> items;
     int totalObjects = 0;
     int visibleObjects = 0;
@@ -272,37 +302,27 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
                          legend::map::RenderSortItem::Type::MapObject, &object, nullptr});
     }
 
-    bool characterVisible = false;
-    if (m_player) {
-        const auto& visual = m_player->GetVisual();
-        const legend::math::Vector2& feet = m_player->GetPosition();
-        const float margin = 192.0f;
-        characterVisible = feet.x + visual.width >= m_mapRenderer.GetViewLeft() - margin &&
-                           feet.x - visual.width <= m_mapRenderer.GetViewRight() + margin &&
-                           feet.y + visual.height >= m_mapRenderer.GetViewTop() - margin &&
-                           feet.y - visual.height <= m_mapRenderer.GetViewBottom() + margin;
-        if (characterVisible) {
-            // 玩家脚底点进入 Y-Sort；renderOrder 仅作平局判定
-            items.push_back({0, feet.y, 10, legend::map::RenderSortItem::Type::Character, nullptr,
-                             m_player.get()});
+    // 世界角色统一收集（视口剔除在 WorldActorManager 内完成）
+    m_worldActors.CollectRenderItems(items, m_mapRenderer.GetViewLeft(),
+                                     m_mapRenderer.GetViewRight(), m_mapRenderer.GetViewTop(),
+                                     m_mapRenderer.GetViewBottom());
+    m_lastVisibleActors = 0;
+    for (const auto& item : items) {
+        if (item.type == legend::map::RenderSortItem::Type::Character) {
+            ++m_lastVisibleActors;
         }
     }
     m_mapRenderer.SetObjectCounts(visibleObjects, totalObjects);
 
     std::sort(items.begin(), items.end(), legend::map::RenderSortItem::Compare);
 
-    bool playerDrawn = false;
     for (const auto& item : items) {
         if (item.type == legend::map::RenderSortItem::Type::MapObject) {
             m_mapRenderer.DrawMapObject(*item.mapObject);
         } else if (item.character != nullptr) {
             m_mapRenderer.Flush(); // 冲刷排在前面的物件，保证遮挡顺序
             m_characterRenderer.Draw(m_mapRenderer.GetBatch(), *item.character);
-            playerDrawn = true;
         }
-    }
-    if (!playerDrawn && m_player && characterVisible) {
-        m_characterRenderer.Draw(m_mapRenderer.GetBatch(), *m_player);
     }
     m_mapRenderer.Flush();
 
@@ -311,6 +331,9 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     }
     if (m_characterDebug) {
         DrawCharacterDebug(m_mapRenderer.GetBatch());
+    }
+    if (m_aiDebug) {
+        DrawAIDebugOverlay(m_mapRenderer.GetBatch());
     }
     m_mapRenderer.EndFrame();
 }
@@ -344,6 +367,12 @@ void GameScene::ApplyAutoTestHooks() {
         m_autoDirCycle = true;
         LOG_INFO("Auto-test: 8-direction cycle enabled (LEGEND_AUTO_DIRECTION_CYCLE=1), "
                  "1.2s per direction (0.6s idle + 0.6s walk).");
+    }
+    const char* aiTest = SDL_getenv("LEGEND_AUTO_AI_TEST");
+    if (aiTest != nullptr && aiTest[0] == '1') {
+        m_aiTest = true;
+        LOG_INFO("Auto-test: AI acceptance timeline enabled (LEGEND_AUTO_AI_TEST=1), "
+                 "stages: Aggro -> Leash -> Wander.");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {
@@ -935,7 +964,12 @@ void GameScene::LogMapStats(double deltaTime) {
         " | Chunks: " + std::to_string(stats.visibleChunks) +
         " | Tiles: " + std::to_string(stats.renderedTiles) +
         " | Objects: " + std::to_string(stats.visibleObjects) + "/" + std::to_string(stats.totalObjects) +
-        " | DC: " + std::to_string(stats.drawCalls);
+        " | DC: " + std::to_string(stats.drawCalls) +
+        // 阶段4：世界角色统计
+        " | Actors: " + std::to_string(m_worldActors.GetRegistry().Count()) +
+        " | Visible: " + std::to_string(m_lastVisibleActors) +
+        " | AI: " + std::to_string(m_worldActors.GetMonsterCount()) +
+        " | Scans: " + std::to_string(m_worldActors.GetTotalScanCount());
 
     // F2：Entity / Direction / State / Clip / Frame
     if (m_characterDebug && m_player) {
@@ -952,6 +986,32 @@ void GameScene::LogMapStats(double deltaTime) {
                  std::to_string(player.GetCurrentFrameCount()) +
                  " | Feet: (" + std::to_string(m_player->GetPosition().x) + "," +
                  std::to_string(m_player->GetPosition().y) + ")");
+    }
+
+    // F3：AI Debug（最近 6 只怪：状态/目标/距离）
+    if (m_aiDebug) {
+        const legend::math::Vector2 playerPos =
+            m_player ? m_player->GetPosition() : legend::math::Vector2{0, 0};
+        auto monsters = m_worldActors.GetMonsters();
+        std::sort(monsters.begin(), monsters.end(),
+                  [&playerPos](const legend::world::MonsterCharacter* a,
+                               const legend::world::MonsterCharacter* b) {
+                      const legend::math::Vector2 da = a->GetPosition() - playerPos;
+                      const legend::math::Vector2 db = b->GetPosition() - playerPos;
+                      return da.LengthSq() < db.LengthSq();
+                  });
+        const int count = static_cast<int>(std::min<size_t>(monsters.size(), 6));
+        for (int i = 0; i < count; ++i) {
+            const legend::world::MonsterCharacter* monster = monsters[i];
+            const legend::math::Vector2 delta = monster->GetPosition() - playerPos;
+            LOG_INFO("[AIDebug] " + monster->GetName() + "#" +
+                     std::to_string(monster->GetId()) + " state=" +
+                     legend::world::MonsterAIStateName(monster->GetAIState()) +
+                     " target=" + (monster->GetTargetHandle().IsEmpty()
+                                       ? std::string("none")
+                                       : std::to_string(monster->GetTargetHandle().GetId())) +
+                     " dist=" + std::to_string(delta.Length()));
+        }
     }
 
     legend::Engine::Get().SetStatusText(status);
@@ -979,5 +1039,340 @@ void GameScene::LogMapStats(double deltaTime) {
         LOG_INFO("[ChunkCheck] visible-consistency: counted " + std::to_string(counted) +
                  ", stats " + std::to_string(stats.visibleChunks) + " -> " +
                  (pass ? "PASS" : "FAIL"));
+    }
+}
+
+// ==================== 阶段4：World Actor System ====================
+
+void GameScene::RunActorRegistryCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[ActorRegistryCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    const auto& registry = m_worldActors.GetRegistry();
+    const legend::entity::EntityId playerId = m_player ? m_player->GetId() : 0;
+
+    // 1. Player 已注册
+    check("player registered", playerId != 0 && registry.Get(playerId) != nullptr);
+    // 2. NPC 数量 = 3
+    const auto npcs = registry.GetByType(legend::entity::ActorType::NPC);
+    check("NPC count == 3", npcs.size() == 3);
+    // 3. Monster 数量 = 17
+    const auto monsters = registry.GetByType(legend::entity::ActorType::Monster);
+    check("Monster count == 17", monsters.size() == 17);
+    // 4. FindInRadius 命中 Player
+    bool playerFound = false;
+    if (m_player) {
+        for (const legend::entity::Character* actor :
+             registry.FindInRadius(m_player->GetPosition(), 100.0f)) {
+            if (actor->GetId() == playerId) {
+                playerFound = true;
+                break;
+            }
+        }
+    }
+    check("FindInRadius contains player", playerFound);
+
+    // 5. 注册/注销/去重语义（临时对象，不入渲染统计——visible=false）
+    auto& mutableRegistry = m_worldActors.GetRegistry();
+    auto emptyClips = std::make_shared<const std::unordered_map<std::string, legend::animation::AnimationClip>>();
+    const auto tempId = legend::entity::EntityIdAllocator::Next();
+    auto temp = std::make_unique<legend::entity::Character>(
+        tempId, "RegistryCheckTemp", legend::entity::ActorType::Monster, 0.0f,
+        legend::entity::CharacterFootprint{}, legend::entity::CharacterVisual{}, emptyClips);
+    temp->SetVisible(false);
+    const std::size_t before = mutableRegistry.Count();
+    mutableRegistry.Register(temp.get());
+    mutableRegistry.Register(temp.get()); // 重复注册必须被忽略
+    check("duplicate register ignored", mutableRegistry.Count() == before + 1);
+    check("Get(temp) found", mutableRegistry.Get(tempId) != nullptr);
+    mutableRegistry.Unregister(tempId);
+    check("Unregister removes actor", mutableRegistry.Get(tempId) == nullptr);
+
+    LOG_INFO("[ActorRegistryCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunTargetHandleCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[TargetHandleCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    const auto& registry = m_worldActors.GetRegistry();
+    legend::entity::TargetHandle handle;
+
+    // 1. 空句柄
+    check("empty handle invalid", handle.IsEmpty() && !handle.IsValid(registry) &&
+                                       handle.Resolve(registry) == nullptr);
+    // 2. 指向 Player
+    if (m_player) {
+        handle.Set(m_player->GetId());
+        check("resolve player", handle.IsValid(registry) &&
+                                    handle.Resolve(registry) == m_player.get());
+    }
+    // 3. 目标注销后安全失效
+    auto& mutableRegistry = m_worldActors.GetRegistry();
+    auto emptyClips = std::make_shared<const std::unordered_map<std::string, legend::animation::AnimationClip>>();
+    const auto tempId = legend::entity::EntityIdAllocator::Next();
+    auto temp = std::make_unique<legend::entity::Character>(
+        tempId, "TargetCheckTemp", legend::entity::ActorType::Monster, 0.0f,
+        legend::entity::CharacterFootprint{}, legend::entity::CharacterVisual{}, emptyClips);
+    mutableRegistry.Register(temp.get());
+    handle.Set(tempId);
+    check("resolve temp actor", handle.IsValid(registry) &&
+                                    handle.Resolve(registry) == temp.get());
+    mutableRegistry.Unregister(tempId);
+    check("unregistered target invalidated",
+          !handle.IsValid(registry) && handle.Resolve(registry) == nullptr);
+    // 4. Clear
+    handle.Clear();
+    check("cleared handle empty", handle.IsEmpty());
+
+    LOG_INFO("[TargetHandleCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunSpawnerCheck(const legend::world::WorldSpawnStats& stats) {
+    const bool pass = stats.requested > 0 && stats.spawned == stats.requested &&
+                      stats.failed == 0;
+    LOG_INFO("[SpawnerCheck] Requested: " + std::to_string(stats.requested) +
+             " Spawned: " + std::to_string(stats.spawned) +
+             " Failed: " + std::to_string(stats.failed) + " -> " +
+             (pass ? "PASS" : "FAIL"));
+}
+
+void GameScene::DrawLine(legend::render::SpriteBatch& batch, const legend::math::Vector2& from,
+                         const legend::math::Vector2& to, float thickness,
+                         const legend::math::Color& color) {
+    if (!m_whiteTexture) {
+        return;
+    }
+    const float dx = to.x - from.x;
+    const float dy = to.y - from.y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if (length < 0.5f) {
+        return;
+    }
+    const float angleDeg = std::atan2(dy, dx) * 180.0f / 3.14159265f;
+    batch.DrawQuad(*m_whiteTexture, {(from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f},
+                   {length / 64.0f, thickness / 64.0f}, angleDeg, color);
+}
+
+void GameScene::DrawCircle(legend::render::SpriteBatch& batch,
+                           const legend::math::Vector2& center, float radius,
+                           const legend::math::Color& color) {
+    constexpr int kSegments = 32;
+    const float step = 6.28318530f / static_cast<float>(kSegments);
+    legend::math::Vector2 prev(center.x + radius, center.y);
+    for (int i = 1; i <= kSegments; ++i) {
+        const float angle = step * static_cast<float>(i);
+        const legend::math::Vector2 point(center.x + std::cos(angle) * radius,
+                                          center.y + std::sin(angle) * radius);
+        DrawLine(batch, prev, point, 3.0f, color);
+        prev = point;
+    }
+}
+
+void GameScene::DrawAIDebugOverlay(legend::render::SpriteBatch& batch) {
+    if (!m_player || !m_whiteTexture) {
+        return;
+    }
+    const legend::math::Vector2 playerPos = m_player->GetPosition();
+    auto monsters = m_worldActors.GetMonsters();
+    std::sort(monsters.begin(), monsters.end(),
+              [&playerPos](const legend::world::MonsterCharacter* a,
+                           const legend::world::MonsterCharacter* b) {
+                  const legend::math::Vector2 da = a->GetPosition() - playerPos;
+                  const legend::math::Vector2 db = b->GetPosition() - playerPos;
+                  return da.LengthSq() < db.LengthSq();
+              });
+    const int count = static_cast<int>(std::min<size_t>(monsters.size(), 6));
+    for (int i = 0; i < count; ++i) {
+        const legend::world::MonsterCharacter* monster = monsters[i];
+        const legend::math::Vector2& pos = monster->GetPosition();
+        // Aggro 圈（黄，以怪物为圆心）
+        DrawCircle(batch, pos, monster->GetAggroRange(),
+                   legend::math::Color(1.0f, 1.0f, 0.0f, 0.55f));
+        // Leash 圈（红，以 home 为圆心）
+        DrawCircle(batch, monster->GetHomePosition(), monster->GetLeashRange(),
+                   legend::math::Color(1.0f, 0.35f, 0.35f, 0.4f));
+        // Home 十字（绿）
+        const legend::math::Vector2& home = monster->GetHomePosition();
+        DrawLine(batch, {home.x - 12.0f, home.y}, {home.x + 12.0f, home.y}, 3.0f,
+                 legend::math::Color(0.3f, 1.0f, 0.3f, 0.9f));
+        DrawLine(batch, {home.x, home.y - 12.0f}, {home.x, home.y + 12.0f}, 3.0f,
+                 legend::math::Color(0.3f, 1.0f, 0.3f, 0.9f));
+        // Wander Target（蓝十字）
+        const auto* controller = m_worldActors.GetAIController(monster->GetId());
+        if (controller != nullptr && controller->HasWanderTarget()) {
+            const legend::math::Vector2& wander = controller->GetWanderTarget();
+            DrawLine(batch, {wander.x - 10.0f, wander.y}, {wander.x + 10.0f, wander.y}, 3.0f,
+                     legend::math::Color(0.3f, 0.6f, 1.0f, 0.9f));
+            DrawLine(batch, {wander.x, wander.y - 10.0f}, {wander.x, wander.y + 10.0f}, 3.0f,
+                     legend::math::Color(0.3f, 0.6f, 1.0f, 0.9f));
+        }
+        // 目标连线（橙）
+        if (!monster->GetTargetHandle().IsEmpty()) {
+            const legend::entity::Character* target =
+                monster->GetTargetHandle().Resolve(m_worldActors.GetRegistry());
+            if (target != nullptr) {
+                DrawLine(batch, pos, target->GetPosition(), 3.0f,
+                         legend::math::Color(1.0f, 0.6f, 0.1f, 0.8f));
+            }
+        }
+    }
+}
+
+void GameScene::UpdateAITest(float deltaTime) {
+    if (m_aiTestStage >= 4) {
+        return;
+    }
+    m_aiTestElapsed += deltaTime;
+    m_aiTestStageElapsed += deltaTime;
+    auto monsters = m_worldActors.GetMonsters();
+    auto nextStage = [this]() {
+        ++m_aiTestStage;
+        m_aiTestStageEntered = false;
+        m_aiTestStageElapsed = 0.0;
+    };
+    auto fail = [this](const std::string& check, const std::string& reason) {
+        ++m_aiTestFailures;
+        LOG_INFO("[AITest] " + check + " FAILED: " + reason);
+    };
+
+    if (!m_player) {
+        LOG_ERROR("[AITest] player missing, abort.");
+        m_aiTestStage = 4;
+        return;
+    }
+
+    switch (m_aiTestStage) {
+    case 0: { // Aggro：传送到 Wolf 区域北缘（道路上），等待怪物进入 Chase
+        if (!m_aiTestStageEntered) {
+            m_aiTestStageEntered = true;
+            m_player->SetPosition({4400.0f, 3170.0f});
+            LOG_INFO("[AITest] stage 0 (Aggro): player teleported into wolf area (4400,3170).");
+        }
+        for (const legend::world::MonsterCharacter* monster : monsters) {
+            if (monster->GetAIState() == legend::world::MonsterAIState::Chase &&
+                monster->GetTargetHandle().GetId() == m_player->GetId()) {
+                m_aiTestMonsterId = monster->GetId();
+                LOG_INFO("[AggroCheck] " + monster->GetName() + "#" +
+                         std::to_string(monster->GetId()) +
+                         " entered Chase targeting player -> PASS");
+                nextStage();
+                return;
+            }
+        }
+        if (m_aiTestStageElapsed > 10.0) {
+            fail("[AggroCheck]", "no monster entered Chase within 10s.");
+            nextStage();
+        }
+        break;
+    }
+    case 1: { // Leash：分段牵引玩家向东，怪物追出 leash 范围 -> ReturnHome -> 到家 Idle
+        if (!m_aiTestStageEntered) {
+            m_aiTestStageEntered = true;
+            m_aiTestHop = 0;
+            m_aiTestHopTimer = 0.0f;
+            m_aiTestLeashTriggered = false;
+            LOG_INFO("[AITest] stage 1 (Leash): dragging player east step by step.");
+        }
+        // 每 0.4s 沿道路东移 80（Wolf loseTarget=510：间隙增速 20/步，16 步后间隙 ~375 < 510，
+        // 而 Wolf-home 距离可超过 leash 700 —— Slime 速度过慢无法完成本测试）
+        m_aiTestHopTimer += deltaTime;
+        if (m_aiTestHop < 16 && m_aiTestHopTimer >= 0.4f) {
+            m_aiTestHopTimer = 0.0f;
+            ++m_aiTestHop;
+            const float x = 4400.0f + 80.0f * static_cast<float>(m_aiTestHop);
+            m_player->SetPosition({x, 3170.0f});
+            LOG_INFO("[AITest] leash drag step " + std::to_string(m_aiTestHop) + ": player -> (" +
+                     std::to_string(x) + ",3170).");
+        }
+        const legend::world::MonsterCharacter* monster = nullptr;
+        for (const legend::world::MonsterCharacter* m : monsters) {
+            if (m->GetId() == m_aiTestMonsterId) {
+                monster = m;
+                break;
+            }
+        }
+        if (monster == nullptr) {
+            fail("[LeashCheck]", "target monster missing.");
+            nextStage();
+            break;
+        }
+        if (!m_aiTestLeashTriggered &&
+            monster->GetAIState() == legend::world::MonsterAIState::ReturnHome) {
+            m_aiTestLeashTriggered = true;
+            LOG_INFO("[LeashCheck] " + monster->GetName() + "#" +
+                     std::to_string(monster->GetId()) + " exceeded leash -> ReturnHome");
+        }
+        const legend::math::Vector2 toHome =
+            monster->GetPosition() - monster->GetHomePosition();
+        if (m_aiTestLeashTriggered && monster->GetAIState() == legend::world::MonsterAIState::Idle &&
+            toHome.LengthSq() < 60.0f * 60.0f) {
+            LOG_INFO("[LeashCheck] monster returned home (dist " +
+                     std::to_string(std::sqrt(toHome.LengthSq())) + ") and is Idle -> PASS");
+            nextStage();
+            break;
+        }
+        if (m_aiTestStageElapsed > 40.0) {
+            fail("[LeashCheck]", m_aiTestLeashTriggered
+                                     ? "monster did not settle home within 40s."
+                                     : "leash never triggered within 40s.");
+            nextStage();
+        }
+        break;
+    }
+    case 2: { // Wander：玩家停远，任意怪物位移 > 40 视为随机游走发生
+        if (!m_aiTestStageEntered) {
+            m_aiTestStageEntered = true;
+            m_wanderBasePositions.clear();
+            for (const legend::world::MonsterCharacter* m : monsters) {
+                m_wanderBasePositions.push_back(m->GetPosition());
+            }
+            LOG_INFO("[AITest] stage 2 (Wander): player parked at (5680,3170), watching wander.");
+        }
+        float maxDist = 0.0f;
+        std::string mover;
+        for (std::size_t i = 0; i < monsters.size() && i < m_wanderBasePositions.size(); ++i) {
+            const legend::math::Vector2 delta =
+                monsters[i]->GetPosition() - m_wanderBasePositions[i];
+            const float dist = std::sqrt(delta.LengthSq());
+            if (dist > maxDist) {
+                maxDist = dist;
+                mover = monsters[i]->GetName();
+            }
+        }
+        if (maxDist > 40.0f) {
+            LOG_INFO("[WanderCheck] " + mover + " moved " + std::to_string(maxDist) +
+                     " units from baseline -> PASS");
+            nextStage();
+            break;
+        }
+        if (m_aiTestStageElapsed > 40.0) {
+            fail("[WanderCheck]", "max displacement " + std::to_string(maxDist) +
+                                      " after 40s.");
+            nextStage();
+        }
+        break;
+    }
+    case 3: { // 汇总
+        if (!m_aiTestSummaryDone) {
+            m_aiTestSummaryDone = true;
+            LOG_INFO("[AITest] completed, elapsed " + std::to_string(m_aiTestElapsed) +
+                     "s, failures = " + std::to_string(m_aiTestFailures));
+        }
+        nextStage();
+        break;
+    }
+    default:
+        break;
     }
 }

@@ -1,0 +1,15 @@
+{
+    "version":  1,
+    "id":  "boar",
+    "name":  "Boar",
+    "character":  "Monsters/Boar/character.json",
+    "ai":  {
+               "aggroRange":  300,
+               "leashRange":  600,
+               "wanderRadius":  180,
+               "wanderIntervalMin":  2,
+               "wanderIntervalMax":  5.5,
+               "stopDistance":  60,
+               "resumeDistance":  80
+           }
+}

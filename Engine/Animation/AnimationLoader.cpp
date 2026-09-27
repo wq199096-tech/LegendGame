@@ -51,6 +51,7 @@ bool LoadCharacterDefinition(const std::string& filePath, CharacterDefinition& o
     out.visualWidth = root.value("visualWidth", static_cast<float>(out.frameWidth));
     out.visualHeight = root.value("visualHeight", static_cast<float>(out.frameHeight));
     out.moveSpeed = root.value("moveSpeed", 200.0f);
+    out.defaultDirection = root.value("direction", std::string("south"));
 
     if (root.contains("footprint")) {
         const json& fp = root["footprint"];
