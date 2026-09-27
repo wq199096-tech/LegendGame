@@ -1,5 +1,7 @@
 #include "Client/Source/GameScene.h"
 
+#include "Client/Network/ClientNetworkController.h"
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_scancode.h>
 
@@ -34,6 +36,8 @@
 #include "Engine/Progression/LevelSystem.h"
 #include "Engine/Render/SpriteBatch.h"
 #include "Engine/Render/Texture.h"
+
+GameScene::~GameScene() = default; // 阶段9：unique_ptr 完整类型在此实例化
 
 GameScene::GameScene(std::shared_ptr<legend::map::Map> map)
     : legend::scene::Scene("GameScene"), m_map(std::move(map)) {}
@@ -367,6 +371,10 @@ void GameScene::Update(float deltaTime) {
     auto& engine = legend::Engine::Get();
     auto& input = engine.GetInput();
     m_sceneElapsed += deltaTime;
+    if (!m_networkController) {
+        m_networkController = std::make_unique<legend::client::ClientNetworkController>();
+    }
+    m_networkController->Update(input, deltaTime);
 
     // F1 切换碰撞可视化 / F2 切换角色 Debug
     if (input.IsKeyPressed(SDL_SCANCODE_F1)) {

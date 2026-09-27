@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+﻿cmake_minimum_required(VERSION 3.24)
 
 project(LegendGame VERSION 0.2.0 LANGUAGES C CXX)
 
@@ -49,13 +49,33 @@ FetchContent_Declare(imgui
     URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.8.zip
 )
 
-FetchContent_MakeAvailable(SDL nlohmann_json imgui)
+FetchContent_Declare(asio
+    URL https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-30-2.zip
+)
+
+FetchContent_MakeAvailable(SDL nlohmann_json imgui asio)
+
+# asio standalone：header-only 使用（不执行其 CMakeLists，避免安装/示例副作用）
+add_library(asio_headers INTERFACE)
+target_include_directories(asio_headers INTERFACE ${asio_SOURCE_DIR}/asio/include)
+if(WIN32)
+    target_compile_definitions(asio_headers INTERFACE
+        ASIO_STANDALONE
+        _WIN32_WINNT=0x0A00
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
 
 # 图片解码使用 ThirdParty/stb/stb_image.h（单头文件，公有领域）
 
 # ---------------------------------------------------------------------------
 # 项目模块
 # ---------------------------------------------------------------------------
+add_subdirectory(Shared)
 add_subdirectory(Engine)
+add_subdirectory(Engine/Network)
+add_subdirectory(Server)
 add_subdirectory(Client)
 add_subdirectory(Tools/MapEditor)
+add_subdirectory(Tests)

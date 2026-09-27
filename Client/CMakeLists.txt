@@ -5,6 +5,8 @@ add_executable(LegendClient
     Source/Main.cpp
     Source/LegendApp.cpp
     Source/GameScene.cpp
+    Network/GameNetworkClient.cpp
+    Network/ClientNetworkController.cpp
     Source/ProgressionChecks.cpp
     Source/EquipmentChecks.cpp
     Source/SkillChecks.cpp
@@ -30,7 +32,7 @@ add_executable(LegendClient
     World/WorldActorManager.cpp
 )
 
-target_link_libraries(LegendClient PRIVATE legend_engine)
+target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport)
 
 if(MSVC)
     target_compile_options(LegendClient PRIVATE /utf-8)

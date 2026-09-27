@@ -18,9 +18,14 @@
 
 // 数据驱动游戏场景：Map（Tile/Object/Collision/Occlusion）+ Character Entity 体系。
 // 管线：InputManager -> PlayerController -> CharacterController -> Character -> Map Collision -> Position
+namespace legend::client {
+class ClientNetworkController; // 阶段9：网络控制器（GameScene 只调 Update，指令六）
+}
+
 class GameScene final : public legend::scene::Scene {
 public:
     explicit GameScene(std::shared_ptr<legend::map::Map> map);
+    ~GameScene() override; // 阶段9：unique_ptr 不完整类型需 cpp 内定义
 
     void OnLoad() override;
     void Update(float deltaTime) override;
@@ -204,6 +209,7 @@ private:
     std::shared_ptr<legend::map::Map> m_map;
     legend::map::MapRenderer m_mapRenderer;
     std::unique_ptr<PlayerCharacter> m_player;
+    std::unique_ptr<legend::client::ClientNetworkController> m_networkController; // 阶段9：懒构造
     PlayerController m_playerController;
     legend::entity::CharacterController m_characterController;
     legend::render::CharacterRenderer m_characterRenderer;
