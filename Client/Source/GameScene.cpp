@@ -113,6 +113,10 @@ void GameScene::OnLoad() {
     RunAttackRangeCheck();
     RunAnimationEventCheck();
     RunDeathCheck();
+    RunCombatActiveCheck();
+    RunMonsterCombatConfigCheck();
+    RunCharacterHitTestCheck();
+    RunCombatTargetLifecycleCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -2274,4 +2278,217 @@ void GameScene::UpdateCombatTest(float deltaTime) {
     default:
         break;
     }
+}
+
+// ==================== 阶段5.1：Active 校验 / 配置校验 / HitTest / 目标生命周期 ====================
+
+void GameScene::RunCombatActiveCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[CombatActiveCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    if (!m_player) {
+        check("player available", false);
+        LOG_INFO("[CombatActiveCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const auto monsters = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    legend::entity::Character* target = nullptr;
+    for (legend::entity::Character* monster : monsters) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Slime") {
+            target = monster;
+            break;
+        }
+    }
+    if (target == nullptr) {
+        check("slime target available", false);
+        LOG_INFO("[CombatActiveCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const auto savedPlayerPos = m_player->GetPosition();
+    const auto savedTargetPos = target->GetPosition();
+    const auto savedTargetHp = target->GetCombatStats().hp;
+
+    // 1. active attacker + active target -> valid
+    target->SetPosition(savedPlayerPos + legend::math::Vector2(60.0f, 0.0f));
+    check("active attacker + active target -> valid",
+          m_worldActors.GetCombatSystem().ValidateAttack(*m_player, *target));
+
+    // 2. inactive target -> invalid（inactive 目标 HP 不能下降）
+    target->SetActive(false);
+    check("inactive target -> invalid",
+          !m_worldActors.GetCombatSystem().ValidateAttack(*m_player, *target));
+    legend::combat::DamageEvent probe;
+    probe.sourceId = m_player->GetId();
+    probe.targetId = target->GetId();
+    probe.finalDamage = 10.0f;
+    probe.rawDamage = 10.0f;
+    m_worldActors.GetCombatSystem().ApplyDamage(probe);
+    check("inactive target HP unchanged",
+          std::fabs(target->GetCombatStats().hp - savedTargetHp) < 0.001f);
+    target->SetActive(true);
+
+    // 3. inactive attacker -> invalid
+    m_player->SetActive(false);
+    check("inactive attacker -> invalid",
+          !m_worldActors.GetCombatSystem().ValidateAttack(*m_player, *target));
+    m_player->SetActive(true);
+
+    // 还原
+    m_player->SetPosition(savedPlayerPos);
+    target->SetPosition(savedTargetPos);
+    LOG_INFO("[CombatActiveCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunMonsterCombatConfigCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[MonsterCombatConfigCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    // 正式模板：stopDistance <= attackRange、resume > stop、combat/AI 有效
+    const char* ids[] = {"slime", "wolf", "boar"};
+    for (const char* id : ids) {
+        const auto* def = m_worldActors.GetSpawner().GetDefinition(id);
+        if (def == nullptr) {
+            check(std::string(id) + " definition present", false);
+            continue;
+        }
+        const std::string prefix = std::string(id) + " ";
+        check(prefix + "combat stats valid", def->combat.IsValid());
+        check(prefix + "ai ranges valid (resume>stop, leash>aggro, interval)",
+              def->ai.resumeDistance > def->ai.stopDistance &&
+                  def->ai.leashRange > def->ai.aggroRange &&
+                  def->ai.wanderIntervalMax >= def->ai.wanderIntervalMin &&
+                  def->ai.wanderIntervalMin >= 0.0f);
+        check(prefix + "stopDistance <= attackRange",
+              def->ai.stopDistance <= def->combat.attackRange + 1.0f);
+        check(prefix + "full validation passes",
+              legend::world::ValidateMonsterDefinition(*def));
+    }
+    // 非法测试 Definition（不改正式 monster.json）：attackRange=60 / stopDistance=100 必须 FAIL
+    legend::world::MonsterDefinition bad;
+    bad.id = "bad_test_template";
+    bad.name = "BadTest";
+    bad.combat.maxHp = 100.0f;
+    bad.combat.hp = 100.0f;
+    bad.combat.attack = 20.0f;
+    bad.combat.defense = 5.0f;
+    bad.combat.attackRange = 60.0f;
+    bad.combat.attackInterval = 1.0f;
+    bad.ai.aggroRange = 300.0f;
+    bad.ai.leashRange = 600.0f;
+    bad.ai.wanderRadius = 150.0f;
+    bad.ai.wanderIntervalMin = 2.0f;
+    bad.ai.wanderIntervalMax = 5.0f;
+    bad.ai.stopDistance = 100.0f;
+    bad.ai.resumeDistance = 120.0f;
+    check("bad config (range 60 / stop 100) -> validation FAIL",
+          !legend::world::ValidateMonsterDefinition(bad));
+    LOG_INFO("[MonsterCombatConfigCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunCharacterHitTestCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[CharacterHitTestCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    // 96x96 pivot(0.5,0.85) feet(1000,1000)：
+    // left=952 right=1048 top=918.4 bottom=1014.4
+    legend::entity::CharacterFootprint fp;
+    legend::entity::CharacterVisual visual; // 96x96 pivot 0.5/0.85
+    visual.pivot = {0.5f, 0.85f};
+    auto emptyClips =
+        std::make_shared<const std::unordered_map<std::string, legend::animation::AnimationClip>>();
+    const auto testId = legend::entity::EntityIdAllocator::Next();
+    legend::entity::Character probe(testId, "HitTestProbe", legend::entity::ActorType::Monster,
+                                    0.0f, fp, visual, emptyClips);
+    probe.SetPosition({1000.0f, 1000.0f});
+
+    const auto rect = legend::render::CharacterRenderer::GetSpriteWorldRect(probe);
+    check("left == 952", std::fabs(rect.left - 952.0f) < 0.01f);
+    check("right == 1048", std::fabs(rect.right - 1048.0f) < 0.01f);
+    check("top == 918.4", std::fabs(rect.top - 918.4f) < 0.01f);
+    check("bottom == 1014.4", std::fabs(rect.bottom - 1014.4f) < 0.01f);
+
+    auto inside = [&](float x, float y) {
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    };
+    check("character center area hits", inside(1000.0f, 980.0f));
+    check("below feet (1000,1060) does NOT hit", !inside(1000.0f, 1060.0f));
+    check("far above does NOT hit", !inside(1000.0f, 900.0f));
+    check("far left does NOT hit", !inside(940.0f, 980.0f));
+    check("far right does NOT hit", !inside(1060.0f, 980.0f));
+    LOG_INFO("[CharacterHitTestCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunCombatTargetLifecycleCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[CombatTargetLifecycleCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    if (!m_player) {
+        check("player available", false);
+        LOG_INFO("[CombatTargetLifecycleCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const auto monsters = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    legend::entity::Character* first = nullptr;
+    legend::entity::Character* second = nullptr;
+    for (legend::entity::Character* monster : monsters) {
+        if (monster == nullptr || !monster->IsCombatAlive()) {
+            continue;
+        }
+        if (first == nullptr) {
+            first = monster;
+        } else if (second == nullptr) {
+            second = monster;
+            break;
+        }
+    }
+    if (first == nullptr || second == nullptr) {
+        check("two alive monsters available", false);
+        LOG_INFO("[CombatTargetLifecycleCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+
+    // 1. 选中第一只：Target 非空 + Resolve 成功
+    m_playerCombat.GetTarget().SetTarget(first->GetId());
+    check("select monster -> target non-empty and resolves",
+          !m_playerCombat.GetTarget().IsEmpty() &&
+              m_playerCombat.GetTarget().Resolve(m_worldActors.GetRegistry()) == first);
+
+    // 2. 目标死亡 -> 下一次 Update 后 Target 必须为空
+    first->GetCombatStats().SetHp(0.0f);
+    first->EnterDead();
+    m_playerCombat.Update(*m_player, m_worldActors.GetRegistry(), m_worldActors.GetCombatSystem(),
+                          legend::Engine::Get().GetInput(), 1280.0f, 720.0f, 0.016f);
+    check("dead target cleared after Update", m_playerCombat.GetTarget().IsEmpty());
+    first->GetCombatStats().SetHp(first->GetCombatStats().maxHp);
+    first->ReturnToNormal(); // 还原（真实死亡流程由运行时验证）
+
+    // 3. 重新选第二只
+    m_playerCombat.GetTarget().SetTarget(second->GetId());
+    check("re-select second monster resolves",
+          m_playerCombat.GetTarget().Resolve(m_worldActors.GetRegistry()) == second);
+
+    // 4. Unregister 目标 -> 下一次 Update 后 Target 必须为空
+    second->SetActive(false); // 模拟 Despawn 前的 inactive：Registry 引用仍在
+    m_playerCombat.Update(*m_player, m_worldActors.GetRegistry(), m_worldActors.GetCombatSystem(),
+                          legend::Engine::Get().GetInput(), 1280.0f, 720.0f, 0.016f);
+    check("inactive target cleared after Update", m_playerCombat.GetTarget().IsEmpty());
+    second->SetActive(true);
+    m_playerCombat.GetTarget().ClearTarget();
+    LOG_INFO("[CombatTargetLifecycleCheck] completed, failures = " + std::to_string(failures));
 }

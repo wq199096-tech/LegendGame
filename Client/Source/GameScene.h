@@ -78,6 +78,11 @@ private:
     void RunAttackRangeCheck();
     void RunAnimationEventCheck();
     void RunDeathCheck();
+    // 阶段5.1 自检：Active 校验 / 配置跨字段校验 / 世界 AABB / 目标生命周期
+    void RunCombatActiveCheck();
+    void RunMonsterCombatConfigCheck();
+    void RunCharacterHitTestCheck();
+    void RunCombatTargetLifecycleCheck();
     // LEGEND_AUTO_COMBAT_TEST=1：战斗验收时间线（选怪/连击/反击/死亡/重生/玩家复活）
     void UpdateCombatTest(float deltaTime);
     // Player 死亡后 Debug 复活：回出生点满血 Normal South

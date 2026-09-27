@@ -9,6 +9,7 @@
 #include "Engine/Entity/Character.h"
 #include "Engine/Input/InputManager.h"
 #include "Engine/Render/Camera2D.h"
+#include "Engine/Render/CharacterRenderer.h"
 
 #include <SDL3/SDL_mouse.h>
 
@@ -19,19 +20,6 @@ namespace legend::world {
 
 namespace {
 constexpr float kTabSelectRange = 1000.0f; // TAB 选怪范围
-
-// 命中检测：鼠标世界点是否在角色视觉 AABB 内（以 Feet + pivot 推导）
-bool HitTestVisual(const legend::entity::Character& character, const math::Vector2& worldPoint) {
-    const auto& visual = character.GetVisual();
-    const math::Vector2& feet = character.GetPosition();
-    // 精灵矩形：底边对齐 feet.y，水平中心对齐 feet.x（pivot 语义）
-    const float left = feet.x - visual.width * visual.pivot.x;
-    const float right = left + visual.width;
-    const float top = feet.y - visual.height * (1.0f - visual.pivot.y) - visual.height * visual.pivot.y;
-    const float bottom = feet.y + visual.height * visual.pivot.y;
-    return worldPoint.x >= left && worldPoint.x <= right && worldPoint.y >= top &&
-           worldPoint.y <= bottom;
-}
 } // namespace
 
 void PlayerCombatController::Update(PlayerCharacter& player,
@@ -40,6 +28,12 @@ void PlayerCombatController::Update(PlayerCharacter& player,
                                     const input::InputManager& input, float viewportWidth,
                                     float viewportHeight, float deltaTime) {
     player.TickCooldown(deltaTime);
+
+    // ---- 阶段5.1：失效目标自动清理（死亡/Despawn/inactive） ----
+    // Target 非空但 Resolve 无效 -> 立即 ClearTarget，不留失效 EntityId
+    if (!m_target.IsEmpty() && !m_target.IsValid(registry)) {
+        m_target.ClearTarget();
+    }
 
     // ---- 目标选择输入 ----
     if (input.IsKeyPressed(SDL_SCANCODE_TAB)) {
@@ -90,7 +84,9 @@ bool PlayerCombatController::RequestAttack(PlayerCharacter& player,
     }
     auto* target = m_target.Resolve(registry);
     if (target == nullptr) {
-        return false; // 无目标 / 目标死亡（死亡目标已自动清理）
+        // 阶段5.1：不长期保存失效 EntityId——死亡/Despawn/inactive 立即清目标
+        m_target.ClearTarget();
+        return false;
     }
     const math::Vector2 delta = target->GetPosition() - player.GetPosition();
     const float range = player.GetCombatStats().attackRange;
@@ -145,7 +141,10 @@ void PlayerCombatController::HandleClickSelection(
         if (monster == nullptr || !monster->IsCombatAlive()) {
             continue; // NPC / 尸体不可选
         }
-        if (!HitTestVisual(*monster, worldPoint)) {
+        // 阶段5.1：复用渲染器的唯一 pivot 公式（禁止手写另一套数学）
+        const auto rect = legend::render::CharacterRenderer::GetSpriteWorldRect(*monster);
+        if (worldPoint.x < rect.left || worldPoint.x > rect.right || worldPoint.y < rect.top ||
+            worldPoint.y > rect.bottom) {
             continue;
         }
         const float distSq = (monster->GetPosition() - worldPoint).LengthSq();

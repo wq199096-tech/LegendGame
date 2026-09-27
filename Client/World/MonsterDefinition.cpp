@@ -6,10 +6,11 @@
 
 #include "Engine/Debug/Logger.h"
 
+using json = nlohmann::json; // LoadMonsterRegistry 已移出匿名命名空间，别名提升到全局
+
 namespace legend::world {
 
 namespace {
-using json = nlohmann::json;
 constexpr int kSupportedVersion = 1;
 
 bool ParseCombatBlock(const json& cmb, combat::CombatStats& out) {
@@ -34,25 +35,48 @@ bool ParseAiBlock(const json& ai, MonsterAIDefinition& out) {
     out.wanderIntervalMax = ai.value("wanderIntervalMax", 5.0f);
     out.stopDistance = ai.value("stopDistance", 60.0f);
     out.resumeDistance = ai.value("resumeDistance", 80.0f);
-    // 参数合法性：resume 必须大于 stop（滞回）；leash 必须大于 aggro；
-    // wanderIntervalMin >= 0 且 Max >= Min（Idle 等待时长数据驱动）
-    if (out.resumeDistance <= out.stopDistance) {
-        LOG_ERROR("MonsterDefinition: resumeDistance must be > stopDistance.");
+    return true;
+}
+
+} // namespace
+
+// 跨字段统一校验（导出供 [MonsterCombatConfigCheck] 构造非法配置验证）：
+// 必须先完整解析 AI + Combat 再调用（禁止解析中途互相引用）。
+// 任一规则非法 -> 该模板无效（调用方跳过）。
+bool ValidateMonsterDefinition(const MonsterDefinition& definition) {
+    const std::string& id = definition.id;
+    // ---- combat 基础 ----
+    if (!definition.combat.IsValid()) {
+        LOG_ERROR("MonsterDefinition: '" + id +
+                  "' invalid combat (need maxHp>0, attackRange>0, attackInterval>0).");
         return false;
     }
-    if (out.leashRange <= out.aggroRange) {
-        LOG_ERROR("MonsterDefinition: leashRange must be > aggroRange.");
+    // ---- AI 范围规则 ----
+    if (definition.ai.resumeDistance <= definition.ai.stopDistance) {
+        LOG_ERROR("MonsterDefinition: '" + id + "' resumeDistance must be > stopDistance.");
         return false;
     }
-    if (out.wanderIntervalMin < 0.0f || out.wanderIntervalMax < out.wanderIntervalMin) {
-        LOG_ERROR("MonsterDefinition: invalid wanderInterval range [" +
-                  std::to_string(out.wanderIntervalMin) + ", " +
-                  std::to_string(out.wanderIntervalMax) + "] (need Min >= 0, Max >= Min).");
+    if (definition.ai.leashRange <= definition.ai.aggroRange) {
+        LOG_ERROR("MonsterDefinition: '" + id + "' leashRange must be > aggroRange.");
+        return false;
+    }
+    if (definition.ai.wanderIntervalMin < 0.0f ||
+        definition.ai.wanderIntervalMax < definition.ai.wanderIntervalMin) {
+        LOG_ERROR("MonsterDefinition: '" + id + "' invalid wanderInterval range [" +
+                  std::to_string(definition.ai.wanderIntervalMin) + ", " +
+                  std::to_string(definition.ai.wanderIntervalMax) + "] (need Min >= 0, Max >= Min).");
+        return false;
+    }
+    // ---- 跨字段：怪物进入攻击范围后才攻击，停步距离必须 <= attackRange（含极小容差）。
+    //      禁止 attackRange 65 / stopDistance 100 这类"停住但打不到"的配置 ----
+    if (definition.ai.stopDistance > definition.combat.attackRange + 1.0f) {
+        LOG_ERROR("MonsterDefinition: '" + id + "' stopDistance (" +
+                  std::to_string(definition.ai.stopDistance) + ") > attackRange (" +
+                  std::to_string(definition.combat.attackRange) + "): monster would stop out of range.");
         return false;
     }
     return true;
 }
-} // namespace
 
 bool LoadMonsterRegistry(const std::string& filePath,
                          std::unordered_map<std::string, MonsterDefinition>& out) {
@@ -88,25 +112,11 @@ bool LoadMonsterRegistry(const std::string& filePath,
         definition.id = entry["id"].get<std::string>();
         definition.name = entry.value("name", definition.id);
         definition.characterPath = entry["character"].get<std::string>();
-        // combat 块：数据驱动战斗属性；缺省给保守默认（可配置原则）
+        // ---- 先完整解析 AI 与 Combat（顺序固定，禁止中途互相引用） ----
         if (entry.contains("combat") && entry["combat"].is_object()) {
-            const json& cb = entry["combat"];
-            definition.combat.maxHp = cb.value("maxHp", 100.0f);
-            definition.combat.hp = definition.combat.maxHp;
-            definition.combat.attack = cb.value("attack", 10.0f);
-            definition.combat.defense = cb.value("defense", 0.0f);
-            definition.combat.attackRange = cb.value("attackRange", 70.0f);
-            definition.combat.attackInterval = cb.value("attackInterval", 1.5f);
-            if (!definition.combat.IsValid()) {
-                LOG_ERROR("MonsterDefinition: '" + definition.id +
-                          "' has invalid combat block, template skipped.");
+            if (!ParseCombatBlock(entry["combat"], definition.combat)) {
                 ++skipped;
                 continue;
-            }
-            // 停步距离必须 <= attackRange（否则永远打不到目标）
-            if (definition.ai.stopDistance > definition.combat.attackRange + 1.0f) {
-                LOG_WARN("MonsterDefinition: '" + definition.id +
-                         "' stopDistance > attackRange, chase may stop out of range.");
             }
         }
         if (entry.contains("ai") && entry["ai"].is_object()) {
@@ -114,6 +124,11 @@ bool LoadMonsterRegistry(const std::string& filePath,
                 ++skipped;
                 continue;
             }
+        }
+        // ---- 再统一跨字段校验（非法模板跳过） ----
+        if (!ValidateMonsterDefinition(definition)) {
+            ++skipped;
+            continue;
         }
         if (out.count(definition.id) > 0) {
             LOG_WARN("MonsterDefinition: duplicate id '" + definition.id + "', skipped.");

@@ -35,4 +35,9 @@ struct MonsterDefinition {
 bool LoadMonsterRegistry(const std::string& filePath,
                          std::unordered_map<std::string, MonsterDefinition>& out);
 
+// 跨字段统一校验（AI+Combat 全部解析完成后调用）：combat 有效性、
+// resume>stop、leash>aggro、wanderIntervalMax>=Min、stopDistance<=attackRange+容差。
+// 非法返回 false（调用方跳过该模板）。导出供配置校验测试使用。
+bool ValidateMonsterDefinition(const MonsterDefinition& definition);
+
 } // namespace legend::world

@@ -12,6 +12,11 @@ namespace legend::combat {
 
 bool CombatSystem::ValidateAttack(const legend::entity::Character& attacker,
                                   const legend::entity::Character& target) const {
+    // 严格校验：inactive Actor 绝不能攻击 / 被攻击 / 产生 DamageEvent
+    if (!attacker.IsActive() || !target.IsActive()) {
+        return false;
+    }
+    // 战斗存活 = combat enabled + HP > 0（尸体与 NPC 不参战）
     if (!attacker.IsCombatAlive() || !target.IsCombatAlive()) {
         return false;
     }
@@ -44,8 +49,9 @@ bool CombatSystem::ResolveAttack(legend::entity::Character& attacker,
 
 bool CombatSystem::ApplyDamage(const DamageEvent& event) {
     legend::entity::Character* target = m_registry.Get(event.targetId);
-    if (target == nullptr) {
-        return false; // 目标已不存在（despawn），事件作废
+    // 阶段5.1：inactive Actor 绝不能被攻击（即使绕过 ValidateAttack 直接调用）
+    if (target == nullptr || !target->IsActive()) {
+        return false; // 目标已不存在（despawn）或 inactive，事件作废
     }
     const float applied = target->GetCombatStats().TakeDamage(event.finalDamage);
     if (applied <= 0.0f) {
