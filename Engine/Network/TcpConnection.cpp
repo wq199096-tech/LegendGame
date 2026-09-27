@@ -3,6 +3,9 @@
 #include "Engine/Debug/Logger.h"
 
 #include <algorithm>
+#include <chrono>
+
+#include <future>
 
 namespace legend::net {
 
@@ -166,6 +169,30 @@ void TcpConnection::WriteNext() {
                       }));
 }
 
+void TcpConnection::DetachAllHandlers() {
+    // 阶段9.3 UAF 修复：post 到 strand（与 Fail/Close 串行化，防撕裂 std::function）
+    asio::post(m_strand, [self = shared_from_this()]() {
+        self->m_onPacket = nullptr;
+        self->m_onClose = nullptr;
+        self->m_internalClose = nullptr;
+    });
+}
+
+void TcpConnection::CloseBlocking() {
+    // Stop3: strand-serialized detach + Fail; caller blocks until the socket
+    // is really closed. Do NOT call from the io thread (deadlock).
+    std::promise<void> done;
+    auto fut = done.get_future();
+    asio::post(m_strand, [self = shared_from_this(), &done]() {
+        self->m_onPacket = nullptr;
+        self->m_onClose = nullptr;
+        self->m_internalClose = nullptr;
+        self->Fail(std::error_code{});
+        done.set_value();
+    });
+    fut.wait();
+}
+
 void TcpConnection::Fail(const std::error_code& ec) {
     if (m_closed) {
         return; // 阶段9.1指令二十六：CloseHandler exactly-once
@@ -173,7 +200,18 @@ void TcpConnection::Fail(const std::error_code& ec) {
     m_closed = true;
     m_connected.store(false);
     std::error_code ignored;
-    m_socket.close(ignored);
+    // RST-race fix: closesocket discards buffered data and sends RST when
+    // the peer already closed. shutdown(SEND) flushes queued data + FIN;
+    // the real close is delayed 100ms (timer holds self).
+    std::error_code shutdownEc;
+    m_socket.shutdown(asio::socket_base::shutdown_send, shutdownEc);
+    auto drainSelf = shared_from_this();
+    auto drainTimer = std::make_shared<asio::steady_timer>(m_socket.get_executor());
+    drainTimer->expires_after(std::chrono::milliseconds(100));
+    drainTimer->async_wait([drainSelf, drainTimer](const std::error_code&) {
+        std::error_code closeEc;
+        drainSelf->m_socket.close(closeEc);
+    });
     // 注意：不 clear m_writeQueue——挂起的 async_write 仍引用 front；
     // socket close 会让其以 error 完成，回调检测 m_closed 直接退出（不 pop）。
     if (m_internalClose) {

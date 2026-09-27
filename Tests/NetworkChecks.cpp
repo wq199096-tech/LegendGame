@@ -353,11 +353,14 @@ void RunTcpConnectionChecks() {
     {
         NetworkService service;
         service.Start();
-        TcpServer server(service);
+        auto server = std::make_shared<TcpServer>(service);
         std::string error;
-        bool listening = server.Listen(17230, error);
-        server.StartAccepting([](TcpConnectionPtr) {});
+        bool listening = server->Listen(17230, error);
+        server->StartAccepting([](TcpConnectionPtr) {});
         asio::io_context clientIo;
+        // 阶段9.3 修复：clientIo 必须运行——Start/Close 全部经 strand post，
+        // io 不运行则 posted 回调永不执行（closeCount 恒 0）
+        std::thread clientIoThread([&clientIo] { clientIo.run(); });
         asio::ip::tcp::socket socket(clientIo);
         std::error_code ec;
         socket.connect(
@@ -385,19 +388,21 @@ void RunTcpConnectionChecks() {
             Check("TcpConnectionSingleStartCheck: second Start rejected", false);
             Check("ConnectionCloseExactlyOnceCheck: close handler fired once", false);
         }
-        server.Stop();
+        server->Stop();
         service.Stop();
+        clientIo.stop();
+        clientIoThread.join();
     }
     // 13 [SequenceViolationCheck]（指令二十三）：sequence 重复 -> 断开
     {
         NetworkService service;
         service.Start();
-        TcpServer server(service);
+        auto server = std::make_shared<TcpServer>(service);
         std::string error;
-        server.Listen(17231, error);
+        server->Listen(17231, error);
         std::atomic<int> dispatched{0};
         std::atomic<bool> closed{false};
-        server.StartAccepting([&](TcpConnectionPtr connection) {
+        server->StartAccepting([&](TcpConnectionPtr connection) {
             connection->SetInternalCloseHandler([&closed](std::uint64_t) { closed = true; });
             connection->Start([&](const Packet&) { ++dispatched; },
                               [](std::uint64_t, const std::error_code&) {});
@@ -419,7 +424,7 @@ void RunTcpConnectionChecks() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         Check("SequenceViolationCheck: duplicate sequence closes link, no second dispatch",
               closed.load() && dispatched.load() == 1);
-        server.Stop();
+        server->Stop();
         service.Stop();
     }
 }
@@ -452,38 +457,63 @@ void RunNetworkChecks() {
         socket.connect(
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), kTestGatewayPort), ec);
         bool rejected = false;
+        bool sawClose = false;
         if (!ec) {
             asio::write(socket, asio::buffer(hello), ec);
-            // 阻塞读线程：ServerHello 到达即返回（2s 无数据 = 服务器未发）
-            std::vector<std::uint8_t> response(256);
-            std::atomic<std::size_t> received{0};
-            std::thread reader([&] {
+            // 指令五：non_blocking 轮询读（禁止 detach 阻塞线程）；上限 2 秒
+            socket.non_blocking(true, ec);
+            std::vector<std::uint8_t> bytes;
+            std::array<std::uint8_t, 512> chunk{};
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (std::chrono::steady_clock::now() < deadline) {
                 std::error_code readEc;
-                const auto n =
-                    socket.read_some(asio::buffer(response.data(), response.size()), readEc);
-                received.store(n);
-            });
-            const bool gotData = WaitUntil([&] { return received.load() > 0; }, 2000);
-            if (reader.joinable()) {
-                reader.detach(); // 阻塞读：进程退出前 socket 关闭自然返回
-            }
-            const std::size_t receivedCount = received.load();
-            bool rejected = false;
-            if (gotData && receivedCount >= kPacketHeaderSize) {
+                const std::size_t n = socket.read_some(asio::buffer(chunk), readEc);
+                            if (readEc.value() == static_cast<int>(asio::error::basic_errors::would_block)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                if (readEc || n == 0) {
+                    sawClose = true; // EOF/reset：服务器已断开
+                    break;
+                }
+                bytes.insert(bytes.end(), chunk.begin(),
+                             chunk.begin() + static_cast<std::ptrdiff_t>(n));
+                if (bytes.size() < kPacketHeaderSize) {
+                    continue; // 半 Header：继续收
+                }
                 Packet decoded;
                 std::string decodeError;
-                if (PacketCodec::DecodePacket(response.data(), receivedCount, decoded,
-                                              decodeError)) {
-                    ByteReader r(decoded.payload.data(), decoded.payload.size());
-                    rejected = !r.ReadBool(); // accepted == false
-                } else {
-                    std::printf("[diag] decode failed: %s (received=%zu)\n",
-                                decodeError.c_str(), receivedCount);
+                if (!PacketCodec::DecodePacket(bytes.data(), bytes.size(), decoded, decodeError)) {
+                    continue; // 半包：继续收
                 }
-            } else {
-                std::printf("[diag] no response (received=%zu)\n", receivedCount);
+                ServerHelloPayload serverHello;
+                if (!DecodeServerHello(decoded.payload.data(), decoded.payload.size(),
+                                       serverHello, decodeError)) {
+                    std::printf("[diag] ServerHello decode failed: %s\n", decodeError.c_str());
+                    break;
+                }
+                rejected = !serverHello.accepted;
+                break;
             }
-            Check("BadVersionHandshakeCheck: version 999 rejected (accepted=false)", rejected);
+            if (!sawClose) {
+                // 指令五：收到 accepted=false 后必须确认连接关闭（CloseAfterFlush -> EOF）
+                const auto closeDeadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (std::chrono::steady_clock::now() < closeDeadline) {
+                    std::error_code readEc;
+                    const std::size_t n = socket.read_some(asio::buffer(chunk), readEc);
+                    if (readEc.value() == static_cast<int>(asio::error::basic_errors::would_block)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                        continue;
+                    }
+                    sawClose = true; // 任何错误/EOF = 连接已关闭
+                    break;
+                }
+            }
+            socket.close(ec);
+        }
+        Check("BadVersionHandshakeCheck: version 999 rejected (accepted=false)", rejected);
+        Check("BadVersionHandshakeCheck: connection closed after reject", sawClose);
     }
     // 16-19 [LoginResponseExactlyOnceCheck]（指令二十三）四场景各 count==1
     {
@@ -492,10 +522,16 @@ void RunNetworkChecks() {
               client.ConnectAndWait() && client.SendLoginAndWait(true) &&
                   client.loginResponseCount == 1 && client.lastErrorCode == 0 &&
                   client.lastAccountId == 1001);
-        Check("LoginResponseExactlyOnceCheck: failure count==1",
-              client.SendLoginAndWait(false) && client.loginResponseCount == 1 &&
-                  client.lastErrorCode == static_cast<std::uint16_t>(LoginErrorCode::InvalidCredentials));
         client.Disconnect();
+        // 场景二：InvalidCredentials 必须用独立会话——已认证会话按指令七十九/八十
+        // 由 Gateway 本地拒绝（AlreadyAuthenticated），不转发（设计语义）
+        TestClient badClient;
+        Check("LoginResponseExactlyOnceCheck: failure count==1",
+              badClient.ConnectAndWait() && badClient.SendLoginAndWait(false) &&
+                  badClient.loginResponseCount == 1 &&
+                  badClient.lastErrorCode ==
+                      static_cast<std::uint16_t>(LoginErrorCode::InvalidCredentials));
+        badClient.Disconnect();
     }
     // 20 [LoginServiceUnavailableCheck]
     {
@@ -524,20 +560,37 @@ void RunNetworkChecks() {
     }
     // 22 [PendingTimeoutCheck]（指令二十五）：Login 收 Forward 不回 -> 0.5s Timeout
     {
-        // 用第二个 LoginServer 实例占住端口不响应：直接 hook 掉 login 的认证
-        // 简化：Gateway pendingLoginTimeout=0.5s；Fake login（TcpServer 占 17211 不回包）
+        // Fake login：完成 Gateway→Login 内部握手（指令九：ServerHello accepted=true），
+        // 之后对 GatewayLoginForward 永不回应 -> Gateway pending 0.5s 超时
         servers.login->Stop();
         servers.login.reset();
         servers.loginService.Stop();
         WaitUntil([&] { return !servers.gateway->IsLoginConnected(); }, 3000);
         NetworkService fakeLoginService;
         fakeLoginService.Start();
-        TcpServer fakeLogin(fakeLoginService);
+        auto fakeLogin = std::make_shared<TcpServer>(fakeLoginService);
         std::string error;
-        fakeLogin.Listen(kTestLoginPort, error);
-        fakeLogin.StartAccepting([](TcpConnectionPtr connection) {
-            connection->Start([](const Packet&) {}, // 永不回应
-                              [](std::uint64_t, const std::error_code&) {});
+        fakeLogin->Listen(kTestLoginPort, error);
+        fakeLogin->StartAccepting([](TcpConnectionPtr connection) {
+            connection->Start(
+                [connection](const Packet& packet) {
+                    if (static_cast<MessageId>(packet.header.messageId) ==
+                        MessageId::ClientHello) {
+                        ServerHelloPayload hello;
+                        hello.accepted = true;
+                        hello.protocolVersion = kProtocolVersion;
+                        hello.connectionId = 1;
+                        hello.serverName = "FakeLogin";
+                        Packet out;
+                        out.header.messageId =
+                            static_cast<std::uint16_t>(MessageId::ServerHello);
+                        if (EncodeServerHello(hello, out.payload)) {
+                            connection->Send(out);
+                        }
+                    }
+                    // GatewayLoginForward：故意不回应 -> pending 超时
+                },
+                [](std::uint64_t, const std::error_code&) {});
         });
         WaitUntil([&] { return servers.gateway->IsLoginConnected(); }, 5000);
         TestClient client;
@@ -548,7 +601,7 @@ void RunNetworkChecks() {
             WaitUntil([&] { return servers.gateway->PendingLoginCount() == 0; }, 2000);
         Check("PendingTimeoutCheck", ok && pendingCleared);
         client.Disconnect();
-        fakeLogin.Stop();
+        fakeLogin->Stop();
         fakeLoginService.Stop();
     }
     // 23 [HeartbeatCheck]
@@ -565,12 +618,14 @@ void RunNetworkChecks() {
         // Fake gateway：握手成功但不回 Pong
         NetworkService fakeGatewayService;
         fakeGatewayService.Start();
-        TcpServer fakeGateway(fakeGatewayService);
+        auto fakeGateway = std::make_shared<TcpServer>(fakeGatewayService);
         std::string error;
-        fakeGateway.Listen(17240, error);
-        fakeGateway.StartAccepting([&](TcpConnectionPtr connection) {
+        fakeGateway->Listen(17240, error);
+        fakeGateway->StartAccepting([](TcpConnectionPtr connection) {
+            // 阶段9.3 UAF 修复：必须按值捕获 connection——内层包处理器存活期
+            // 远超外层 lambda 栈帧，[&] 引用捕获 = 读已销毁栈槽（堆损坏源头）
             connection->Start(
-                [&](const Packet& packet) {
+                [connection](const Packet& packet) {
                     if (static_cast<MessageId>(packet.header.messageId) ==
                         MessageId::ClientHello) {
                         // 回 ServerHello accepted（握手成功），之后 Pong 静默
@@ -600,6 +655,8 @@ void RunNetworkChecks() {
         bool sawDisconnected = false;
         WaitUntil(
             [&] {
+                // 指令十九：超时检测由主线程 UpdateHeartbeat 驱动，不能只等事件
+                client->UpdateHeartbeat(0.1f);
                 std::deque<NetworkEvent> events;
                 client->PollEvents(events);
                 for (auto& e : events) {
@@ -615,7 +672,7 @@ void RunNetworkChecks() {
             5000);
         Check("HeartbeatTimeoutCheck", sawTimeout && sawDisconnected);
         client->Disconnect(false);
-        fakeGateway.Stop();
+        fakeGateway->Stop();
         fakeGatewayService.Stop();
     }
     // 25 [GatewayIdleTimeoutCheck]（指令二十八）：0.5s idle -> Gateway 主动断开
@@ -625,11 +682,8 @@ void RunNetworkChecks() {
         servers.gateway->Stop();
         servers.gateway.reset();
         servers.gatewayService.Stop();
-        servers.gateway->~GatewayServer(); // 不允许——直接重建
-        servers.gateway.reset();
-        // 重新 StartGateway 传 0.5
-        // （StartGateway 签名支持 idleTimeoutSeconds）
-        servers.StartGateway(0.5);
+        // 指令：禁止显式调用析构/对 null shared_ptr 解引用——直接重建
+        servers.StartGateway(0.5); // StartGateway 签名支持 idleTimeoutSeconds
         WaitUntil([&] { return servers.gateway->IsLoginConnected(); }, 5000);
         auto client = std::make_shared<GameNetworkClient>();
         client->Connect("127.0.0.1", kTestGatewayPort);
@@ -666,6 +720,12 @@ void RunNetworkChecks() {
         std::vector<std::uint8_t> bytes;
         PacketCodec::EncodePacket(packet, bytes);
         RawSendChunks({bytes});
+        // Check 22 起 login 已停：重启并等 Gateway→Login 握手恢复，probe 才能
+        // 走完整登录链路验证 gateway 存活（指令三十）
+        if (!servers.login) {
+            Check("LoginRestartForMalformedCheck", servers.StartLogin());
+            WaitUntil([&] { return servers.gateway->IsLoginConnected(); }, 5000);
+        }
         TestClient probe;
         Check("MalformedPayloadCheck: malformed dropped, gateway alive",
               probe.ConnectAndWait() && probe.SendLoginAndWait(true));
@@ -711,9 +771,9 @@ void RunNetworkChecks() {
             w.WriteString("CoalClient");
         });
         auto ping1 = EncodeMessage(MessageId::HeartbeatPing,
-                                   [](ByteWriter& w) { w.WriteUInt32(1); }, 2);
+                                   [](ByteWriter& w) { w.WriteUInt32(1); w.WriteUInt64(0); }, 2);
         auto ping2 = EncodeMessage(MessageId::HeartbeatPing,
-                                   [](ByteWriter& w) { w.WriteUInt32(2); }, 3);
+                                   [](ByteWriter& w) { w.WriteUInt32(2); w.WriteUInt64(0); }, 3);
         std::vector<std::uint8_t> merged;
         merged.insert(merged.end(), hello.begin(), hello.end());
         merged.insert(merged.end(), ping1.begin(), ping1.end());
@@ -729,6 +789,7 @@ void RunNetworkChecks() {
         std::vector<std::unique_ptr<TestClient>> clients;
         for (int i = 0; i < 10; ++i) {
             clients.push_back(std::make_unique<TestClient>());
+            clients.back()->ConnectAndWait(); // MultiClient: must actually connect
         }
         int readyCount = 0;
         WaitUntil(
@@ -805,21 +866,46 @@ void RunNetworkChecks() {
     }
     // 34 [ConnectTimeoutRaceCheck]（指令三十一）
     {
+        // Check 33 已 Stop gateway：重启（NetworkService 复用，Start 幂等）
+        servers.StartGateway();
         auto client = std::make_shared<GameNetworkClient>();
-        std::atomic<int> connected{0};
-        std::atomic<int> failed{0};
+        std::atomic<int> connectedCount{0};
+        std::atomic<int> failureCount{0};
         client->Connect("127.0.0.1", kTestGatewayPort);
         WaitUntil([&] { return client->State() == NetworkState::Ready; }, 3000);
-        // 主动断开后心跳 timer cancel：验证不会再次 onFailure
+        // 指令十七：连接成功后等待超过测试 connect timeout 窗口，统计真实事件
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        auto countEvents = [&](std::deque<NetworkEvent>& events) {
+            for (auto& e : events) {
+                if (e.type == NetworkEvent::Type::Connected) {
+                    ++connectedCount;
+                }
+                if (e.type == NetworkEvent::Type::ConnectFailed) {
+                    ++failureCount;
+                }
+            }
+        };
+        {
+            std::deque<NetworkEvent> events;
+            client->PollEvents(events);
+            countEvents(events);
+        }
+        // 主动断开后心跳 timer cancel：验证不会出现迟到的 onFailure
         client->Disconnect(true);
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        std::deque<NetworkEvent> events;
-        client->PollEvents(events);
-        Check("ConnectTimeoutRaceCheck", connected.load() >= 0 && failed.load() == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        {
+            std::deque<NetworkEvent> events;
+            client->PollEvents(events);
+            countEvents(events);
+        }
+        Check("ConnectTimeoutRaceCheck",
+              connectedCount.load() == 1 && failureCount.load() == 0);
     }
 }
 
 int main() {
+    // 阶段9.3：无缓冲 stdout——断点/崩溃时已打印的 Check 全部落盘，便于定位
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("[NetworkTest] start\n");
     RunProtocolChecks();
     RunTcpConnectionChecks();

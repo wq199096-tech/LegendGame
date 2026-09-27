@@ -8,6 +8,12 @@ TcpServer::TcpServer(NetworkService& service)
       m_acceptor(m_io),
       m_nextSocket(m_io) {}
 
+TcpServer::~TcpServer() {
+    // 阶段9.3 UAF 修复：销毁兜底——未显式 Stop 时同样摘除连接回调，
+    // 防挂起 Fail 触达已释放的 TcpServer（RemoveConnection UAF）
+    Stop();
+}
+
 bool TcpServer::Listen(std::uint16_t port, std::string& error) {
     try {
         asio::ip::tcp::endpoint endpoint(asio::ip::make_address("127.0.0.1"), port);
@@ -33,7 +39,9 @@ void TcpServer::DoAccept() {
     if (!m_accepting.load()) {
         return;
     }
-    auto self = this;
+    // 阶段9.3 UAF 修复：shared_from_this 保活——挂起的 async_accept 完成回调
+    // 可能晚于持有者（LoginServer/GatewayServer）析构才执行（IOCP abort 路径）
+    auto self = shared_from_this();
     m_acceptor.async_accept(m_nextSocket, [self](std::error_code ec) {
         if (!self->m_accepting.load()) {
             return; // Stop 中
@@ -65,10 +73,17 @@ void TcpServer::RemoveConnection(std::uint64_t id) {
 
 void TcpServer::Stop() {
     m_accepting.store(false);
+    // 阶段9.3：摘除业务 accept 回调（其捕获 LoginServer/GatewayServer 的 this，
+    // 持有者销毁后不得触达；挂起 accept 由 self 保活并在此安全丢弃）
+    m_onAccept = nullptr;
     std::error_code ignored;
     m_acceptor.close(ignored);
     for (auto& [id, connection] : m_connections) {
-        connection->Close();
+        // 阶段9.3 UAF 修复：先经 strand 摘除连接全部回调再关闭——
+        // Server（LoginServer/GatewayServer）销毁后，挂起的 Fail 不得再
+        // 触达已释放的 TcpServer（RemoveConnection heap-use-after-free）
+        // Stop3: synchronous close - FIN is on the wire when Stop returns.
+        connection->CloseBlocking();
     }
     m_connections.clear();
 }

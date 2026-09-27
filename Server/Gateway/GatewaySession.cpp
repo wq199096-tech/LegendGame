@@ -1,5 +1,6 @@
 #include "Server/Gateway/GatewaySession.h"
 
+#include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/ByteWriter.h"
 

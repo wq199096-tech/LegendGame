@@ -7,36 +7,45 @@
 
 namespace legend::login {
 
-using legend::network::ByteReader;
-using legend::network::ByteWriter;
+using legend::network::ClientHelloPayload;
+using legend::network::DecodeClientHello;
+using legend::network::DecodeGatewayLoginForward;
+using legend::network::EncodeLoginGatewayResponse;
+using legend::network::EncodeServerHello;
+using legend::network::GatewayLoginForwardPayload;
+using legend::network::kProtocolVersion;
+using legend::network::LoginErrorCode;
+using legend::network::LoginGatewayResponsePayload;
 using legend::network::MessageId;
 using legend::network::Packet;
+using legend::network::ServerHelloPayload;
 namespace net = legend::net;
 
 namespace {
 // 指令五十三：阶段9 临时认证（仅用于网络链路验收；后续阶段接数据库）
 constexpr const char* kTestUsername = "test";
 constexpr const char* kTestToken = "dev_token";
-// 指令五十四：测试账号成功固定值
-constexpr std::uint32_t kTestAccountId = 1001;
+// 指令五十四：测试账号成功固定值（指令十二：accountId 全链 uint64）
+constexpr std::uint64_t kTestAccountId = 1001;
 constexpr const char* kTestDisplayName = "TestPlayer";
 } // namespace
 
 LoginServer::LoginServer(net::NetworkService& service)
-    : m_service(service), m_server(service) {}
+    : m_service(service),
+      m_server(std::make_shared<net::TcpServer>(service)) {}
 
 bool LoginServer::Start(std::string& error) {
-    if (!m_server.Listen(m_config.listenPort, error)) {
+    if (!m_server->Listen(m_config.listenPort, error)) {
         return false;
     }
-    m_server.StartAccepting(
+    m_server->StartAccepting(
         [this](net::TcpConnectionPtr connection) { OnGatewayAccepted(std::move(connection)); });
     return true;
 }
 
 void LoginServer::Stop() {
     m_stopped.store(true);
-    m_server.Stop();
+    m_server->Stop();
     m_gateways.clear();
 }
 
@@ -64,31 +73,50 @@ void LoginServer::OnGatewayPacket(std::uint64_t connectionId, const Packet& pack
     }
     switch (static_cast<MessageId>(packet.header.messageId)) {
         case MessageId::ClientHello: {
-            // 阶段9.2指令十二/十三：握手门——DecodeClientHello + 版本校验；
-            // 重复 ClientHello（已握手）同样关闭
+            // 阶段9.3指令七/八：Shared Protocol 握手门——DecodeClientHello，
+            // 禁止手写 ByteReader；重复 ClientHello（已握手）关闭
             if (it->second.handshakeDone) {
                 it->second.connection->Close();
                 m_gateways.erase(it);
                 return;
             }
-            // 阶段9.2：DecodeClientHello 暂以手写读替代（Protocol 链接问题待查），
-            // 版本校验/握手门语义不变（指令十二/十三）
-            ByteReader helloReader(packet.payload.data(), packet.payload.size());
-            const std::uint16_t helloVersion = helloReader.ReadUInt16();
-            std::string helloBuild;
-            std::string helloName;
-            if (!helloReader.IsValid() || !helloReader.ReadString(helloBuild) ||
-                !helloReader.ReadString(helloName) || helloReader.Remaining() != 0) {
+            ClientHelloPayload hello;
+            std::string decodeError;
+            if (!DecodeClientHello(packet.payload.data(), packet.payload.size(), hello,
+                                   decodeError)) {
+                // 畸形 ClientHello -> 协议错误，关闭内部连接
                 it->second.connection->Close();
                 m_gateways.erase(it);
                 return;
             }
-            if (helloVersion != kProtocolVersion) {
-                // 指令十二：版本不符 -> 关闭内部连接
+            // 指令八：构造 ServerHelloPayload + EncodeServerHello
+            ServerHelloPayload serverHello;
+            serverHello.protocolVersion = kProtocolVersion;
+            serverHello.connectionId = connectionId;
+            serverHello.serverName = "LegendLoginServer";
+            if (hello.protocolVersion != kProtocolVersion) {
+                // 指令八：版本错误 -> ServerHello accepted=false + CloseAfterFlush
+                serverHello.accepted = false;
+                serverHello.message = "protocol version mismatch";
+                Packet out;
+                out.header.messageId = static_cast<std::uint16_t>(MessageId::ServerHello);
+                if (EncodeServerHello(serverHello, out.payload)) {
+                    it->second.connection->Send(out);
+                }
+                it->second.connection->CloseAfterFlush();
+                m_gateways.erase(it);
+                return;
+            }
+            serverHello.accepted = true;
+            serverHello.message = "welcome";
+            Packet out;
+            out.header.messageId = static_cast<std::uint16_t>(MessageId::ServerHello);
+            if (!EncodeServerHello(serverHello, out.payload)) {
                 it->second.connection->Close();
                 m_gateways.erase(it);
                 return;
             }
+            it->second.connection->Send(out);
             it->second.handshakeDone = true;
             return;
         }
@@ -128,12 +156,11 @@ void LoginServer::HandleAuthRequest(std::uint64_t gatewayConnectionId, const Pac
 
     // 指令五十三 + 阶段9.2指令六：errorCode=None/InvalidCredentials（u64 accountId）
     const bool success = username == kTestUsername && token == kTestToken;
-    const LoginGatewayResponsePayload response;
     LoginGatewayResponsePayload out;
     out.requestId = requestId;
     out.clientConnectionId = clientConnectionId;
     out.success = success;
-    out.accountId = success ? static_cast<std::uint64_t>(kTestAccountId) : 0;
+    out.accountId = success ? kTestAccountId : 0;
     out.displayName = success ? kTestDisplayName : "";
     out.errorCode = success ? static_cast<std::uint16_t>(LoginErrorCode::None)
                             : static_cast<std::uint16_t>(LoginErrorCode::InvalidCredentials);
@@ -147,7 +174,6 @@ void LoginServer::HandleAuthRequest(std::uint64_t gatewayConnectionId, const Pac
     if (m_hooks.onAuthResult) {
         m_hooks.onAuthResult(requestId, username, success, out.accountId);
     }
-    (void)response;
 }
 
 } // namespace legend::login

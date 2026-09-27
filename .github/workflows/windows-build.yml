@@ -16,12 +16,28 @@ jobs:
       - name: Configure CMake
         run: cmake -S . -B build
 
-      - name: Build (LegendClient + LegendMapEditor)
+      - name: Build (all targets)
         run: cmake --build build --config Debug --parallel
 
-      - name: Verify artifacts
+      - name: Verify artifacts (5 executables)
         shell: pwsh
         run: |
-          if (-not (Test-Path 'build/bin/Debug/LegendClient.exe')) { Write-Error 'LegendClient.exe missing'; exit 1 }
-          if (-not (Test-Path 'build/bin/Debug/LegendMapEditor.exe')) { Write-Error 'LegendMapEditor.exe missing'; exit 1 }
-          Write-Host 'Both executables built successfully.'
+          $exes = @(
+            'build/bin/Debug/LegendClient.exe',
+            'build/bin/Debug/LegendMapEditor.exe',
+            'build/bin/Debug/LegendGateway.exe',
+            'build/bin/Debug/LegendLoginServer.exe',
+            'build/bin/Debug/LegendNetworkTests.exe'
+          )
+          foreach ($exe in $exes) {
+            if (-not (Test-Path $exe)) { Write-Error "$exe missing"; exit 1 }
+          }
+          Write-Host 'NETWORK BUILD PASS'
+
+      # 阶段9.3指令三十一：CTest Runtime 硬门禁（禁止 continue-on-error）
+      - name: Run network runtime tests (CTest hard gate)
+        shell: pwsh
+        run: |
+          ctest --test-dir build -C Debug --output-on-failure
+          if ($LASTEXITCODE -ne 0) { Write-Error 'NetworkTests failed'; exit 1 }
+          Write-Host 'NETWORK RUNTIME TEST PASS'

@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
                                                     : "[Login] Gateway disconnected."); },
         .onAuthResult =
             [](std::uint64_t requestId, const std::string& username, bool success,
-               std::uint32_t accountId) {
+               std::uint64_t accountId) {
                 LOG_INFO(std::string("[Login] Auth request id=") + std::to_string(requestId) +
                          " user=" + username + " -> " +
                          (success ? "success account=" + std::to_string(accountId)

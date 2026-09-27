@@ -73,22 +73,26 @@ private:
     void ScheduleLoginReconnect();
     void OnLoginConnected(legend::net::TcpConnectionPtr connection);
     void OnLoginClosed(const std::error_code& ec);
-    void OnLoginPacket(const legend::network::Packet& packet);
+    void OnLoginPacket(std::uint64_t linkId, const legend::network::Packet& packet);
     void HandleLoginGatewayResponse(const legend::network::Packet& packet);
 
     void ForwardLogin(std::uint64_t clientConnectionId, const std::string& username,
                       const std::string& token);
     void SendToClient(std::uint64_t connectionId, const legend::network::Packet& packet);
-    void SendLoginError(std::uint64_t connectionId, const std::string& message);
+    void SendLoginError(std::uint64_t connectionId, legend::network::LoginErrorCode errorCode,
+                        const std::string& message);
     void CheckPendingTimeouts();
     void SchedulePendingTimeoutCheck();
+    void CheckIdleTimeouts();
+    void ScheduleIdleTimeoutCheck();
 
     legend::net::NetworkService& m_service;
     GatewayConfig m_config;
-    legend::net::TcpServer m_server;
+    std::shared_ptr<legend::net::TcpServer> m_server;
     std::shared_ptr<legend::net::TcpClient> m_loginClient;
     legend::net::TcpConnectionPtr m_loginConnection;
     std::atomic<bool> m_loginAvailable{false};
+    bool m_loginHandshakeDone = false; // 指令九：Gateway→Login 内部握手（io 线程内访问）
     std::atomic<bool> m_stopped{false};
     std::atomic<bool> m_reconnectScheduled{false};
 
@@ -98,6 +102,7 @@ private:
 
     asio::steady_timer m_reconnectTimer;
     asio::steady_timer m_pendingTimer;
+    asio::steady_timer m_idleTimer; // Client idle scan (idle
 
     Hooks m_hooks;
 };

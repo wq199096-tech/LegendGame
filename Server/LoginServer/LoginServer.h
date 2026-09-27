@@ -26,7 +26,7 @@ public:
     struct Hooks {
         std::function<void(bool connected)> onGatewayConnectionChanged;
         std::function<void(std::uint64_t requestId, const std::string& username, bool success,
-                           std::uint32_t accountId)>
+                           std::uint64_t accountId)>
             onAuthResult;
     };
 
@@ -56,7 +56,7 @@ private:
 
     legend::net::NetworkService& m_service;
     Config m_config;
-    legend::net::TcpServer m_server;
+    std::shared_ptr<legend::net::TcpServer> m_server;
     std::map<std::uint64_t, GatewayLink> m_gateways;
     std::atomic<bool> m_stopped{false};
     Hooks m_hooks;

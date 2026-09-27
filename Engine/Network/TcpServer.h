@@ -13,12 +13,17 @@ namespace legend::net {
 
 // 阶段9 指令三十八/三十九/二十七：TcpServer——async_accept 循环 +
 // ConnectionId 单调分配（不用裸 socket 指针）+ 优雅 Stop。
-class TcpServer {
+// 阶段9.3 UAF 修复：enable_shared_from_this——挂起的 async_accept 完成
+// 回调持 shared_ptr 保活，Server（LoginServer/GatewayServer）先于 Service
+// 销毁时 abort 完成路径不得触达已释放对象。
+class TcpServer : public std::enable_shared_from_this<TcpServer> {
 public:
     using AcceptHandler = std::function<void(TcpConnectionPtr)>;
     using CloseHandler = std::function<void(std::uint64_t, const std::error_code&)>;
 
     explicit TcpServer(NetworkService& service);
+    // 阶段9.3 UAF 修复：销毁兜底（与 Stop 相同的回调摘除语义，防挂起 Fail 触达已释放 Server）
+    ~TcpServer();
 
     // 监听（reuse_address：阶段9 指令一百三十四，测试重复运行不 address_in_use）
     bool Listen(std::uint16_t port, std::string& error);

@@ -32,6 +32,13 @@ public:
     // 阶段9.1指令一/四：只能 Start 一次（防双 async_read 链）；重复调用 LOG_ERROR 拒绝
     void Start(PacketHandler onPacket, CloseHandler onClose);
     void SetInternalCloseHandler(InternalCloseHandler handler);
+    // 阶段9.3 UAF 修复：Server 销毁前经 strand 摘除全部回调——挂起的 Fail
+    // 不得再触达已释放的 TcpServer/业务对象（回调空检查在 Fail 内）
+    void DetachAllHandlers();
+    // Stop3: post to strand, detach all callbacks, Fail, and block until done.
+    // Guarantee: when TcpServer::Stop returns, the socket is really closed (FIN sent).
+    // Never call from the io thread or after the service stopped (deadlock).
+    void CloseBlocking();
     void Send(const legend::network::Packet& packet);
     void SendRaw(std::vector<std::uint8_t> bytes); // 已编码完整帧
     void Close();
