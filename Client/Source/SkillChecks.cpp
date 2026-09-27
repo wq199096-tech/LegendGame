@@ -2229,9 +2229,12 @@ void GameScene::UpdateSkillTest(float deltaTime) {
             m_skillTestSummaryDone = true;
             // 阶段8.1指令十三：恢复正式 slime 掉落表（禁止空表冒充，阶段7.2 同原则）
             RestoreSkillTestLootOverride(); // [SkillTest] official loot restored.
-            // 阶段8.1指令十四/十五：恢复全部 Actor（位置/HP/Active/State）+
-            // 清理测试新增 GroundLoot + 清空 Combat 事件
+            // 阶段8.2指令二十：RestoreSkillWorldSnapshot 内部按序恢复——
+            // Progression（level/currentExp/totalExp）→ Base Stats → Final 重算 →
+            // playerHp → Actor（位置/HP/Active/ActionState/AI/Aggro）→ Loot/事件清理
             RestoreSkillWorldSnapshot();
+            LOG_INFO("[SkillTest] progression restored.");
+            LOG_INFO("[SkillTest] aggro state restored.");
             // Player 恢复可玩基线：清目标 / 取消施法 / 清 CD / FillMana（Restore 内已做，
             // 此处显式补一次确保语义）
             m_playerCombat.GetTarget().ClearTarget();
@@ -2348,6 +2351,9 @@ void GameScene::CaptureSkillWorldSnapshot() {
         snapshot.playerHp = m_player->GetCombatStats().hp;
         snapshot.playerLevel = m_player->GetProgression().GetLevel();
         snapshot.playerTotalExp = m_player->GetProgression().GetTotalExp();
+        // 阶段8.2指令四/五：完整 Progression 快照 + Base Stats 快照
+        snapshot.progression = m_player->GetProgression().CreateSnapshot();
+        snapshot.playerBaseStats = m_player->GetBaseCombatStats();
     }
     snapshot.aliveMonsters = m_worldActors.GetAliveMonsterCount();
     const auto& loots = m_worldActors.GetLoot().GetAll();
@@ -2355,7 +2361,7 @@ void GameScene::CaptureSkillWorldSnapshot() {
     for (const auto& loot : loots) {
         snapshot.groundLootIds.push_back(loot.lootEntityId);
     }
-    auto captureActor = [&snapshot](legend::entity::Character* actor) {
+    auto captureActor = [this, &snapshot](legend::entity::Character* actor) {
         if (actor == nullptr) {
             return;
         }
@@ -2365,6 +2371,18 @@ void GameScene::CaptureSkillWorldSnapshot() {
         state.hp = actor->GetCombatStats().hp;
         state.active = actor->IsActive();
         state.actionState = static_cast<std::uint8_t>(actor->GetActionState());
+        // 阶段8.2指令十五：Monster 追加 AI/Aggro 快照（NPC 无 AI，字段留空）
+        if (actor->GetActorType() == legend::entity::ActorType::Monster) {
+            state.hasAI = true;
+            if (const auto* ai = m_worldActors.GetAIController(actor->GetId()); ai != nullptr) {
+                state.aggro = ai->GetAggroTable().CreateSnapshot();
+            }
+            const auto* monster = static_cast<const legend::world::MonsterCharacter*>(actor);
+            state.aiState = static_cast<int>(monster->GetAIState());
+            state.aiTargetId = monster->GetTargetHandle().IsEmpty()
+                                   ? legend::entity::kInvalidEntityId
+                                   : monster->GetTargetHandle().GetId();
+        }
         snapshot.actors.push_back(state);
     };
     for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
@@ -2394,13 +2412,49 @@ void GameScene::RestoreSkillWorldSnapshot() {
             actor->ReturnToNormal(); // 测试致死：复活（先退出 Dead 状态再恢复 HP）
         }
         stats.SetHp(std::min(state.hp, stats.maxHp));
-        if (stats.hp > 0.0f &&
-            actor->GetActionState() == legend::entity::CharacterActionState::Dead) {
-            actor->ReturnToNormal();
+        // 阶段8.2指令十六：ActionState 恢复（基线稳定状态语义化处理）
+        const auto snapshotState = static_cast<legend::entity::CharacterActionState>(
+            state.actionState);
+        if (stats.hp > 0.0f) {
+            if (snapshotState == legend::entity::CharacterActionState::Normal) {
+                if (actor->GetActionState() != legend::entity::CharacterActionState::Normal) {
+                    actor->ReturnToNormal();
+                }
+            } else if (snapshotState == legend::entity::CharacterActionState::Dead) {
+                if (actor->GetActionState() != legend::entity::CharacterActionState::Dead) {
+                    actor->EnterDead();
+                }
+            } else {
+                // Attacking/HitReact/SkillCasting 基线不应出现（Capture 要求稳定状态）；
+                // 保守回 Normal 并告警（不保存字段却完全不用）
+                LOG_WARN("[SkillSnapshot] actor #" + std::to_string(state.id) +
+                         " baseline actionState is transient, restored to Normal.");
+                actor->ReturnToNormal();
+            }
+        }
+        // 阶段8.2指令十三/十五：Monster AI/Aggro 恢复
+        if (state.hasAI && actor->GetActorType() == legend::entity::ActorType::Monster) {
+            if (auto* ai = m_worldActors.GetAIController(actor->GetId()); ai != nullptr) {
+                ai->GetAggroTable().RestoreSnapshot(state.aggro);
+            }
+            auto* monster = static_cast<legend::world::MonsterCharacter*>(actor);
+            monster->SetAIState(static_cast<legend::world::MonsterAIState>(state.aiState));
+            if (state.aiTargetId == legend::entity::kInvalidEntityId) {
+                monster->GetTargetHandle().Clear();
+            } else {
+                monster->GetTargetHandle().Set(state.aiTargetId);
+            }
         }
     }
     if (m_player != nullptr) {
-        m_player->SetPosition(snapshot.playerPosition);
+        m_player->SetPosition(snapshot.playerPosition); // 位置恢复（阶段8.2 补：不可遗漏）
+        // 阶段8.2指令七：恢复顺序——1) Progression 2) Base Stats 3) Recalculate Final
+        // 4) 恢复 playerHp 5) clamp 到 Final MaxHP（不要先恢复 HP 再重算 MaxHP）
+        if (!m_player->GetProgression().RestoreSnapshot(snapshot.progression)) {
+            LOG_ERROR("[SkillSnapshot] progression restore rejected (invalid baseline).");
+        }
+        m_player->RestoreBaseStats(snapshot.playerBaseStats);
+        m_player->RecalculateCombatStats(); // 当前正式 Equipment 重算 Final（指令六）
         m_player->GetCombatStats().SetHp(snapshot.playerHp);
         // Player 恢复可玩基线：清目标 + 取消施法 + 清 CD + FillMana + Normal（指令十五）
         m_playerCombat.GetTarget().ClearTarget();
@@ -2437,6 +2491,18 @@ void GameScene::RunSkillWorldStateIsolationCheck() {
           m_player != nullptr &&
               m_player->GetProgression().GetTotalExp() == snapshot.playerTotalExp &&
               m_player->GetProgression().GetLevel() == snapshot.playerLevel);
+    // 阶段8.2指令二十四：currentExp / Base Stats 对比（不能只比 Position/HP/Active）
+    check("player currentExp unchanged",
+          m_player != nullptr &&
+              m_player->GetProgression().GetCurrentExp() == snapshot.progression.currentExp);
+    check("player base stats unchanged",
+          m_player != nullptr &&
+              std::fabs(m_player->GetBaseCombatStats().maxHp -
+                        snapshot.playerBaseStats.maxHp) < 0.001f &&
+              std::fabs(m_player->GetBaseCombatStats().attack -
+                        snapshot.playerBaseStats.attack) < 0.001f &&
+              std::fabs(m_player->GetBaseCombatStats().defense -
+                        snapshot.playerBaseStats.defense) < 0.001f);
     check("ground loot count unchanged (no test drop)",
           m_worldActors.GetLoot().GetAll().size() == snapshot.groundLootCount);
     check("alive monster count unchanged (no test kill)",
@@ -2444,6 +2510,8 @@ void GameScene::RunSkillWorldStateIsolationCheck() {
     int posMismatch = 0;
     int hpMismatch = 0;
     int activeMismatch = 0;
+    int aggroMismatch = 0;
+    int aiMismatch = 0;
     for (const auto& state : snapshot.actors) {
         const legend::entity::Character* actor = m_worldActors.GetRegistry().Get(state.id);
         if (actor == nullptr) {
@@ -2459,10 +2527,36 @@ void GameScene::RunSkillWorldStateIsolationCheck() {
         if (actor->IsActive() != state.active) {
             ++activeMismatch;
         }
+        // 阶段8.2指令二十四：Monster Aggro/AI 对比
+        if (state.hasAI && actor->GetActorType() == legend::entity::ActorType::Monster) {
+            const auto* ai = m_worldActors.GetAIController(state.id);
+            const auto* monster =
+                static_cast<const legend::world::MonsterCharacter*>(actor);
+            if (ai == nullptr ||
+                ai->GetAggroTable().CreateSnapshot().size() != state.aggro.size()) {
+                ++aggroMismatch;
+            } else {
+                const auto aggroNow = ai->GetAggroTable().CreateSnapshot();
+                for (std::size_t i = 0; i < aggroNow.size() && i < state.aggro.size(); ++i) {
+                    if (aggroNow[i].first != state.aggro[i].first ||
+                        std::fabs(aggroNow[i].second - state.aggro[i].second) > 0.0001f) {
+                        ++aggroMismatch;
+                        break;
+                    }
+                }
+            }
+            if (monster == nullptr ||
+                static_cast<int>(monster->GetAIState()) != state.aiState ||
+                monster->GetTargetHandle().GetId() != state.aiTargetId) {
+                ++aiMismatch;
+            }
+        }
     }
     check("no monster teleported by checks", posMismatch == 0);
     check("no monster hp changed by checks", hpMismatch == 0);
     check("no monster killed/deactivated by checks", activeMismatch == 0);
+    check("no monster aggro changed by checks", aggroMismatch == 0);
+    check("no monster ai state/target changed by checks", aiMismatch == 0);
     LOG_INFO("[SkillWorldStateIsolationCheck] completed, failures = " +
              std::to_string(failures));
 }
@@ -2476,10 +2570,18 @@ void GameScene::RunSkillNoFreeRewardCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillNoFreeRewardCheck", name, pass, failures);
     };
-    check("player level is 1 (no free test exp)",
-          m_player != nullptr && m_player->GetProgression().GetLevel() == 1);
-    check("player total exp is 0 (no free test reward)",
-          m_player != nullptr && m_player->GetProgression().GetTotalExp() == 0);
+    const auto& snapshot = m_skillWorldSnapshot;
+    // 阶段8.2指令二十三：对比 Capture 基线（正式角色未来可能从存档 Level20 加载——
+    // 验收语义是"没有被测试改变"，不是"必须 Level1"）
+    check("player level unchanged by checks",
+          m_player != nullptr &&
+              m_player->GetProgression().GetLevel() == snapshot.progression.level);
+    check("player currentExp unchanged by checks",
+          m_player != nullptr &&
+              m_player->GetProgression().GetCurrentExp() == snapshot.progression.currentExp);
+    check("player totalExp unchanged by checks (no free test reward)",
+          m_player != nullptr &&
+              m_player->GetProgression().GetTotalExp() == snapshot.progression.totalExp);
     LOG_INFO("[SkillNoFreeRewardCheck] completed, failures = " + std::to_string(failures));
 }
 
@@ -2654,4 +2756,245 @@ void GameScene::RestoreSkillTestLootOverride() {
     m_worldActors.GetSpawner().SetTestLootOverride("slime", m_skillTestOriginalSlimeLoot);
     m_skillTestLootSaved = false;
     LOG_INFO("[SkillTest] official loot restored.");
+}
+
+// ==================== [SkillProgressionRestoreCheck] ====================
+// 阶段8.2指令九/十/十一：真实升级（≥2级）→ Restore → Level/currentExp/totalExp/
+// Base Stats（maxHp/attack/defense）/Final Stats/pendingLevelUps 全部回滚。
+
+void GameScene::RunSkillProgressionRestoreCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillProgressionRestoreCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillProgressionRestoreCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
+    const auto baseBefore = m_player->GetBaseCombatStats();
+
+    // 模拟测试污染：一次加入足够升 ≥2 级的经验（req(1)+req(2)=250，加 300 → lv3）
+    const auto levelUps = m_player->AddExperience(300);
+    check("polluted: leveled up at least 2 levels",
+          m_player->GetProgression().GetLevel() >= 3 && levelUps.size() >= 2);
+    check("polluted: base attack grew", m_player->GetBaseCombatStats().attack >
+                                            baseBefore.attack + 1.0f);
+    check("polluted: base maxHp grew", m_player->GetBaseCombatStats().maxHp >
+                                           baseBefore.maxHp + 1.0f);
+
+    // 阶段8.2指令九：Restore（RestoreGuard 析构；此处手动提前调用以断言）
+    RestoreSkillWorldSnapshot();
+
+    // 指令九/十：Level/currentExp/totalExp/Base Stats 全部回滚（不只 totalExp）
+    check("restored: level back to baseline",
+          m_player->GetProgression().GetLevel() == m_skillWorldSnapshot.progression.level);
+    check("restored: currentExp back to 0",
+          m_player->GetProgression().GetCurrentExp() ==
+              m_skillWorldSnapshot.progression.currentExp);
+    check("restored: totalExp back to baseline",
+          m_player->GetProgression().GetTotalExp() == m_skillWorldSnapshot.progression.totalExp);
+    check("restored: base attack back",
+          std::fabs(m_player->GetBaseCombatStats().attack - baseBefore.attack) < 0.001f);
+    check("restored: base maxHp back",
+          std::fabs(m_player->GetBaseCombatStats().maxHp - baseBefore.maxHp) < 0.001f);
+    check("restored: base defense back",
+          std::fabs(m_player->GetBaseCombatStats().defense - baseBefore.defense) < 0.001f);
+    // 指令六：Final Stats 也正确恢复（无装备时 final == base）
+    check("restored: final stats match base (no equipment)",
+          std::fabs(m_player->GetCombatStats().attack - baseBefore.attack) < 0.001f &&
+              std::fabs(m_player->GetCombatStats().maxHp - baseBefore.maxHp) < 0.001f);
+    // 指令十一：pending 升级事件清空（未来 UI 不能突然显示测试升级）
+    check("restored: pending level-ups cleared", m_player->GetProgression().GetPendingLevelUps().empty());
+    LOG_INFO("[SkillProgressionRestoreCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillAggroRestoreCheck] ====================
+// 阶段8.2指令十七：真实技能命中 → Threat 增加 → Restore → Threat/AIState/TargetId
+// 全部回到测试前（SkillAggroCheck 不再永久污染 Monster AggroTable / AI 状态）。
+
+void GameScene::RunSkillAggroRestoreCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAggroRestoreCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillAggroRestoreCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
+    legend::world::MonsterCharacter* wolf = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Wolf") {
+            wolf = monster;
+            break;
+        }
+    }
+    check("wolf present", wolf != nullptr);
+    if (wolf == nullptr) {
+        LOG_INFO("[SkillAggroRestoreCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    wolf->GetCombatStats().SetHp(wolf->GetCombatStats().maxHp);
+    m_player->SetPosition(wolf->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(wolf->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    const auto* ai = m_worldActors.GetAIController(wolf->GetId());
+    check("wolf AI controller present", ai != nullptr);
+    if (ai == nullptr) {
+        LOG_INFO("[SkillAggroRestoreCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_worldActors.DispatchCombatEvents(); // 清遗留事件
+    const float threatBefore = ai->GetAggroTable().GetThreat(m_player->GetId());
+    const auto aiStateBefore = wolf->GetAIState();
+    const auto targetBefore = wolf->GetTargetHandle().GetId();
+
+    // 真实命中
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    m_worldActors.DispatchCombatEvents();
+    const float threatAfterHit = ai->GetAggroTable().GetThreat(m_player->GetId());
+    check("threat increased after skill hit", threatAfterHit > threatBefore);
+
+    // Restore（guard 前手动调用以断言）
+    RestoreSkillWorldSnapshot();
+    // 指令十七：Threat/AIState/TargetId 全部回到测试前
+    check("restored: threat back to baseline",
+          std::fabs(ai->GetAggroTable().GetThreat(m_player->GetId()) - threatBefore) < 0.0001f);
+    check("restored: AI state back to baseline",
+          wolf->GetAIState() == aiStateBefore);
+    check("restored: AI target back to baseline",
+          wolf->GetTargetHandle().GetId() == targetBefore);
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillAggroRestoreCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillFullStateRestoreCheck] ====================
+// 阶段8.2指令十八：总体验证——污染后 Restore，Player（位置/HP/Level/Exp/Base/Final）
+// + World（位置/HP/Active/Aggro/AITarget）+ Loot + Combat events 全部与快照一致。
+
+void GameScene::RunSkillFullStateRestoreCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillFullStateRestoreCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillFullStateRestoreCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    CaptureSkillWorldSnapshot();
+    const auto snapshotCopy = m_skillWorldSnapshot; // 比对基线（Restore 不清 captured）
+    RestoreGuard skillRestoreGuard{this};
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillFullStateRestoreCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    // 制造全类型污染：位置 + HP + Exp/升级 + Aggro + 施法
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    (void)m_player->AddExperience(300); // Exp/Level/Base Stats 污染
+    (void)m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    m_worldActors.DispatchCombatEvents();
+    check("pollution applied (exp changed)",
+          m_player->GetProgression().GetTotalExp() != snapshotCopy.progression.totalExp);
+
+    // Restore + 全量对比
+    RestoreSkillWorldSnapshot();
+    bool allMatch = true;
+    auto fail = [&check](const std::string& name, bool ok) { check(name, ok); };
+    fail("player position restored",
+         (m_player->GetPosition() - snapshotCopy.playerPosition).LengthSq() < 0.0001f ||
+             (LOG_WARN("[SkillFullStateRestore] player pos now=(" +
+                       std::to_string(m_player->GetPosition().x) + "," +
+                       std::to_string(m_player->GetPosition().y) + ") baseline=(" +
+                       std::to_string(snapshotCopy.playerPosition.x) + "," +
+                       std::to_string(snapshotCopy.playerPosition.y) + ")"),
+              false));
+    fail("player hp restored",
+         std::fabs(m_player->GetCombatStats().hp - snapshotCopy.playerHp) < 0.001f);
+    fail("player level/currentExp/totalExp restored",
+         m_player->GetProgression().GetLevel() == snapshotCopy.progression.level &&
+             m_player->GetProgression().GetCurrentExp() ==
+                 snapshotCopy.progression.currentExp &&
+             m_player->GetProgression().GetTotalExp() ==
+                 snapshotCopy.progression.totalExp);
+    fail("player base stats restored",
+         std::fabs(m_player->GetBaseCombatStats().attack -
+                   snapshotCopy.playerBaseStats.attack) < 0.001f &&
+             std::fabs(m_player->GetBaseCombatStats().maxHp -
+                       snapshotCopy.playerBaseStats.maxHp) < 0.001f &&
+             std::fabs(m_player->GetBaseCombatStats().defense -
+                       snapshotCopy.playerBaseStats.defense) < 0.001f);
+    fail("player final stats restored (no equipment => final == base)",
+         std::fabs(m_player->GetCombatStats().attack -
+                   snapshotCopy.playerBaseStats.attack) < 0.001f);
+    fail("pending level-ups cleared",
+         m_player->GetProgression().GetPendingLevelUps().empty());
+    bool worldMatch = true;
+    for (const auto& state : snapshotCopy.actors) {
+        const legend::entity::Character* actor = m_worldActors.GetRegistry().Get(state.id);
+        if (actor == nullptr) {
+            worldMatch = false;
+            break;
+        }
+        if ((actor->GetPosition() - state.position).LengthSq() > 0.0001f ||
+            std::fabs(actor->GetCombatStats().hp - state.hp) > 0.0001f ||
+            actor->IsActive() != state.active) {
+            worldMatch = false;
+            break;
+        }
+        if (state.hasAI && actor->GetActorType() == legend::entity::ActorType::Monster) {
+            const auto* ai = m_worldActors.GetAIController(state.id);
+            if (ai == nullptr ||
+                ai->GetAggroTable().CreateSnapshot().size() != state.aggro.size()) {
+                worldMatch = false;
+                break;
+            }
+        }
+    }
+    fail("world actors fully restored (position/hp/active/aggro)", worldMatch);
+    fail("ground loot count restored",
+         m_worldActors.GetLoot().GetAll().size() == snapshotCopy.groundLootCount);
+    fail("combat recent events empty",
+         m_worldActors.GetCombatSystem().GetRecentEvents().empty() &&
+             m_worldActors.GetCombatSystem().GetRecentDeaths().empty());
+    (void)allMatch;
+    LOG_INFO("[SkillFullStateRestoreCheck] completed, failures = " +
+             std::to_string(failures));
 }

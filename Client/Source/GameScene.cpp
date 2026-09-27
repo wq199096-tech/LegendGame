@@ -206,6 +206,10 @@ void GameScene::OnLoad() {
         RunSkillDeathRewardCheck();
         RunSkillDeterministicRewardCheck();
         RunSkillAOERewardCheck();
+        // 阶段8.2：完整状态恢复验收
+        RunSkillProgressionRestoreCheck();
+        RunSkillAggroRestoreCheck();
+        RunSkillFullStateRestoreCheck();
     } else {
         LOG_INFO("[SkillChecks] pure checks only; world integration checks disabled.");
     }

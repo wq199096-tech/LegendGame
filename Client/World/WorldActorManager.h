@@ -93,6 +93,11 @@ public:
         const auto it = m_aiControllers.find(id);
         return it != m_aiControllers.end() ? &it->second : nullptr;
     }
+    // 阶段8.2：非 const 版本（SkillWorldSnapshot 恢复 AI/Aggro 用）
+    MonsterAIController* GetAIController(entity::EntityId id) {
+        const auto it = m_aiControllers.find(id);
+        return it != m_aiControllers.end() ? &it->second : nullptr;
+    }
 
 private:
     struct NPCTemplate {

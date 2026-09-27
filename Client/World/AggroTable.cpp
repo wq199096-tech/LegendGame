@@ -44,4 +44,23 @@ float AggroTable::GetThreat(EntityId id) const {
     return 0.0f;
 }
 
+// ---- 阶段8.2：快照 / 恢复（SkillWorldSnapshot 的 Monster AI 隔离用） ----
+
+AggroSnapshot AggroTable::CreateSnapshot() const {
+    AggroSnapshot snapshot;
+    snapshot.reserve(m_entries.size());
+    for (const Entry& entry : m_entries) {
+        snapshot.emplace_back(entry.id, entry.threat);
+    }
+    return snapshot;
+}
+
+void AggroTable::RestoreSnapshot(const AggroSnapshot& snapshot) {
+    m_entries.clear();
+    m_entries.reserve(snapshot.size());
+    for (const auto& [id, threat] : snapshot) {
+        m_entries.push_back({id, threat});
+    }
+}
+
 } // namespace legend::world

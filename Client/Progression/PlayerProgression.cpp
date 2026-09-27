@@ -41,4 +41,33 @@ float PlayerProgression::GetExpPercent() const {
                         : 0.0f;
 }
 
+// ---- 阶段8.2：快照 / 恢复（SkillWorldSnapshot 隔离验收用） ----
+
+PlayerProgressionSnapshot PlayerProgression::CreateSnapshot() const {
+    PlayerProgressionSnapshot snapshot;
+    snapshot.level = m_level;
+    snapshot.currentExp = m_currentExp;
+    snapshot.totalExp = m_totalExp;
+    return snapshot;
+}
+
+bool PlayerProgression::RestoreSnapshot(const PlayerProgressionSnapshot& snapshot) {
+    // 校验（指令三）：level ∈ [1, kMaxLevel]、currentExp/totalExp >= 0
+    if (snapshot.level < 1 || snapshot.level > kMaxLevel) {
+        LOG_ERROR("PlayerProgression::RestoreSnapshot: invalid level " +
+                  std::to_string(snapshot.level) + ", rejected.");
+        return false;
+    }
+    if (snapshot.currentExp < 0 || snapshot.totalExp < 0) {
+        LOG_ERROR("PlayerProgression::RestoreSnapshot: negative exp, rejected.");
+        return false;
+    }
+    m_level = snapshot.level;
+    m_currentExp = snapshot.currentExp;
+    m_totalExp = snapshot.totalExp;
+    // 清空 pending 升级事件——不留测试升级事件（指令十一）
+    m_pendingLevelUps.clear();
+    return true;
+}
+
 } // namespace legend::progression

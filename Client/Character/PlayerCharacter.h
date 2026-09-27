@@ -60,6 +60,13 @@ public:
     // final = base + equipment bonuses；HP clamp 到新 maxHp（卸下超限时降，穿上时不补满）
     void RecalculateCombatStats();
 
+    // ---- 阶段8.2：Skill 测试隔离（快照恢复转发） ----
+    // Base Stats 直接恢复（禁止"升几级再减回去"）；Progression 快照由
+    // GetProgression().CreateSnapshot/RestoreSnapshot 负责
+    void RestoreBaseStats(const legend::combat::CombatStats& stats) {
+        m_stats.RestoreBaseStats(stats);
+    }
+
 private:
     legend::animation::CharacterDefinition m_definition;
     legend::progression::PlayerProgression m_progression;

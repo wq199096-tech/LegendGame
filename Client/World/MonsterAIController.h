@@ -44,6 +44,8 @@ public:
                 combat::CombatSystem& combat, std::mt19937& rng, float deltaTime);
 
     const AggroTable& GetAggroTable() const { return m_aggro; }
+    // 阶段8.2：非 const 版本（SkillWorldSnapshot 恢复 Aggro 快照用）
+    AggroTable& GetAggroTable() { return m_aggro; }
     // 阶段5：受到伤害 -> AddThreat(sourceId, damage) 并切换目标（被打必反击，含 ReturnHome 途中）
     void OnDamaged(MonsterCharacter& monster, legend::entity::EntityId sourceId, float amount);
     // F3 Debug

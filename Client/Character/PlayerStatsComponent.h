@@ -24,6 +24,9 @@ public:
 
     const legend::combat::CombatStats& GetBaseStats() const { return m_baseStats; }
 
+    // 阶段8.2：直接恢复 Base 快照（Skill 测试隔离用——禁止"升几级再减回去"）
+    void RestoreBaseStats(const legend::combat::CombatStats& stats) { m_baseStats = stats; }
+
     // 等级成长加到 base stats（levelsGained = 本次升级级数；每级 +growth 三项）
     void ApplyLevelGrowth(const legend::progression::GrowthConfig& growth, int levelsGained);
 

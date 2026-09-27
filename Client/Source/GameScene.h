@@ -327,6 +327,10 @@ private:
     void RunSkillActiveCheck();
     void RunSkillNoFreeRewardCheck();
     void RunSkillDeterministicRewardCheck();
+    // 阶段8.2：完整状态恢复验收（Progression/Base/Final/Aggro/AI/全量快照）
+    void RunSkillProgressionRestoreCheck();
+    void RunSkillAggroRestoreCheck();
+    void RunSkillFullStateRestoreCheck();
     // 阶段8.1：Auto Skill Test 掉落恢复（Stage90 统一，禁止空表冒充）
     void RestoreSkillTestLootOverride();
 };
