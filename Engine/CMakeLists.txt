@@ -25,6 +25,8 @@ set(LEGEND_ENGINE_SOURCES
     Item/ItemDatabase.cpp
     Item/ItemDefinition.cpp
     Item/Inventory.cpp
+    Item/EquipmentComponent.cpp
+    Item/EquipmentSystem.cpp
     Map/Map.cpp
     Map/MapLayer.cpp
     Map/MapLoader.cpp

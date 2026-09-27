@@ -13,8 +13,8 @@ namespace legend::progression {
 
 // 玩家成长组件（PlayerCharacter 组合持有，不做 LevelPlayer 继承）：
 // level 从 1 开始；AddExperience 支持连续升级；满级（50）封顶 currentExp 归 0。
-// 升级属性成长：MaxHP +X 则当前 HP 同步 +X（不直接满血）。
-// 阶段6.1：currentExp/totalExp 为 ExperienceValue（int64）。
+// 阶段7：growth 属性应用移到 PlayerStatsComponent（Base Stats 架构）——本组件只管
+// level/exp 推进与升级事件，不直接修改 CombatStats（杜绝 Base/Equipment/Final 漂移）。
 class PlayerProgression {
 public:
     PlayerProgression() = default;
@@ -22,8 +22,9 @@ public:
     // 初始化成长配置（来自 character.json growth 块）
     void Initialize(const legend::animation::CharacterDefinition& definition);
 
-    // 加经验：内部连续升级并应用成长到 stats（maxHp/attack/defense），返回升级事件
-    std::vector<LevelUpEvent> AddExperience(combat::CombatStats& stats, ExperienceValue amount);
+    // 加经验：内部连续升级并返回升级事件（不修改 CombatStats——growth 由调用方通过
+    // PlayerStatsComponent::ApplyLevelGrowth 应用到 base stats 后 RecalculateFinalStats）
+    std::vector<LevelUpEvent> AddExperience(ExperienceValue amount);
 
     int GetLevel() const { return m_level; }
     ExperienceValue GetCurrentExp() const { return m_currentExp; }

@@ -21,7 +21,45 @@ bool ParseItemEntry(const nlohmann::json& entry, ItemDefinition& out) {
     out.maxStack = entry.value("maxStack", 1);
     out.icon = entry.value("icon", std::string());
     out.description = entry.value("description", std::string());
-    return out.IsValid();
+
+    // ---- 阶段7：equipment 块（可选） ----
+    // type==Equipment：必须带合法 equipment 块 + maxStack==1（否则该 ItemDefinition 无效）
+    // 非 Equipment 带 equipment 块：Warning + 忽略（行为明确）
+    if (entry.contains("equipment") && entry["equipment"].is_object()) {
+        const nlohmann::json& eq = entry["equipment"];
+        EquipmentData data;
+        const std::string slotName = eq.value("slot", std::string());
+        if (!ParseEquipmentSlotType(slotName, data.slot)) {
+            LOG_ERROR("ItemDatabase: item '" + out.id + "' has unknown equipment slot '" +
+                      slotName + "', entry skipped.");
+            return false; // 未知 slot：Invalid（不默认 Weapon）
+        }
+        data.attackBonus = eq.value("attack", 0.0f);
+        data.defenseBonus = eq.value("defense", 0.0f);
+        data.maxHpBonus = eq.value("maxHp", 0.0f);
+        if (!data.IsValid()) {
+            LOG_ERROR("ItemDatabase: item '" + out.id + "' has negative equipment bonus, "
+                      "entry skipped.");
+            return false; // 负 bonus：非法（阶段7 无负面装备）
+        }
+        if (out.type == ItemType::Equipment) {
+            if (out.maxStack != 1) {
+                LOG_ERROR("ItemDatabase: equipment '" + out.id + "' maxStack must be 1 (got " +
+                          std::to_string(out.maxStack) + "), entry skipped.");
+                return false; // Equipment maxStack > 1：非法
+            }
+            out.hasEquipment = true;
+            out.equipment = data;
+        } else {
+            LOG_WARN("ItemDatabase: non-equipment item '" + out.id +
+                     "' has equipment block, ignored.");
+        }
+    } else if (out.type == ItemType::Equipment) {
+        LOG_ERROR("ItemDatabase: equipment '" + out.id +
+                  "' missing equipment block, entry skipped.");
+        return false; // Equipment 没有 equipment 块：非法
+    }
+    return out.IsValid() && out.IsEquipmentValid();
 }
 } // namespace
 

@@ -4,14 +4,18 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Client/Character/PlayerStatsComponent.h"
 #include "Client/Progression/PlayerProgression.h"
 #include "Engine/Animation/AnimationClip.h"
 #include "Engine/Animation/AnimationLoader.h"
 #include "Engine/Entity/Character.h"
+#include "Engine/Item/EquipmentComponent.h"
+#include "Engine/Item/EquipmentSystem.h"
 #include "Engine/Item/Inventory.h"
 
 // 玩家角色：类型标识 + Character Definition。
-// 组合（非继承）：Character 基础 + PlayerProgression（成长）+ Inventory（背包）。
+// 组合（非继承）：Character 基础 + PlayerProgression（成长）+ Inventory（背包）+
+// EquipmentComponent（装备栏）+ PlayerStatsComponent（Base/Final 属性架构）。
 class PlayerCharacter final : public legend::entity::Character {
 public:
     PlayerCharacter(legend::entity::EntityId id,
@@ -27,12 +31,32 @@ public:
     legend::item::Inventory& GetInventory() { return m_inventory; }
     const legend::item::Inventory& GetInventory() const { return m_inventory; }
 
-    // 击杀奖励入口：加经验（内部连续升级 + 属性成长 MaxHP+X->HP+X）
+    // 击杀奖励入口：加经验（内部连续升级；growth 加到 base stats 后 Recalculate）
     std::vector<legend::progression::LevelUpEvent> AddExperience(
         legend::progression::ExperienceValue amount);
+
+    // ---- 阶段7：装备系统（EquipmentComponent + Base/Final Stats 架构） ----
+    // ItemDatabase 注入（GameScene OnLoad 初始化后调用；未设置时装备接口返回失败）
+    void SetItemDatabase(const legend::item::ItemDatabase* database);
+
+    legend::item::EquipmentComponent& GetEquipment() { return m_equipment; }
+    const legend::item::EquipmentComponent& GetEquipment() const { return m_equipment; }
+    const legend::combat::CombatStats& GetBaseCombatStats() const {
+        return m_stats.GetBaseStats();
+    }
+
+    // 装备背包实例（事务安全：失败时背包/装备栏状态不变）；成功后 Recalculate
+    legend::item::EquipmentOpResult EquipInstance(legend::item::ItemInstanceId instanceId);
+    // 卸下槽位装备回背包（背包满时失败、装备留槽）；成功后 Recalculate
+    legend::item::EquipmentOpResult UnequipSlot(legend::item::EquipmentSlotType slot);
+    // final = base + equipment bonuses；HP clamp 到新 maxHp（卸下超限时降，穿上时不补满）
+    void RecalculateCombatStats();
 
 private:
     legend::animation::CharacterDefinition m_definition;
     legend::progression::PlayerProgression m_progression;
     legend::item::Inventory m_inventory;
+    legend::item::EquipmentComponent m_equipment; // 阶段7：6 装备槽
+    PlayerStatsComponent m_stats;                 // 阶段7：base stats + Recalculate
+    const legend::item::ItemDatabase* m_itemDatabase = nullptr;
 };

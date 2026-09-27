@@ -787,3 +787,387 @@ void GameScene::RunDeathLootIntegrationCheck() {
     m_player->SetPosition(savedPlayerPos);
     LOG_INFO("[DeathLootIntegrationCheck] completed, failures = " + std::to_string(failures));
 }
+
+// ==================== LEGEND_AUTO_EQUIPMENT_TEST=1 时间线 ====================
+// 真实流程：Monster Death -> Loot(Override) -> Pickup -> Inventory -> Equip -> Stats ->
+// Swap -> Unequip -> instanceId 全程保持 -> Respawn。禁止绕过 Loot/Inventory 塞槽。
+
+void GameScene::UpdateEquipmentTest(float deltaTime) {
+    auto& registry = m_worldActors.GetRegistry();
+    auto fail = [this](const std::string& name) {
+        LOG_INFO("[EquipmentTest] " + name + " -> FAIL");
+        ++m_equipTestFailures;
+    };
+    auto pass = [this](const std::string& name) {
+        LOG_INFO("[EquipmentTest] " + name + " -> PASS");
+    };
+    auto check = [&pass, &fail](const std::string& name, bool ok) {
+        if (ok) {
+            pass(name);
+        } else {
+            fail(name);
+        }
+    };
+
+    m_equipTestElapsed += deltaTime;
+    if (!m_equipTestStageEntered) {
+        m_equipTestStageEntered = true;
+        m_equipTestStageElapsed = 0.0;
+        LOG_INFO("[EquipmentTest] stage " + std::to_string(m_equipTestStage) + " entered.");
+    }
+    m_equipTestStageElapsed += deltaTime;
+    // timeout 只触发一次（避免 case 90 后每帧刷 FAIL）
+    if (m_equipTestElapsed > 120.0 && m_equipTestStage != 90) {
+        fail("timeline timeout 120s");
+        m_equipTestStage = 90;
+    }
+
+    // 便捷：设置 slime 测试掉落（wooden/iron sword 各 x1 必掉）
+    auto setSwordOverride = [this](const char* itemId) {
+        std::vector<legend::world::LootEntry> table;
+        legend::world::LootEntry entry;
+        entry.itemId = itemId;
+        entry.chance = 1.0f;
+        entry.min = 1;
+        entry.max = 1;
+        table.push_back(entry);
+        m_worldActors.GetSpawner().SetTestLootOverride("slime", table);
+    };
+    // 便捷：找最近活 slime 并传送玩家到攻击距离
+    auto teleportToSlime = [this, &registry]() -> legend::world::MonsterCharacter* {
+        legend::world::MonsterCharacter* slime = nullptr;
+        for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+            if (monster != nullptr && monster->IsCombatAlive() &&
+                monster->GetName() == "Slime") {
+                slime = monster;
+                break;
+            }
+        }
+        if (slime != nullptr) {
+            m_equipTestSlimeId = slime->GetId();
+            m_player->SetPosition(slime->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+            m_playerCombat.GetTarget().SetTarget(slime->GetId());
+        }
+        return slime;
+    };
+
+    switch (m_equipTestStage) {
+    case 0: { // 初始化 + Override wooden_sword + 选怪
+        if (m_player == nullptr) {
+            fail("player missing");
+            m_equipTestStage = 90;
+            break;
+        }
+        setSwordOverride("wooden_sword");
+        m_equipTestAttackBase = m_player->GetCombatStats().attack;
+        if (teleportToSlime() == nullptr) {
+            if (m_equipTestStageElapsed > 10.0) {
+                fail("no alive slime within 10s");
+                m_equipTestStage = 90;
+            }
+            break;
+        }
+        m_equipTestStage = 1;
+        break;
+    }
+    case 1: { // 击杀（真实攻击链路）
+        auto* slime =
+            static_cast<legend::world::MonsterCharacter*>(registry.Get(m_equipTestSlimeId));
+        if (slime == nullptr) {
+            fail("slime despawned before death");
+            m_equipTestStage = 90;
+            break;
+        }
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Normal) {
+            (void)m_playerCombat.RequestAttack(*m_player, registry,
+                                               m_worldActors.GetCombatSystem());
+        }
+        if (slime->GetActionState() == legend::entity::CharacterActionState::Dead) {
+            pass("monster killed (wooden_sword override)");
+            m_equipTestStage = 2;
+        } else if (m_equipTestStageElapsed > 30.0) {
+            fail("slime not dead within 30s");
+            m_equipTestStage = 90;
+        }
+        break;
+    }
+    case 2: { // 验证真实 Equipment GroundLoot 生成（wooden_sword x1）
+        const auto& loots = m_worldActors.GetLoot().GetAll();
+        bool found = false;
+        for (const auto& loot : loots) {
+            if (loot.itemId == "wooden_sword" && loot.quantity == 1) {
+                found = true;
+            }
+        }
+        if (!found) {
+            fail("no wooden_sword ground loot after kill");
+            m_equipTestStage = 90;
+            break;
+        }
+        pass("real equipment ground loot generated");
+        // 传送到掉落旁
+        for (const auto& loot : loots) {
+            if (loot.itemId == "wooden_sword") {
+                m_player->SetPosition(loot.position + legend::math::Vector2(10.0f, 0.0f));
+                break;
+            }
+        }
+        m_equipTestStage = 3;
+        break;
+    }
+    case 3: { // 自动拾取 -> 记录 wooden_sword instanceId（A）
+        const int picked = m_worldActors.GetLoot().PickupNearest(
+            m_player->GetPosition(), 80.0f, m_player->GetInventory(),
+            m_worldActors.GetItemDatabase());
+        if (picked != 1) {
+            fail("pickup failed (picked " + std::to_string(picked) + ")");
+            m_equipTestStage = 90;
+            break;
+        }
+        pass("picked wooden_sword");
+        // 找背包中的 wooden_sword instanceId
+        m_equipTestSwordA = 0;
+        auto& bag = m_player->GetInventory();
+        for (std::size_t i = 0; i < bag.GetCapacity(); ++i) {
+            const auto* slot = bag.GetSlot(i);
+            if (slot != nullptr && slot->definitionId == "wooden_sword") {
+                m_equipTestSwordA = slot->instanceId;
+            }
+        }
+        if (m_equipTestSwordA == 0) {
+            fail("wooden_sword instance missing after pickup");
+            m_equipTestStage = 90;
+            break;
+        }
+        pass("wooden_sword instanceId A=" + std::to_string(m_equipTestSwordA));
+        m_equipTestStage = 4;
+        break;
+    }
+    case 4: { // Equip A -> 槽 instanceId 一致 + final attack = before + 12（相对差值，
+              // 不用静态快照——中途升级会让 base attack 漂移）
+        const float attackBefore = m_player->GetCombatStats().attack;
+        const auto result = m_player->EquipInstance(m_equipTestSwordA);
+        if (!result.success) {
+            fail("equip A failed: " + result.reason);
+            m_equipTestStage = 90;
+            break;
+        }
+        const auto* weapon =
+            m_player->GetEquipment().GetEquipped(legend::item::EquipmentSlotType::Weapon);
+        check("weapon slot holds A (instanceId unchanged)",
+              weapon != nullptr && weapon->instanceId == m_equipTestSwordA);
+        check("final attack == before + 12",
+              std::fabs(m_player->GetCombatStats().attack - (attackBefore + 12.0f)) < 0.001f);
+        m_equipTestStage = 5;
+        break;
+    }
+    case 5: { // Override 换 iron_sword + 传送下一只 slime
+        setSwordOverride("iron_sword");
+        if (teleportToSlime() == nullptr) {
+            if (m_equipTestStageElapsed > 15.0) {
+                fail("no second slime within 15s");
+                m_equipTestStage = 90;
+            }
+            break;
+        }
+        m_equipTestStage = 6;
+        break;
+    }
+    case 6: { // 击杀第二只（iron_sword）
+        auto* slime =
+            static_cast<legend::world::MonsterCharacter*>(registry.Get(m_equipTestSlimeId));
+        if (slime == nullptr) {
+            fail("second slime despawned before death");
+            m_equipTestStage = 90;
+            break;
+        }
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Normal) {
+            (void)m_playerCombat.RequestAttack(*m_player, registry,
+                                               m_worldActors.GetCombatSystem());
+        }
+        if (slime->GetActionState() == legend::entity::CharacterActionState::Dead) {
+            pass("second monster killed (iron_sword override)");
+            m_equipTestStage = 7;
+        } else if (m_equipTestStageElapsed > 30.0) {
+            fail("second slime not dead within 30s");
+            m_equipTestStage = 90;
+        }
+        break;
+    }
+    case 7: { // 验证 iron_sword 掉落 + 拾取（B）
+        const auto& loots = m_worldActors.GetLoot().GetAll();
+        bool found = false;
+        for (const auto& loot : loots) {
+            if (loot.itemId == "iron_sword" && loot.quantity == 1) {
+                found = true;
+                m_player->SetPosition(loot.position + legend::math::Vector2(10.0f, 0.0f));
+            }
+        }
+        if (!found) {
+            fail("no iron_sword ground loot");
+            m_equipTestStage = 90;
+            break;
+        }
+        const int picked = m_worldActors.GetLoot().PickupNearest(
+            m_player->GetPosition(), 80.0f, m_player->GetInventory(),
+            m_worldActors.GetItemDatabase());
+        if (picked != 1) {
+            fail("iron_sword pickup failed");
+            m_equipTestStage = 90;
+            break;
+        }
+        m_equipTestSwordB = 0;
+        auto& bag = m_player->GetInventory();
+        for (std::size_t i = 0; i < bag.GetCapacity(); ++i) {
+            const auto* slot = bag.GetSlot(i);
+            if (slot != nullptr && slot->definitionId == "iron_sword") {
+                m_equipTestSwordB = slot->instanceId;
+            }
+        }
+        if (m_equipTestSwordB == 0) {
+            fail("iron_sword instance missing");
+            m_equipTestStage = 90;
+            break;
+        }
+        pass("iron_sword picked, instanceId B=" + std::to_string(m_equipTestSwordB));
+        m_equipTestStage = 8;
+        break;
+    }
+    case 8: { // Swap：Equip B -> 槽=B、A 回背包（instanceId 不变）、attack +13（25-12 相对差）
+        const float attackBefore = m_player->GetCombatStats().attack;
+        const auto result = m_player->EquipInstance(m_equipTestSwordB);
+        if (!result.success) {
+            fail("swap to B failed: " + result.reason);
+            m_equipTestStage = 90;
+            break;
+        }
+        const auto* weapon =
+            m_player->GetEquipment().GetEquipped(legend::item::EquipmentSlotType::Weapon);
+        check("swap: weapon slot == B",
+              weapon != nullptr && weapon->instanceId == m_equipTestSwordB);
+        check("swap: A returned to inventory (instanceId kept)",
+              m_player->GetInventory().FindByInstanceId(m_equipTestSwordA) != nullptr);
+        check("swap: final attack == before + 13 (25 - 12)",
+              std::fabs(m_player->GetCombatStats().attack - (attackBefore + 13.0f)) < 0.001f);
+        m_equipTestStage = 9;
+        break;
+    }
+    case 9: { // Unequip -> attack 回 base（相对 -25）、B 回背包
+        const float attackBefore = m_player->GetCombatStats().attack;
+        const auto result =
+            m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
+        if (!result.success) {
+            fail("unequip failed: " + result.reason);
+            m_equipTestStage = 90;
+            break;
+        }
+        check("unequip: weapon slot empty",
+              m_player->GetEquipment().GetEquipped(
+                  legend::item::EquipmentSlotType::Weapon) == nullptr);
+        check("unequip: B returned to inventory (instanceId kept)",
+              m_player->GetInventory().FindByInstanceId(m_equipTestSwordB) != nullptr);
+        check("unequip: final attack == before - 25 (back to unequipped level)",
+              std::fabs(m_player->GetCombatStats().attack - (attackBefore - 25.0f)) < 0.001f);
+        m_equipTestStage = 10;
+        break;
+    }
+    case 10: { // instanceId 全程唯一 + 恢复 slime 正式掉落表 + Respawn 验证
+        std::vector<legend::item::ItemInstanceId> ids;
+        auto& bag = m_player->GetInventory();
+        for (std::size_t i = 0; i < bag.GetCapacity(); ++i) {
+            const auto* slot = bag.GetSlot(i);
+            if (slot != nullptr) {
+                ids.push_back(slot->instanceId);
+            }
+        }
+        m_player->GetEquipment().ForEachEquipped(
+            [&ids](const legend::item::ItemInstance& instance) {
+                ids.push_back(instance.instanceId);
+            });
+        std::sort(ids.begin(), ids.end());
+        check("instanceIds unique across inventory+equipment",
+              std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+        check("A and B instanceIds preserved end-to-end",
+              std::find(ids.begin(), ids.end(), m_equipTestSwordA) != ids.end() &&
+                  std::find(ids.begin(), ids.end(), m_equipTestSwordB) != ids.end());
+        // 还原正式掉落表（monster.json 原表）
+        m_worldActors.GetSpawner().SetTestLootOverride("slime", {});
+        pass("loot override restored to official table");
+        LOG_INFO("[EquipmentTest] waiting monster respawn for final check.");
+        m_equipTestStage = 11;
+        break;
+    }
+    case 11: { // Respawn 正常
+        if (m_equipTestStageElapsed < 8.0) {
+            break; // corpse 1.5s + respawn 5s
+        }
+        const int aliveNow = m_worldActors.GetAliveMonsterCount();
+        if (aliveNow > 0) {
+            pass("monster respawned (alive " + std::to_string(aliveNow) + ")");
+        } else if (m_equipTestStageElapsed < 30.0) {
+            break;
+        } else {
+            fail("no monster respawned within 30s");
+        }
+        m_equipTestStage = 90;
+        break;
+    }
+    case 90: { // 汇总
+        if (!m_equipTestSummaryDone) {
+            m_equipTestSummaryDone = true;
+            LOG_INFO("[EquipmentTest] completed, failures = " +
+                     std::to_string(m_equipTestFailures) + ", elapsed = " +
+                     std::to_string(m_equipTestElapsed) + "s");
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// ==================== F6：Equipment Debug 覆盖层 ====================
+// 无文字系统：几何显示（6 槽方块：有装备亮绿/空灰；Base->Final ATK 差值连线）。
+
+void GameScene::DrawEquipmentDebugOverlay(legend::render::SpriteBatch& batch) {
+    if (m_player == nullptr || !m_whiteTexture) {
+        return;
+    }
+    const legend::math::Vector2 playerPos = m_player->GetPosition();
+    const auto& equipment = m_player->GetEquipment();
+    // 6 槽横排小方块（头顶上方）：有装备亮绿、空槽灰
+    for (int i = 0; i < legend::item::kEquipmentSlotCount; ++i) {
+        const auto slot = static_cast<legend::item::EquipmentSlotType>(i);
+        const bool hasItem = !equipment.IsSlotEmpty(slot);
+        const legend::math::Color color = hasItem
+                                              ? legend::math::Color(0.3f, 0.95f, 0.4f, 0.9f)
+                                              : legend::math::Color(0.5f, 0.5f, 0.5f, 0.35f);
+        const legend::math::Vector2 center(playerPos.x + (i - 2.5f) * 18.0f,
+                                           playerPos.y - 70.0f);
+        batch.DrawQuad(*m_whiteTexture, center, legend::math::Vector2(14.0f, 14.0f), 0.0f,
+                       color, false, false, 0.0f, 0.0f, 1.0f, 1.0f);
+    }
+    // Base ATK -> Final ATK 差值竖线（右侧）：差值越大越高
+    const float baseAtk = m_player->GetBaseCombatStats().attack;
+    const float finalAtk = m_player->GetCombatStats().attack;
+    const float atkBonus = finalAtk - baseAtk;
+    const float barHeight = std::clamp(atkBonus, 0.0f, 50.0f);
+    if (barHeight > 0.5f) {
+        const legend::math::Vector2 barBase(playerPos.x + 60.0f, playerPos.y - 40.0f);
+        batch.DrawQuad(*m_whiteTexture,
+                       legend::math::Vector2(barBase.x, barBase.y - barHeight * 0.5f),
+                       legend::math::Vector2(6.0f, barHeight), 0.0f,
+                       legend::math::Color(0.95f, 0.75f, 0.2f, 0.85f), false, false, 0.0f,
+                       0.0f, 1.0f, 1.0f);
+    }
+}
+
+// ==================== 窗口标题 Equipment 段（在 LogMapStats 追加） ====================
+// 由 GameScene::LogMapStats 调用：返回 " | Equip: n/6"（有装备槽数）。
+std::string GameScene::GetEquipmentStatusText() const {
+    if (m_player == nullptr) {
+        return std::string();
+    }
+    return " | Equip: " + std::to_string(m_player->GetEquipment().GetEquippedCount()) + "/" +
+           std::to_string(legend::item::kEquipmentSlotCount);
+}

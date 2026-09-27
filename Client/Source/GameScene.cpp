@@ -94,6 +94,7 @@ void GameScene::OnLoad() {
         return; // 世界角色初始化失败不能静默继续
     }
     m_worldActors.RegisterPlayer(m_player.get());
+    m_player->SetItemDatabase(&m_worldActors.GetItemDatabase()); // 阶段7：装备系统注入
     const int npcSpawned = m_worldActors.SpawnNPCs(*m_map);
     const legend::world::WorldSpawnStats monsterStats = m_worldActors.SpawnMonsters(*m_map);
 
@@ -140,6 +141,20 @@ void GameScene::OnLoad() {
     RunExperience64Check();
     RunItemDatabaseFailureCheck();
     RunDeathLootIntegrationCheck();
+    RunEquipmentDefinitionCheck();
+    RunEquipmentSlotCheck();
+    RunInventoryInstanceCheck();
+    RunEquipCheck();
+    RunUnequipCheck();
+    RunEquipmentSwapCheck();
+    RunFullInventoryUnequipCheck();
+    RunFullInventorySwapCheck();
+    RunEquipmentUniqueInstanceCheck();
+    RunEquipmentStatsCheck();
+    RunEquipmentHpClampCheck();
+    RunLevelEquipmentCheck();
+    RunEquipmentLootCheck();
+    RunEquipmentComparisonCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -305,6 +320,57 @@ void GameScene::Update(float deltaTime) {
         LOG_INFO(m_progressionDebug ? "Progression/Loot debug: enabled (F5)"
                                     : "Progression/Loot debug: disabled (F5)");
     }
+    if (input.IsKeyPressed(SDL_SCANCODE_F6)) {
+        m_equipmentDebug = !m_equipmentDebug;
+        LOG_INFO(m_equipmentDebug ? "Equipment debug: enabled (F6)"
+                                  : "Equipment debug: disabled (F6)");
+        if (m_equipmentDebug && m_player != nullptr) {
+            // F6 开启时输出一次槽位清单（节流，不每帧刷）
+            const auto& equip = m_player->GetEquipment();
+            for (int slotIdx = 0; slotIdx < legend::item::kEquipmentSlotCount; ++slotIdx) {
+                const auto slot = static_cast<legend::item::EquipmentSlotType>(slotIdx);
+                const auto* instance = equip.GetEquipped(slot);
+                LOG_INFO("[EquipmentDebug] slot " +
+                         std::string(legend::item::EquipmentSlotTypeName(slot)) + ": " +
+                         (instance != nullptr
+                              ? instance->definitionId + "#" +
+                                    std::to_string(instance->instanceId)
+                              : std::string("empty")));
+            }
+            LOG_INFO("[EquipmentDebug] Base ATK " +
+                     std::to_string(m_player->GetBaseCombatStats().attack) + " / Final ATK " +
+                     std::to_string(m_player->GetCombatStats().attack));
+        }
+    }
+
+    // ---- 阶段7：Z = 装备背包中第一件 Equipment / X = 卸下 Weapon（Debug 键） ----
+    if (input.IsKeyPressed(SDL_SCANCODE_Z) && m_player != nullptr) {
+        legend::item::ItemInstanceId firstEquipment = 0;
+        auto& bag = m_player->GetInventory();
+        for (std::size_t i = 0; i < bag.GetCapacity() && firstEquipment == 0; ++i) {
+            const legend::item::ItemInstance* slot = bag.GetSlot(i);
+            if (slot != nullptr) {
+                const auto* def = m_worldActors.GetItemDatabase().Get(slot->definitionId);
+                if (def != nullptr && def->type == legend::item::ItemType::Equipment) {
+                    firstEquipment = slot->instanceId;
+                }
+            }
+        }
+        if (firstEquipment != 0) {
+            const auto result = m_player->EquipInstance(firstEquipment);
+            if (!result.success) {
+                LOG_WARN("[Equip] Z key failed: " + result.reason);
+            }
+        } else {
+            LOG_INFO("[Equip] Z: no equipment in inventory.");
+        }
+    }
+    if (input.IsKeyPressed(SDL_SCANCODE_X) && m_player != nullptr) {
+        const auto result = m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
+        if (!result.success) {
+            LOG_INFO("[Unequip] X: " + result.reason);
+        }
+    }
 
     // ---- 阶段6：E 拾取最近 GroundLoot（<=80 world units） ----
     if (input.IsKeyPressed(SDL_SCANCODE_E) && m_player != nullptr) {
@@ -366,6 +432,11 @@ void GameScene::Update(float deltaTime) {
     // 阶段6：LEGEND_AUTO_PROGRESSION_TEST=1 成长/掉落验收时间线
     if (m_progTest) {
         UpdateProgressionTest(deltaTime);
+    }
+
+    // 阶段7：LEGEND_AUTO_EQUIPMENT_TEST=1 装备验收时间线
+    if (m_equipTest) {
+        UpdateEquipmentTest(deltaTime);
     }
 
     // Player 死亡 -> Debug 复活（回出生点满血）
@@ -442,6 +513,9 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     if (m_progressionDebug) {
         DrawProgressionDebugOverlay(m_mapRenderer.GetBatch()); // F5：成长/掉落 Debug
     }
+    if (m_equipmentDebug) {
+        DrawEquipmentDebugOverlay(m_mapRenderer.GetBatch()); // F6：装备 Debug
+    }
     if (m_combatDebug || m_playerCombat.GetTarget().IsEmpty() == false) {
         DrawTargetRing(m_mapRenderer.GetBatch()); // 选中目标红圈（死亡自动消失）
     }
@@ -500,6 +574,13 @@ void GameScene::ApplyAutoTestHooks() {
         LOG_INFO("Auto-test: progression/loot acceptance timeline enabled "
                  "(LEGEND_AUTO_PROGRESSION_TEST=1), stages: Kill -> Exp -> Loot -> Pickup "
                  "-> LevelUp -> Growth -> Respawn.");
+    }
+    const char* equipTest = SDL_getenv("LEGEND_AUTO_EQUIPMENT_TEST");
+    if (equipTest != nullptr && equipTest[0] == '1') {
+        m_equipTest = true;
+        LOG_INFO("Auto-test: equipment acceptance timeline enabled "
+                 "(LEGEND_AUTO_EQUIPMENT_TEST=1), stages: Kill -> Loot -> Pickup -> Equip "
+                 "-> Stats -> Swap -> Unequip -> Respawn.");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {
@@ -1108,7 +1189,9 @@ void GameScene::LogMapStats(double deltaTime) {
                         "/" + std::to_string(m_player->GetProgression().GetRequiredExp()) +
                         " | Bag: " + std::to_string(m_player->GetInventory().GetUsedSlots()) +
                         "/" + std::to_string(m_player->GetInventory().GetCapacity())
-                  : std::string());
+                  : std::string()) +
+        // 阶段7：装备槽数（Debug 阶段窗口标题显示）
+        GetEquipmentStatusText();
 
     // F2：Entity / Direction / State / Clip / Frame
     if (m_characterDebug && m_player) {
@@ -2647,8 +2730,20 @@ void GameScene::RunLevelGrowthCheck() {
     stats.hp = 500.0f;
     stats.attack = 80.0f;
     stats.defense = 20.0f;
-    // 120 exp -> lv2（需求100，剩20），属性成长 MaxHP+20/Attack+5/Defense+2
-    progression.AddExperience(stats, 120);
+    // 阶段7：growth 加到 base stats（PlayerStatsComponent）后重算 final（无装备 final == base）
+    // 120 exp -> lv2（需求100，剩20），base 成长 MaxHP+20/Attack+5/Defense+2
+    PlayerStatsComponent statsComponent;
+    statsComponent.Initialize(stats);
+    const auto levelUps = progression.AddExperience(120);
+    statsComponent.ApplyLevelGrowth(progression.GetGrowth(),
+                                    static_cast<int>(levelUps.size()));
+    legend::item::ItemDatabase emptyItems;
+    legend::item::EquipmentComponent noEquipment;
+    statsComponent.RecalculateFinalStats(stats, noEquipment, emptyItems);
+    // 阶段6 HP 同步语义保持：升级 MaxHP+20 时当前 HP 也 +20（PlayerCharacter 内实现）
+    stats.hp = std::min(stats.hp + progression.GetGrowth().maxHpPerLevel *
+                                      static_cast<float>(levelUps.size()),
+                        stats.maxHp);
     check("lv2 after 120 exp", progression.GetLevel() == 2);
     check("maxHp 500 -> 520", std::fabs(stats.maxHp - 520.0f) < 0.001f);
     check("hp +20 synced (no overheal)", std::fabs(stats.hp - 520.0f) < 0.001f &&

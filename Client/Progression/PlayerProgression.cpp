@@ -16,18 +16,14 @@ void PlayerProgression::Initialize(const legend::animation::CharacterDefinition&
     m_pendingLevelUps.clear();
 }
 
-std::vector<LevelUpEvent> PlayerProgression::AddExperience(combat::CombatStats& stats,
-                                                           ExperienceValue amount) {
+std::vector<LevelUpEvent> PlayerProgression::AddExperience(ExperienceValue amount) {
     auto events = LevelSystem::AddExperience(m_level, m_currentExp, m_totalExp, amount);
-    // 每升一级应用一次成长：MaxHP +X -> 当前 HP 同步 +X（不直接满血）；clamp 防越界
+    // 阶段7：growth 属性应用移到 PlayerStatsComponent（Base Stats 架构）——
+    // 本组件只产生升级事件；HP/攻击/防御的成长由调用方 ApplyLevelGrowth 后 Recalculate。
+    // 仍输出 [LevelUp] 日志（不带 stats 数值——final 属性在 Recalculate 后由调用方打印）。
     for (const LevelUpEvent& event : events) {
-        stats.maxHp += m_growth.maxHpPerLevel;
-        stats.hp = std::min(stats.hp + m_growth.maxHpPerLevel, stats.maxHp);
-        stats.attack += m_growth.attackPerLevel;
-        stats.defense += m_growth.defensePerLevel;
         LOG_INFO("[LevelUp] Player reached level " + std::to_string(event.newLevel) +
-                 " (from " + std::to_string(event.oldLevel) + ") HP " +
-                 std::to_string(stats.hp) + "/" + std::to_string(stats.maxHp));
+                 " (from " + std::to_string(event.oldLevel) + ")");
     }
     if (!events.empty()) {
         m_pendingLevelUps.insert(m_pendingLevelUps.end(), events.begin(), events.end());

@@ -6,8 +6,10 @@ add_executable(LegendClient
     Source/LegendApp.cpp
     Source/GameScene.cpp
     Source/ProgressionChecks.cpp
+    Source/EquipmentChecks.cpp
     Source/FallbackScene.cpp
     Character/PlayerCharacter.cpp
+    Character/PlayerStatsComponent.cpp
     Combat/MonsterCombatController.cpp
     Combat/PlayerCombatController.cpp
     Character/PlayerController.cpp

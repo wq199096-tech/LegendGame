@@ -81,6 +81,9 @@ Build\bin\Debug\LegendMapEditor.exe
 | F3 | AI Debug（Aggro/Leash 圈、Home 十字、目标连线） |
 | F4 | Combat Debug（目标/冷却/血条/攻击距离圈） |
 | F5 | Progression/Loot Debug（拾取范围圈、最近 5 件掉落连线） |
+| F6 | Equipment Debug（6 槽状态方块 + Base/Final ATK 差值条；开启时输出槽位清单） |
+| Z | 装备背包中第一件 Equipment |
+| X | 卸下 Weapon（背包满时失败、装备留槽不丢失） |
 | ESC | 退出程序 |
 
 窗口标题实时显示 `Map: TestMap | Chunks: 20 | Tiles: 5120 | DC: 56 | FPS: 60`，

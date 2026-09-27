@@ -19,6 +19,11 @@ public:
     const std::unordered_map<std::string, ItemDefinition>& GetAll() const { return m_items; }
     std::size_t Count() const { return m_items.size(); }
 
+    // 测试专用：程序化注入定义（绕过 JSON；仅供自动测试/EquipmentChecks 使用）
+    void AddTestItem(ItemDefinition definition) {
+        m_items[definition.id] = std::move(definition);
+    }
+
 private:
     std::unordered_map<std::string, ItemDefinition> m_items;
 };

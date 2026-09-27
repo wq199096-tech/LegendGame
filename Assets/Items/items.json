@@ -40,6 +40,87 @@
             "maxStack": 99,
             "icon": "items/iron_ore",
             "description": "Raw iron ore, useful for smithing."
+        },
+        {
+            "id": "wooden_sword",
+            "name": "Wooden Sword",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/wooden_sword",
+            "description": "A basic training sword.",
+            "equipment": { "slot": "Weapon", "attack": 12, "defense": 0, "maxHp": 0 }
+        },
+        {
+            "id": "iron_sword",
+            "name": "Iron Sword",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/iron_sword",
+            "description": "A sturdy forged blade.",
+            "equipment": { "slot": "Weapon", "attack": 25, "defense": 0, "maxHp": 0 }
+        },
+        {
+            "id": "cloth_helmet",
+            "name": "Cloth Helmet",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/cloth_helmet",
+            "description": "Light padded headgear.",
+            "equipment": { "slot": "Helmet", "attack": 0, "defense": 5, "maxHp": 0 }
+        },
+        {
+            "id": "iron_helmet",
+            "name": "Iron Helmet",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/iron_helmet",
+            "description": "Heavy protective helm.",
+            "equipment": { "slot": "Helmet", "attack": 0, "defense": 12, "maxHp": 0 }
+        },
+        {
+            "id": "cloth_armor",
+            "name": "Cloth Armor",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/cloth_armor",
+            "description": "Simple woven garment.",
+            "equipment": { "slot": "Armor", "attack": 0, "defense": 10, "maxHp": 100 }
+        },
+        {
+            "id": "iron_armor",
+            "name": "Iron Armor",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/iron_armor",
+            "description": "Solid plate cuirass.",
+            "equipment": { "slot": "Armor", "attack": 0, "defense": 20, "maxHp": 150 }
+        },
+        {
+            "id": "simple_necklace",
+            "name": "Simple Necklace",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/simple_necklace",
+            "description": "A plain charm on a cord.",
+            "equipment": { "slot": "Necklace", "attack": 3, "defense": 0, "maxHp": 0 }
+        },
+        {
+            "id": "copper_ring",
+            "name": "Copper Ring",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/copper_ring",
+            "description": "Warm metal band.",
+            "equipment": { "slot": "Ring", "attack": 5, "defense": 0, "maxHp": 0 }
+        },
+        {
+            "id": "leather_boots",
+            "name": "Leather Boots",
+            "type": "Equipment",
+            "maxStack": 1,
+            "icon": "items/leather_boots",
+            "description": "Sturdy walking boots.",
+            "equipment": { "slot": "Boots", "attack": 0, "defense": 3, "maxHp": 0 }
         }
     ]
 }

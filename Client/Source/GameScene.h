@@ -97,6 +97,28 @@ private:
     void RunExperience64Check();
     void RunItemDatabaseFailureCheck();
     void RunDeathLootIntegrationCheck();
+    // 阶段7 自检：Equipment 定义/槽位/Instance 操作/装备卸下交换/满包事务/唯一实例/
+    // 属性重算/HP clamp/等级+装备/装备掉落/装备比较
+    void RunEquipmentDefinitionCheck();
+    void RunEquipmentSlotCheck();
+    void RunInventoryInstanceCheck();
+    void RunEquipCheck();
+    void RunUnequipCheck();
+    void RunEquipmentSwapCheck();
+    void RunFullInventoryUnequipCheck();
+    void RunFullInventorySwapCheck();
+    void RunEquipmentUniqueInstanceCheck();
+    void RunEquipmentStatsCheck();
+    void RunEquipmentHpClampCheck();
+    void RunLevelEquipmentCheck();
+    void RunEquipmentLootCheck();
+    void RunEquipmentComparisonCheck();
+    // LEGEND_AUTO_EQUIPMENT_TEST=1：阶段7 验收时间线（Kill->Loot->Pickup->Equip->Stats->Swap->Unequip）
+    void UpdateEquipmentTest(float deltaTime);
+    // F6：Equipment Debug 覆盖层（6 槽状态 + Base/Equipment/Final ATK/DEF/HP 几何显示）
+    void DrawEquipmentDebugOverlay(legend::render::SpriteBatch& batch);
+    // 窗口标题 Equipment 段（" | Equip: n/6"，LogMapStats 调用）
+    std::string GetEquipmentStatusText() const;
     // LEGEND_AUTO_PROGRESSION_TEST=1：阶段6 验收时间线（击杀->Exp->Loot->拾取->升级->成长->Respawn）
     void UpdateProgressionTest(float deltaTime);
     // 阶段6：地上掉落 Debug 绘制（进 Y-Sort 队列后逐个绘制）
@@ -207,4 +229,19 @@ private:
     int m_progTestFailures = 0;
     bool m_progTestSummaryDone = false;
     int m_progTestPickupApplied = 0;
+
+    // ---- 阶段7：Equipment ----
+    bool m_equipmentDebug = false; // F6
+    // LEGEND_AUTO_EQUIPMENT_TEST=1 时间线状态
+    bool m_equipTest = false;
+    int m_equipTestStage = 0;
+    double m_equipTestElapsed = 0.0;
+    double m_equipTestStageElapsed = 0.0;
+    bool m_equipTestStageEntered = false;
+    legend::entity::EntityId m_equipTestSlimeId = 0;
+    legend::item::ItemInstanceId m_equipTestSwordA = 0; // wooden_sword instanceId
+    legend::item::ItemInstanceId m_equipTestSwordB = 0; // iron_sword instanceId
+    float m_equipTestAttackBase = 0.0f;
+    int m_equipTestFailures = 0;
+    bool m_equipTestSummaryDone = false;
 };

@@ -1,5 +1,10 @@
 #include "Client/Character/PlayerCharacter.h"
 
+#include <algorithm>
+
+#include "Engine/Debug/Logger.h"
+#include "Engine/Item/ItemDatabase.h"
+
 PlayerCharacter::PlayerCharacter(
     legend::entity::EntityId id, const legend::animation::CharacterDefinition& definition,
     std::shared_ptr<const std::unordered_map<std::string, legend::animation::AnimationClip>> clips,
@@ -19,9 +24,79 @@ PlayerCharacter::PlayerCharacter(
     }
     // 阶段6：成长组件（growth 块，缺省 20/5/2）+ 空背包（20 格）
     m_progression.Initialize(definition);
+    // 阶段7：base stats 副本（character.json combat）——final 由 base + equipment 重算
+    m_stats.Initialize(definition.combat);
 }
 
 std::vector<legend::progression::LevelUpEvent> PlayerCharacter::AddExperience(
     legend::progression::ExperienceValue amount) {
-    return m_progression.AddExperience(GetCombatStats(), amount);
+    auto events = m_progression.AddExperience(amount);
+    if (!events.empty()) {
+        const int levelsGained = static_cast<int>(events.size());
+        // 阶段7 指令二十二：等级成长加到 Base Stats（不是 Final），然后 Recalculate
+        m_stats.ApplyLevelGrowth(m_progression.GetGrowth(), levelsGained);
+        RecalculateCombatStats();
+        // 阶段6 语义保持：升级 MaxHP +X 时当前 HP 也 +X（clamp 到新 maxHp）
+        legend::combat::CombatStats& stats = GetCombatStats();
+        stats.hp = std::min(stats.hp + m_progression.GetGrowth().maxHpPerLevel * levelsGained,
+                            stats.maxHp);
+    }
+    return events;
+}
+
+void PlayerCharacter::SetItemDatabase(const legend::item::ItemDatabase* database) {
+    m_itemDatabase = database;
+}
+
+legend::item::EquipmentOpResult PlayerCharacter::EquipInstance(
+    legend::item::ItemInstanceId instanceId) {
+    if (m_itemDatabase == nullptr) {
+        return {false, "no item database"};
+    }
+    const float attackBefore = GetCombatStats().attack;
+    auto result =
+        legend::item::EquipmentSystem::Equip(*m_itemDatabase, m_inventory, m_equipment,
+                                             instanceId);
+    if (result.success) {
+        RecalculateCombatStats();
+        // 阶段7 指令七十一：装备/属性日志（只在操作时打，不每帧刷）
+        LOG_INFO("[Equip] instance #" + std::to_string(instanceId) + " equipped (" +
+                 result.reason + "); [Stats] ATK " + std::to_string(attackBefore) + " -> " +
+                 std::to_string(GetCombatStats().attack));
+    }
+    return result;
+}
+
+legend::item::EquipmentOpResult PlayerCharacter::UnequipSlot(
+    legend::item::EquipmentSlotType slot) {
+    if (m_itemDatabase == nullptr) {
+        return {false, "no item database"};
+    }
+    const float attackBefore = GetCombatStats().attack;
+    auto result =
+        legend::item::EquipmentSystem::Unequip(*m_itemDatabase, m_inventory, m_equipment, slot);
+    if (result.success) {
+        RecalculateCombatStats();
+        LOG_INFO("[Unequip] slot " +
+                 std::string(legend::item::EquipmentSlotTypeName(slot)) + "; [Stats] ATK " +
+                 std::to_string(attackBefore) + " -> " +
+                 std::to_string(GetCombatStats().attack));
+    }
+    return result;
+}
+
+void PlayerCharacter::RecalculateCombatStats() {
+    if (m_itemDatabase == nullptr) {
+        return; // ItemDatabase 未注入（fallback/测试场景）：final 保持现状
+    }
+    m_stats.RecalculateFinalStats(GetCombatStats(), m_equipment, *m_itemDatabase);
+    // HP 处理（阶段7 指令二十五）：穿上装备 HP 不变（不自动补满）；
+    // 卸下装备 maxHp 减小时当前 HP clamp 到新 maxHp（不丢已有 HP 之外的量）
+    legend::combat::CombatStats& stats = GetCombatStats();
+    if (stats.hp > stats.maxHp) {
+        stats.hp = stats.maxHp;
+    }
+    if (stats.hp < 0.0f) {
+        stats.hp = 0.0f;
+    }
 }

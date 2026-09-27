@@ -22,6 +22,8 @@ struct InventoryAddResult {
 
 // 玩家背包：独立组件（PlayerCharacter 组合持有，不做继承扩展）。
 // Stack 规则：先补已有未满同 definitionId Stack，再用空格；溢出数量放新格。
+// 阶段7：Equipment maxStack=1（每格一件、不堆叠），支持按 instanceId 操作
+// （TakeInstance/AddInstance 保留 instanceId 转移，不生成新 ID）。
 class Inventory {
 public:
     explicit Inventory(std::size_t capacity = kInventoryCapacity);
@@ -30,6 +32,15 @@ public:
     InventoryAddResult AddItem(const ItemDefinition& definition, int quantity);
     // 移除物品：先从前面 Slot 扣，扣到 0 清空 Slot；返回实际移除数
     int RemoveItem(const std::string& definitionId, int quantity);
+
+    // ---- 阶段7：按 instanceId 操作（装备转移用，instanceId 全程保持） ----
+    // 取走指定实例：找到则从槽中移除并返回原实例；不存在返回 nullopt
+    std::optional<ItemInstance> TakeInstance(ItemInstanceId instanceId);
+    // 放入既有实例：找空格、保留 instanceId、不堆叠（Equipment maxStack=1 每格一件）；
+    // Equipment 且 definition 非空时 quantity != 1 拒绝；无空格返回 false（不生成新 ID）
+    bool AddInstance(const ItemInstance& instance, const ItemDefinition* definition = nullptr);
+    // 查找（不移除）：不存在返回 nullptr
+    const ItemInstance* FindByInstanceId(ItemInstanceId instanceId) const;
 
     const ItemInstance* GetSlot(std::size_t index) const; // 空/越界返回 nullptr
     int GetItemCount(const std::string& definitionId) const;
