@@ -20,16 +20,18 @@ EquipmentOpResult EquipmentSystem::Equip(const ItemDatabase& items, Inventory& i
     if (!taken.has_value()) {
         return {false, "instance not found"};
     }
-    // 2) 查定义：无效定义 -> 实例放回背包（不丢）
+    // 2) 阶段7.1 全局唯一性保护：装备栏已持有同 instanceId -> 拒绝（防损坏数据）
+    if (equipment.ContainsInstanceId(taken->instanceId)) {
+        RollbackToInventory(inventory, *taken);
+        return {false, "instance already equipped"};
+    }
+    // 3) 严格类型校验（阶段7.1 指令三：五重全部成立，否则回滚）
     const ItemDefinition* definition = items.Get(taken->definitionId);
-    if (definition == nullptr || !definition->IsValid()) {
+    if (definition == nullptr || !definition->IsValid() || !definition->IsEquipmentValid() ||
+        !definition->hasEquipment || definition->type != ItemType::Equipment ||
+        taken->quantity != 1) {
         RollbackToInventory(inventory, *taken);
         return {false, "invalid definition"};
-    }
-    // 3) 必须是 Equipment（阶段7 指令十四：type=Equipment + slot 合法才允许）
-    if (!definition->hasEquipment) {
-        RollbackToInventory(inventory, *taken);
-        return {false, "not equipment"};
     }
     const EquipmentSlotType slot = definition->equipment.slot;
 
@@ -41,14 +43,24 @@ EquipmentOpResult EquipmentSystem::Equip(const ItemDatabase& items, Inventory& i
         const ItemDefinition* oldDefinition = items.Get(oldEquipped->definitionId);
         if (!inventory.AddInstance(*oldEquipped, oldDefinition)) {
             // 背包满且放不回旧装备：完全回滚（旧装备回槽、新装备回背包，不丢任何一件）
-            equipment.SetEquipped(slot, *oldEquipped);
+            if (!equipment.TrySetEquipped(slot, *oldEquipped)) {
+                LOG_ERROR("EquipmentSystem: swap rollback failed, slot occupied unexpectedly.");
+            }
             RollbackToInventory(inventory, *taken);
             return {false, "inventory full"};
         }
     }
 
-    // 5) 新装备入槽（Success）
-    equipment.SetEquipped(slot, *taken);
+    // 5) 新装备入槽（防覆盖：此时槽必为空，TrySet 失败即内部状态异常 -> 回滚）
+    if (!equipment.TrySetEquipped(slot, *taken)) {
+        LOG_ERROR("EquipmentSystem: slot unexpectedly occupied on final equip.");
+        if (oldEquipped.has_value()) {
+            RollbackToInventory(inventory, *oldEquipped);
+        } else {
+            RollbackToInventory(inventory, *taken);
+        }
+        return {false, "slot occupied"};
+    }
     return {true, "ok"};
 }
 
@@ -60,10 +72,13 @@ EquipmentOpResult EquipmentSystem::Unequip(const ItemDatabase& items, Inventory&
     if (!equipped.has_value()) {
         return {false, "slot empty"};
     }
-    // 2) 放回背包；背包满 -> 装备放回槽位（不丢装备，阶段7 指令十七）
+    // 2) 放回背包；背包满 -> 装备放回槽位（不丢装备，阶段7 指令十七）。
+    //    AddInstance 自身拒绝重复 instanceId（阶段7.1 双保险）
     const ItemDefinition* definition = items.Get(equipped->definitionId);
     if (!inventory.AddInstance(*equipped, definition)) {
-        equipment.SetEquipped(slot, *equipped);
+        if (!equipment.TrySetEquipped(slot, *equipped)) {
+            LOG_ERROR("EquipmentSystem: unequip rollback failed, slot occupied unexpectedly.");
+        }
         return {false, "inventory full"};
     }
     return {true, "ok"};

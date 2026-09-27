@@ -119,6 +119,10 @@ bool Inventory::AddInstance(const ItemInstance& instance, const ItemDefinition* 
     if (instance.instanceId == 0 || instance.quantity <= 0) {
         return false; // 非法实例（无效 instanceId / 非正数量）
     }
+    // 阶段7.1：同一 Inventory 内同一 instanceId 绝不能加入两次
+    if (FindByInstanceId(instance.instanceId) != nullptr) {
+        return false;
+    }
     // Equipment 数量必须为 1（阶段7 指令六十八：拒绝非法实例）
     if (definition != nullptr && definition->type == ItemType::Equipment &&
         instance.quantity != 1) {

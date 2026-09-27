@@ -484,6 +484,38 @@ void GameScene::RunEquipmentUniqueInstanceCheck() {
     (void)legend::item::EquipmentSystem::Unequip(database, inventory, equipment,
                                                  legend::item::EquipmentSlotType::Weapon);
     check("unique after unequip", allUnique(collectIds()));
+
+    // ---- 阶段7.1：主动制造重复 ----
+    // 1) 同一 instanceId 两次 AddInstance：第二次必须 false（Inventory 内重复保护）
+    const legend::item::ItemInstanceId dupId = InsertEquipment(inventory, *wooden);
+    check("first AddInstance A ok", dupId != 0);
+    legend::item::ItemInstance duplicate = *inventory.FindByInstanceId(dupId);
+    check("duplicate AddInstance A rejected",
+          !inventory.AddInstance(duplicate, wooden));
+    check("no duplicate created",
+          [ &inventory, dupId ] {
+              int count = 0;
+              for (std::size_t i = 0; i < inventory.GetCapacity(); ++i) {
+                  const auto* slot = inventory.GetSlot(i);
+                  if (slot != nullptr && slot->instanceId == dupId) {
+                      ++count;
+                  }
+              }
+              return count == 1;
+          }());
+
+    // 2) A 已在装备栏时，再通过错误路径 Equip 同 instanceId：必须失败（实例在装备栏，
+    //    背包 TakeInstance 找不到 + ContainsInstanceId 双重防线）
+    (void)legend::item::EquipmentSystem::Equip(database, inventory, equipment, dupId);
+    check("A equipped", equipment.ContainsInstanceId(dupId));
+    const auto reEquip = legend::item::EquipmentSystem::Equip(database, inventory, equipment,
+                                                              dupId);
+    check("re-equip same instanceId fails", !reEquip.success);
+    check("still exactly one A (in equipment)",
+          equipment.ContainsInstanceId(dupId) && inventory.FindByInstanceId(dupId) == nullptr);
+
+    // 3) 最终 Inventory + Equipment 全集无重复
+    check("final unique across inventory+equipment", allUnique(collectIds()));
     LOG_INFO("[EquipmentUniqueInstanceCheck] completed, failures = " + std::to_string(failures));
 }
 
@@ -745,4 +777,156 @@ void GameScene::RunEquipmentComparisonCheck() {
     const auto vsEmpty = legend::item::EquipmentSystem::Compare(*wooden, nullptr);
     check("vs empty slot attackDelta +12", std::fabs(vsEmpty.attackDelta - 12.0f) < 0.001f);
     LOG_INFO("[EquipmentComparisonCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [EquipmentTypeGuardCheck] ====================
+// 阶段7.1：Material 带异常 equipment 块（hasEquipment=true）——Equip 必须拒绝、
+// 实例留背包、槽保持空（严格五重类型校验）。
+
+void GameScene::RunEquipmentTypeGuardCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogEquipCheck("EquipmentTypeGuardCheck", name, pass, failures);
+    };
+    auto database = MakeEquipmentTestDatabase();
+    legend::item::Inventory inventory;
+    legend::item::EquipmentComponent equipment;
+
+    // 构造异常定义：type=Material 但 hasEquipment=true（程序化注入，模拟损坏数据）
+    legend::item::ItemDefinition materialWithEquip;
+    materialWithEquip.id = "material_with_equip";
+    materialWithEquip.name = "CorruptedMaterial";
+    materialWithEquip.type = legend::item::ItemType::Material;
+    materialWithEquip.maxStack = 50;
+    materialWithEquip.hasEquipment = true;
+    materialWithEquip.equipment.slot = legend::item::EquipmentSlotType::Weapon;
+    materialWithEquip.equipment.attackBonus = 10.0f;
+    database.AddTestItem(std::move(materialWithEquip));
+
+    const legend::item::ItemDefinition* corrupted = database.Get("material_with_equip");
+    const legend::item::ItemInstanceId badId = InsertEquipment(inventory, *corrupted);
+    check("corrupted material in inventory", badId != 0);
+
+    // Equip：必须失败（type != Equipment），实例回滚到背包、槽保持空
+    const auto result =
+        legend::item::EquipmentSystem::Equip(database, inventory, equipment, badId);
+    check("equip material-with-equipment rejected", !result.success);
+    check("instance rolled back to inventory",
+          inventory.FindByInstanceId(badId) != nullptr);
+    check("weapon slot still empty",
+          equipment.GetEquipped(legend::item::EquipmentSlotType::Weapon) == nullptr);
+    LOG_INFO("[EquipmentTypeGuardCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [EquipmentLootConfigCheck] ====================
+// 阶段7.1：正式 slime/wolf/boar 至少各 1 个 Equipment entry，全部合法
+// （item 存在 + type==Equipment + min==max==1 + 0<chance<=1）；
+// 构造 iron_sword min=1/max=2 必须被判非法。
+
+void GameScene::RunEquipmentLootConfigCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogEquipCheck("EquipmentLootConfigCheck", name, pass, failures);
+    };
+    const auto& items = m_worldActors.GetItemDatabase();
+    auto validateTable = [&items](const std::vector<legend::world::LootEntry>& entries) {
+        int equipmentEntries = 0;
+        for (const auto& entry : entries) {
+            const legend::item::ItemDefinition* def = items.Get(entry.itemId);
+            if (def == nullptr || def->type != legend::item::ItemType::Equipment) {
+                continue; // 非 Equipment entry 不在本 Check 范围
+            }
+            ++equipmentEntries;
+            if (entry.min != 1 || entry.max != 1) {
+                return false; // Equipment 数量必须 1~1
+            }
+            if (entry.chance <= 0.0f || entry.chance > 1.0f) {
+                return false;
+            }
+        }
+        return equipmentEntries >= 1; // 至少 1 个装备掉落
+    };
+
+    for (const char* templateId : {"slime", "wolf", "boar"}) {
+        const auto& entries = m_worldActors.GetSpawner().GetLootEntries(templateId);
+        check(std::string(templateId) + " has valid equipment loot entries",
+              validateTable(entries));
+    }
+
+    // 构造非法：Equipment min=1 max=2 -> ValidateLootEntries 必须剔除
+    const auto& slimeEntriesBefore = m_worldActors.GetSpawner().GetLootEntries("slime");
+    const std::vector<legend::world::LootEntry> savedSlime = slimeEntriesBefore;
+    std::vector<legend::world::LootEntry> badTable;
+    legend::world::LootEntry badEntry;
+    badEntry.itemId = "iron_sword";
+    badEntry.chance = 1.0f;
+    badEntry.min = 1;
+    badEntry.max = 2; // 非法：Equipment 数量范围
+    badTable.push_back(badEntry);
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", badTable);
+    m_worldActors.GetSpawner().ValidateLootEntries(items);
+    check("equipment min1/max2 entry rejected by ValidateLootEntries",
+          m_worldActors.GetSpawner().GetLootEntries("slime").empty());
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", savedSlime); // 还原正式表
+    LOG_INFO("[EquipmentLootConfigCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SlotOverwriteGuardCheck] ====================
+// 阶段7.1：槽已有 A 时直接放 B 必须失败（防一行代码覆盖丢失旧装备）。
+
+void GameScene::RunSlotOverwriteGuardCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogEquipCheck("SlotOverwriteGuardCheck", name, pass, failures);
+    };
+    const auto database = MakeEquipmentTestDatabase();
+    legend::item::Inventory inventory;
+    legend::item::EquipmentComponent equipment;
+
+    const legend::item::ItemDefinition* wooden = database.Get("wooden_sword");
+    const legend::item::ItemDefinition* iron = database.Get("iron_sword");
+    const legend::item::ItemInstanceId idA = InsertEquipment(inventory, *wooden);
+    (void)legend::item::EquipmentSystem::Equip(database, inventory, equipment, idA);
+
+    // 直接构造 B 实例（调用方持有），尝试覆盖非空 Weapon 槽
+    legend::item::ItemInstance b;
+    b.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+    b.definitionId = "iron_sword";
+    b.quantity = 1;
+    const bool overwritten =
+        !equipment.TrySetEquipped(legend::item::EquipmentSlotType::Weapon, b); // 返回 false=拒绝
+    check("TrySetEquipped on non-empty slot returns false", overwritten);
+    const legend::item::ItemInstance* stillA = equipment.GetEquipped(
+        legend::item::EquipmentSlotType::Weapon);
+    check("weapon still A (not overwritten)",
+          stillA != nullptr && stillA->instanceId == idA);
+    check("B still held by caller (not consumed)",
+          b.instanceId != 0 && b.definitionId == "iron_sword");
+    LOG_INFO("[SlotOverwriteGuardCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [OfficialEquipmentLootCheck] ====================
+// 阶段7.1：不使用 Test Override——直接验证正式 monster.json 掉落表
+// （Spawner 已加载）：slime/wolf/boar 各至少 1 个 Equipment 掉落。
+
+void GameScene::RunOfficialEquipmentLootCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogEquipCheck("OfficialEquipmentLootCheck", name, pass, failures);
+    };
+    const auto& items = m_worldActors.GetItemDatabase();
+    auto hasEquipmentLoot = [this, &items](const char* templateId) {
+        const auto& entries = m_worldActors.GetSpawner().GetLootEntries(templateId);
+        for (const auto& entry : entries) {
+            const legend::item::ItemDefinition* def = items.Get(entry.itemId);
+            if (def != nullptr && def->type == legend::item::ItemType::Equipment) {
+                return true;
+            }
+        }
+        return false;
+    };
+    check("slime official loot has equipment", hasEquipmentLoot("slime"));
+    check("wolf official loot has equipment", hasEquipmentLoot("wolf"));
+    check("boar official loot has equipment", hasEquipmentLoot("boar"));
+    LOG_INFO("[OfficialEquipmentLootCheck] completed, failures = " + std::to_string(failures));
 }

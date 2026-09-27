@@ -133,12 +133,21 @@ void MonsterSpawner::ValidateLootEntries(const item::ItemDatabase& items) {
         std::vector<LootEntry> valid;
         valid.reserve(assets.definition.loot.size());
         for (LootEntry& entry : assets.definition.loot) {
-            if (items.Exists(entry.itemId)) {
-                valid.push_back(std::move(entry));
-            } else {
+            if (!items.Exists(entry.itemId)) {
                 LOG_WARN("MonsterSpawner: '" + templateId + "' loot item '" + entry.itemId +
                          "' not in ItemDatabase, entry skipped.");
+                continue;
             }
+            // 阶段7.1：Equipment 掉落数量必须 1~1（绝不能 x2/x3/范围数量作为一个 stack）
+            const item::ItemDefinition* definition = items.Get(entry.itemId);
+            if (definition != nullptr && definition->type == item::ItemType::Equipment &&
+                (entry.min != 1 || entry.max != 1)) {
+                LOG_WARN("MonsterSpawner: '" + templateId + "' equipment loot '" + entry.itemId +
+                         "' must be min=1/max=1 (got " + std::to_string(entry.min) + "/" +
+                         std::to_string(entry.max) + "), entry skipped.");
+                continue;
+            }
+            valid.push_back(std::move(entry));
         }
         assets.definition.loot = std::move(valid);
     }

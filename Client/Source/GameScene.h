@@ -113,6 +113,11 @@ private:
     void RunLevelEquipmentCheck();
     void RunEquipmentLootCheck();
     void RunEquipmentComparisonCheck();
+    // 阶段7.1 自检：类型守卫 / 掉落配置 / 槽覆盖保护 / 正式掉落表
+    void RunEquipmentTypeGuardCheck();
+    void RunEquipmentLootConfigCheck();
+    void RunSlotOverwriteGuardCheck();
+    void RunOfficialEquipmentLootCheck();
     // LEGEND_AUTO_EQUIPMENT_TEST=1：阶段7 验收时间线（Kill->Loot->Pickup->Equip->Stats->Swap->Unequip）
     void UpdateEquipmentTest(float deltaTime);
     // F6：Equipment Debug 覆盖层（6 槽状态 + Base/Equipment/Final ATK/DEF/HP 几何显示）

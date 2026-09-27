@@ -26,7 +26,8 @@
             },
             "loot": [
                 { "item": "slime_gel", "chance": 0.75, "min": 1, "max": 2 },
-                { "item": "small_potion", "chance": 0.10, "min": 1, "max": 1 }
+                { "item": "small_potion", "chance": 0.10, "min": 1, "max": 1 },
+                { "item": "wooden_sword", "chance": 0.08, "min": 1, "max": 1 }
             ]
         },
         {
@@ -54,7 +55,9 @@
             },
             "loot": [
                 { "item": "wolf_fang", "chance": 0.60, "min": 1, "max": 2 },
-                { "item": "small_potion", "chance": 0.08, "min": 1, "max": 1 }
+                { "item": "small_potion", "chance": 0.08, "min": 1, "max": 1 },
+                { "item": "leather_boots", "chance": 0.08, "min": 1, "max": 1 },
+                { "item": "cloth_helmet", "chance": 0.04, "min": 1, "max": 1 }
             ]
         },
         {
@@ -83,7 +86,9 @@
             "loot": [
                 { "item": "boar_hide", "chance": 0.55, "min": 1, "max": 1 },
                 { "item": "iron_ore", "chance": 0.35, "min": 1, "max": 2 },
-                { "item": "small_potion", "chance": 0.06, "min": 1, "max": 1 }
+                { "item": "small_potion", "chance": 0.06, "min": 1, "max": 1 },
+                { "item": "cloth_armor", "chance": 0.07, "min": 1, "max": 1 },
+                { "item": "copper_ring", "chance": 0.04, "min": 1, "max": 1 }
             ]
         }
     ]

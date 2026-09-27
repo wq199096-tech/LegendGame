@@ -30,8 +30,10 @@ public:
     bool IsSlotEmpty(EquipmentSlotType slot) const { return GetEquipped(slot) == nullptr; }
     // 取出槽内实例（槽变空）；空槽返回 nullopt
     std::optional<ItemInstance> TakeEquipped(EquipmentSlotType slot);
-    // 放入实例（调用方保证槽为空——Swap 时先取出旧装备）
-    void SetEquipped(EquipmentSlotType slot, const ItemInstance& instance);
+    // 放入实例（阶段7.1 防覆盖：槽非空时拒绝并返回 false——禁止一行代码覆盖丢失旧装备）
+    bool TrySetEquipped(EquipmentSlotType slot, const ItemInstance& instance);
+    // 全槽扫描：是否已装备指定 instanceId（阶段7.1 全局唯一性保护）
+    bool ContainsInstanceId(ItemInstanceId instanceId) const;
     // 遍历全部槽位汇总加成（按 definitionId 查 ItemDefinition 的 equipment 块）
     EquipmentBonuses CalculateBonuses(const ItemDatabase& items) const;
     // 当前已装备槽位数（0~6，Debug 用）

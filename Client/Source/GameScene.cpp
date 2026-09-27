@@ -155,6 +155,10 @@ void GameScene::OnLoad() {
     RunLevelEquipmentCheck();
     RunEquipmentLootCheck();
     RunEquipmentComparisonCheck();
+    RunEquipmentTypeGuardCheck();
+    RunEquipmentLootConfigCheck();
+    RunSlotOverwriteGuardCheck();
+    RunOfficialEquipmentLootCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
