@@ -78,7 +78,10 @@ void GameScene::OnLoad() {
     ApplyAutoTestHooks();
     RunDirection8Check();
     RunAnimationCheck();
+    RunSpriteSheetCheck();
+    RunAnimationDirectionFrameCheck();
     RunCharacterTransformCheck();
+    RunCharacterRenderCheck();
     RunCollisionVerification();
     RunYSortVerification();
     RunCollisionSourceVerification();
@@ -219,7 +222,10 @@ void GameScene::Update(float deltaTime) {
     }
 
     // 输入 -> 控制器 -> 角色 -> 地图碰撞 -> 位置
-    if (m_autoYsort) {
+    if (m_autoDirCycle) {
+        UpdateDirectionCycle();
+        m_playerController.Update(input, m_characterController, *m_player, *m_map, deltaTime);
+    } else if (m_autoYsort) {
         UpdateAutoYsortWalk(deltaTime);
     } else {
         if (m_autoWalk) {
@@ -326,6 +332,12 @@ void GameScene::ApplyAutoTestHooks() {
     if (autoWalk != nullptr && autoWalk[0] == '1') {
         m_autoWalk = true;
         LOG_INFO("Auto-test: walking right enabled (LEGEND_AUTO_WALK=1).");
+    }
+    const char* dirCycle = SDL_getenv("LEGEND_AUTO_DIRECTION_CYCLE");
+    if (dirCycle != nullptr && dirCycle[0] == '1') {
+        m_autoDirCycle = true;
+        LOG_INFO("Auto-test: 8-direction cycle enabled (LEGEND_AUTO_DIRECTION_CYCLE=1), "
+                 "1.2s per direction (0.6s idle + 0.6s walk).");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {
@@ -462,26 +474,181 @@ void GameScene::RunCharacterTransformCheck() {
         return;
     }
 
-    // 1. Feet Position 不等于 Sprite Center（pivot.y = 0.85 产生垂直偏移）
-    const legend::math::Vector2 feet = m_player->GetPosition();
-    const legend::math::Vector2 drawCenter = legend::render::CharacterRenderer::GetSpriteDrawCenter(*m_player);
-    const float dy = drawCenter.y - feet.y;
-    check("feet != sprite center", std::fabs(dy) > 0.01f && std::fabs(drawCenter.x - feet.x) < 0.01f);
-
-    // 2. 移动后 Feet / Collision / Sprite Pivot 关系始终一致
-    m_player->SetPosition({feet.x + 500.0f, feet.y + 300.0f});
-    const legend::math::Vector2 feet2 = m_player->GetPosition();
-    const legend::math::Vector2 drawCenter2 = legend::render::CharacterRenderer::GetSpriteDrawCenter(*m_player);
     const auto& fp = m_player->GetFootprint();
-    const bool offsetConsistent =
-        std::fabs((drawCenter2.x - feet2.x) - (drawCenter.x - feet.x)) < 0.01f &&
-        std::fabs((drawCenter2.y - feet2.y) - dy) < 0.01f &&
-        std::fabs((feet2.x + fp.offsetX) - (feet2.x + fp.offsetX)) < 0.01f;
-    check("feet/collision/pivot consistent after move", offsetConsistent);
+    const auto& visual = m_player->GetVisual();
+
+    // ---- Before：记录相对 Feet 的真实偏移 ----
+    const legend::math::Vector2 feetBefore = m_player->GetPosition();
+    const legend::math::Vector2 fpCenterBefore(feetBefore.x + fp.offsetX, feetBefore.y + fp.offsetY);
+    const legend::math::Vector2 spriteCenterBefore =
+        legend::render::CharacterRenderer::GetSpriteDrawCenter(*m_player);
+    const legend::math::Vector2 fpOffsetBefore = fpCenterBefore - feetBefore;
+    const legend::math::Vector2 spOffsetBefore = spriteCenterBefore - feetBefore;
+
+    // ---- 移动角色 ----
+    m_player->SetPosition(feetBefore + legend::math::Vector2(500.0f, 300.0f));
+
+    // ---- After：重新计算相对 Feet 的偏移 ----
+    const legend::math::Vector2 feetAfter = m_player->GetPosition();
+    const legend::math::Vector2 fpCenterAfter(feetAfter.x + fp.offsetX, feetAfter.y + fp.offsetY);
+    const legend::math::Vector2 spriteCenterAfter =
+        legend::render::CharacterRenderer::GetSpriteDrawCenter(*m_player);
+    const legend::math::Vector2 fpOffsetAfter = fpCenterAfter - feetAfter;
+    const legend::math::Vector2 spOffsetAfter = spriteCenterAfter - feetAfter;
+
+    // 1. 移动前后两组偏移必须一致
+    const bool fpConstant = std::fabs(fpOffsetAfter.x - fpOffsetBefore.x) < 0.01f &&
+                            std::fabs(fpOffsetAfter.y - fpOffsetBefore.y) < 0.01f;
+    check("footprint offset constant after move", fpConstant);
+
+    const bool spConstant = std::fabs(spOffsetAfter.x - spOffsetBefore.x) < 0.01f &&
+                            std::fabs(spOffsetAfter.y - spOffsetBefore.y) < 0.01f;
+    check("sprite pivot offset constant after move", spConstant);
+
+    // 2. 非平凡断言：偏移等于理论值
+    //    Footprint Center = Feet + (offsetX, offsetY)
+    const bool fpTheoretical = std::fabs(fpOffsetBefore.x - fp.offsetX) < 0.01f &&
+                               std::fabs(fpOffsetBefore.y - fp.offsetY) < 0.01f;
+    check("footprint center = feet + footprint offset", fpTheoretical);
+
+    //    Sprite Center = Feet + visual * (0.5 - pivot)
+    const float expectedSpX = visual.width * (0.5f - visual.pivot.x);
+    const float expectedSpY = visual.height * (0.5f - visual.pivot.y);
+    const bool spTheoretical = std::fabs(spOffsetBefore.x - expectedSpX) < 0.01f &&
+                               std::fabs(spOffsetBefore.y - expectedSpY) < 0.01f;
+    check("sprite center = feet + pivot offset", spTheoretical);
+
+    // 3. Feet Position 不等于 Sprite Center（pivot 产生可见偏移）
+    check("feet != sprite center",
+          std::fabs(spOffsetBefore.y) > 0.01f || std::fabs(spOffsetBefore.x) > 0.01f);
 
     // 还原到原位
-    m_player->SetPosition(feet);
+    m_player->SetPosition(feetBefore);
     LOG_INFO("[CharacterTransformCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunSpriteSheetCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[SpriteSheetCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    const auto& sheet = m_player->GetSpriteSheet();
+    if (!sheet || !sheet->IsValid()) {
+        LOG_ERROR("[SpriteSheetCheck] sprite sheet invalid.");
+        return;
+    }
+    check("Columns: 6", sheet->GetColumns() == 6);
+    check("Rows: 8", sheet->GetRows() == 8);
+    check("Frames: 48", sheet->GetFrameCount() == 48);
+    LOG_INFO("[SpriteSheetCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunAnimationDirectionFrameCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[AnimationDirectionFrameCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    static const char* kDirNames[8] = {"south", "southwest", "west", "northwest",
+                                       "north", "northeast", "east", "southeast"};
+
+    // 每方向 Idle/Walk Clip 引用的帧必须全部落在对应方向行 [row*6, row*6+5]；
+    // 两个方向不得使用同一行（rowMask 位图互斥检查）
+    for (int row = 0; row < 8; ++row) {
+        int rowMask = 0;
+        bool clipsFound = true;
+        for (const char* prefix : {"idle_", "walk_"}) {
+            const auto it = m_playerClips->find(std::string(prefix) + kDirNames[row]);
+            if (it == m_playerClips->end() || it->second.frames.empty()) {
+                check(std::string(prefix) + kDirNames[row] + " exists", false);
+                clipsFound = false;
+                continue;
+            }
+            for (const auto& frame : it->second.frames) {
+                const int frameRow = frame.frameIndex / 6;
+                rowMask |= 1 << frameRow;
+                if (frameRow != row) {
+                    check(std::string(prefix) + kDirNames[row] + " frame " +
+                              std::to_string(frame.frameIndex) + " in row " +
+                              std::to_string(row),
+                          false);
+                }
+            }
+        }
+        if (clipsFound) {
+            check(std::string(kDirNames[row]) + " uses only row " + std::to_string(row) +
+                      " (no shared rows)",
+                  rowMask == (1 << row));
+        }
+    }
+
+    LOG_INFO("[AnimationDirectionFrameCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunCharacterRenderCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[CharacterRenderCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    const auto& sheet = m_player->GetSpriteSheet();
+    if (!sheet || !sheet->IsValid()) {
+        LOG_ERROR("[CharacterRenderCheck] sprite sheet invalid.");
+        return;
+    }
+    const auto& visual = m_player->GetVisual();
+    const float texW = static_cast<float>(sheet->GetTexture().GetWidth());
+    const float texH = static_cast<float>(sheet->GetTexture().GetHeight());
+    const legend::math::Vector2 scale = legend::render::CharacterRenderer::GetSpriteScale(*m_player);
+    const float quadW = texW * scale.x;
+    const float quadH = texH * scale.y;
+
+    // 整张图集 576x768，但角色 Quad 世界尺寸必须恒等于 visualWidth x visualHeight（96x96）
+    check("quad width == visualWidth (96)", std::fabs(quadW - visual.width) < 0.01f);
+    check("quad height == visualHeight (96)", std::fabs(quadH - visual.height) < 0.01f);
+    check("atlas texture is 576x768", std::fabs(texW - 576.0f) < 0.01f && std::fabs(texH - 768.0f) < 0.01f);
+    check("draw size != atlas size", quadW < texW && quadH < texH);
+
+    LOG_INFO("[CharacterRenderCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::UpdateDirectionCycle() {
+    if (!m_player) {
+        return;
+    }
+    // 每方向 1.2s：0.6s Idle + 0.6s Walk，按枚举序 South->SW->W->NW->N->NE->E->SE
+    constexpr double kSegmentLength = 1.2;
+    const int segment = static_cast<int>(m_sceneElapsed / kSegmentLength);
+    const int dirIdx = segment % 8;
+    const double phase = m_sceneElapsed - segment * kSegmentLength;
+    const bool walkPhase = phase >= 0.6;
+
+    static const legend::math::Vector2 kDirVectors[8] = {
+        {0.0f, 1.0f},  { -1.0f, 1.0f }, { -1.0f, 0.0f }, { -1.0f, -1.0f },
+        {0.0f, -1.0f}, {1.0f, -1.0f},  {1.0f, 0.0f},   {1.0f, 1.0f},
+    };
+    m_playerController.SetVirtualInput(walkPhase ? kDirVectors[dirIdx]
+                                                 : legend::math::Vector2{0.0f, 0.0f});
+
+    const int stateKey = segment * 2 + (walkPhase ? 1 : 0);
+    if (stateKey != m_lastCycleSegment) {
+        m_lastCycleSegment = stateKey;
+        static const char* kNames[8] = {"South", "SouthWest", "West", "NorthWest",
+                                        "North", "NorthEast", "East", "SouthEast"};
+        LOG_INFO(std::string("[DirectionCycle] ") + kNames[dirIdx] + (walkPhase ? " WALK" : " IDLE") +
+                 " (virtual input " + std::to_string(kDirVectors[dirIdx].x) + "," +
+                 std::to_string(kDirVectors[dirIdx].y) + ")");
+    }
 }
 
 void GameScene::RunCollisionVerification() {

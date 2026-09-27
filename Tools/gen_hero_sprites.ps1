@@ -104,30 +104,30 @@ $g.Dispose(); $bmp.Dispose()
 Write-Host "SpriteSheet saved: $pngPath ($sheetW x $sheetH)"
 
 # ---- animations.json ----
+# Frame index = row * 6 + col（行优先），每方向独占一行：
+# South=row0(0-5) SW=row1(6-11) West=row2(12-17) NW=row3(18-23)
+# North=row4(24-29) NE=row5(30-35) East=row6(36-41) SE=row7(42-47)
 $durationsIdle = 0.35
 $durationsWalk = 0.12
-$sb = New-Object System.Text.StringBuilder
-[void]$sb.Append('{"version":1,"clips":{')
-$firstClip = $true
-foreach ($dirDef in $rowDirs) {
-    $n = $dirDef.name
-    # idle (frames 0-1)
-    if (-not $firstClip) { [void]$sb.Append(',') }
-    $firstClip = $false
-    [void]$sb.Append('"idle_' + $n + '":{"loop":true,"frames":[')
-    [void]$sb.Append('{"index":0,"duration":' + $durationsIdle + '},{"index":1,"duration":' + $durationsIdle + '}')
-    [void]$sb.Append(']}')
-    # walk (frames 2-5)
-    [void]$sb.Append(',"walk_' + $n + '":{"loop":true,"frames":[')
-    for ($i = 0; $i -lt 4; $i++) {
-        if ($i -gt 0) { [void]$sb.Append(',') }
-        [void]$sb.Append('{"index":' + (2 + $i) + ',"duration":' + $durationsWalk + '}')
+$clips = [ordered]@{}
+for ($row = 0; $row -lt $rowDirs.Count; $row++) {
+    $n = $rowDirs[$row].name
+    $base = $row * 6
+    $clips["idle_$n"] = @{
+        loop = $true
+        frames = @(
+            @{ index = $base;     duration = $durationsIdle },
+            @{ index = $base + 1; duration = $durationsIdle }
+        )
     }
-    [void]$sb.Append(']}')
+    $clips["walk_$n"] = @{
+        loop = $true
+        frames = @(0..3 | ForEach-Object { @{ index = $base + 2 + $_; duration = $durationsWalk } })
+    }
 }
-[void]$sb.Append('}}')
-[System.IO.File]::WriteAllText((Join-Path $outDir 'animations.json'), $sb.ToString())
-Write-Host "animations.json saved"
+$animJson = @{ version = 1; clips = $clips } | ConvertTo-Json -Depth 6 -Compress
+[System.IO.File]::WriteAllText((Join-Path $outDir 'animations.json'), $animJson)
+Write-Host "animations.json saved (frame index = row*6 + col)"
 
 # ---- character.json ----
 $charJson = @'
@@ -139,7 +139,7 @@ $charJson = @'
   "frameHeight": 96,
   "visualWidth": 96,
   "visualHeight": 96,
-  "footprint": { "width": 28, "height": 18, "offsetX": 0, "offsetY": 20 },
+  "footprint": { "width": 28, "height": 18, "offsetX": 0, "offsetY": 4 },
   "pivot": { "x": 0.5, "y": 0.85 },
   "moveSpeed": 200,
   "animations": "Characters/TestHero/animations.json"

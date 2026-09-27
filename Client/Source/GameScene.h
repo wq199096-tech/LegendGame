@@ -33,9 +33,14 @@ private:
     void RunEditedMapCheck();
     void RunDirection8Check();
     void RunAnimationCheck();
+    void RunSpriteSheetCheck();
+    void RunAnimationDirectionFrameCheck();
     void RunCharacterTransformCheck();
+    void RunCharacterRenderCheck();
     void ApplyAutoTestHooks();
     void LogMapStats(double deltaTime);
+    // LEGEND_AUTO_DIRECTION_CYCLE=1：8 方向循环（每方向 Idle/Walk 各一段）
+    void UpdateDirectionCycle();
     // F2：脚底碰撞盒 + Feet 十字
     void DrawCharacterDebug(legend::render::SpriteBatch& batch);
 
@@ -61,6 +66,8 @@ private:
     // 自动化测试钩子（环境变量触发，仅用于验收）
     bool m_autoWalk = false;
     bool m_autoYsort = false;
+    bool m_autoDirCycle = false;
+    int m_lastCycleSegment = -1;
     float m_ysortTreeX = 0.0f;
     float m_ysortTreeY = 0.0f;
 };
