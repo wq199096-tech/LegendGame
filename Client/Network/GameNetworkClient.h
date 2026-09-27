@@ -5,6 +5,7 @@
 
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
+#include "Shared/Network/Protocol.h" // 阶段9.2指令一：Shared Protocol 统一
 
 #include <asio.hpp>
 
@@ -38,11 +39,13 @@ struct NetworkEvent {
         HandshakeFailed,
         LoginResponse,
         HeartbeatTimeout,
+        ProtocolError, // 阶段9.2指令十：未知 MessageId
     };
     Type type = Type::Disconnected;
     std::string message;
     bool loginSuccess = false;
-    std::uint32_t accountId = 0;
+    std::uint64_t accountId = 0;              // 阶段9.2指令四：全链 uint64
+    std::uint16_t errorCode = 0;              // 阶段9.2指令五：LoginErrorCode 全链
     std::string displayName;
     float rttMs = -1.0f;
 };

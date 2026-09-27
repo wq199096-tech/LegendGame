@@ -3,6 +3,10 @@
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpServer.h"
 
+#include "Shared/Network/MessageId.h"
+#include "Shared/Network/NetworkConstants.h"
+#include "Shared/Network/Protocol.h" // 阶段9.2指令二：Shared Protocol 统一
+
 #include <atomic>
 #include <cstdint>
 #include <map>

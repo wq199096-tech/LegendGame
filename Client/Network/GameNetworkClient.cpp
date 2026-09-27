@@ -1,5 +1,6 @@
 #include "Client/Network/GameNetworkClient.h"
 
+#include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/ByteWriter.h"
 
@@ -7,8 +8,22 @@ namespace legend::client {
 
 using legend::network::ByteReader;
 using legend::network::ByteWriter;
+using legend::network::ClientHelloPayload;
+using legend::network::DecodeHeartbeatPong;
+using legend::network::DecodeLoginResponse;
+using legend::network::DecodeServerHello;
+using legend::network::DisconnectNoticePayload;
+using legend::network::EncodeClientHello;
+using legend::network::EncodeDisconnectNotice;
+using legend::network::EncodeHeartbeatPing;
+using legend::network::EncodeLoginRequest;
+using legend::network::HeartbeatPingPayload;
+using legend::network::HeartbeatPongPayload;
+using legend::network::LoginRequestPayload;
+using legend::network::LoginResponsePayload;
 using legend::network::MessageId;
 using legend::network::Packet;
+using legend::network::ServerHelloPayload;
 namespace net = legend::net;
 
 GameNetworkClient::GameNetworkClient()
@@ -49,12 +64,13 @@ void GameNetworkClient::Connect(const std::string& host, std::uint16_t port) {
 
 void GameNetworkClient::Disconnect(bool notifyServer) {
     if (notifyServer && m_connection && m_connection->IsConnected()) {
-        // 指令六十七：DisconnectNotice reason=ClientQuit，发送失败仍 Close
-        Packet notice;
-        notice.header.messageId = static_cast<std::uint16_t>(MessageId::DisconnectNotice);
-        ByteWriter writer(notice.payload);
-        if (writer.WriteString("ClientQuit")) {
-            m_connection->Send(notice);
+        // 指令六十七 + 阶段9.2指令一：EncodeDisconnectNotice reason=ClientQuit
+        DisconnectNoticePayload notice;
+        notice.reason = "ClientQuit";
+        Packet out;
+        out.header.messageId = static_cast<std::uint16_t>(MessageId::DisconnectNotice);
+        if (EncodeDisconnectNotice(notice, out.payload)) {
+            m_connection->Send(out); // 发送失败仍 Close
         }
     }
     m_heartbeatTimer.cancel();
@@ -70,13 +86,15 @@ void GameNetworkClient::SendLogin(const std::string& username, const std::string
     if (m_state.load() != NetworkState::Ready || !m_connection) {
         return;
     }
-    Packet request;
-    request.header.messageId = static_cast<std::uint16_t>(MessageId::LoginRequest);
-    ByteWriter writer(request.payload);
-    if (!writer.WriteString(username) || !writer.WriteString(token)) {
-        return;
+    // 阶段9.2指令一：EncodeLoginRequest
+    LoginRequestPayload request;
+    request.username = username;
+    request.token = token;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::LoginRequest);
+    if (EncodeLoginRequest(request, out.payload)) {
+        m_connection->Send(out);
     }
-    m_connection->Send(request);
 }
 
 void GameNetworkClient::PollEvents(std::deque<NetworkEvent>& out) {
@@ -128,27 +146,26 @@ void GameNetworkClient::SendClientHello() {
     if (!m_connection) {
         return;
     }
-    Packet hello;
-    hello.header.messageId = static_cast<std::uint16_t>(MessageId::ClientHello);
-    ByteWriter writer(hello.payload);
-    // 指令四十四：version/build/name，不含密码
-    writer.WriteUInt16(legend::network::kProtocolVersion);
-    writer.WriteString(m_config.clientBuild);
-    writer.WriteString(m_config.clientName);
-    m_connection->Send(hello);
+    // 阶段9.2指令一：Shared Protocol 统一（EncodeClientHello）
+    ClientHelloPayload hello;
+    hello.protocolVersion = legend::network::kProtocolVersion;
+    hello.clientBuild = m_config.clientBuild;
+    hello.clientName = m_config.clientName;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ClientHello);
+    if (EncodeClientHello(hello, out.payload)) {
+        m_connection->Send(out);
+    }
 }
 
 void GameNetworkClient::OnPacket(const Packet& packet) {
     switch (static_cast<MessageId>(packet.header.messageId)) {
         case MessageId::ServerHello: {
-            ByteReader reader(packet.payload.data(), packet.payload.size());
-            const bool accepted = reader.ReadBool();
-            reader.ReadUInt16(); // serverProtocolVersion
-            const std::uint64_t connectionId = reader.ReadUInt64();
-            std::string serverName;
-            std::string message;
-            if (!reader.IsValid() || !reader.ReadString(serverName) ||
-                !reader.ReadString(message)) {
+            // 阶段9.2指令一：DecodeServerHello
+            ServerHelloPayload hello;
+            std::string decodeError;
+            if (!DecodeServerHello(packet.payload.data(), packet.payload.size(), hello,
+                                   decodeError)) {
                 SetState(NetworkState::Failed, "malformed ServerHello");
                 NetworkEvent event;
                 event.type = NetworkEvent::Type::HandshakeFailed;
@@ -156,22 +173,22 @@ void GameNetworkClient::OnPacket(const Packet& packet) {
                 PushEvent(std::move(event));
                 return;
             }
-            if (!accepted) {
+            if (!hello.accepted) {
                 // 指令四十六：version mismatch -> HandshakeFailed
-                SetState(NetworkState::Failed, message);
+                SetState(NetworkState::Failed, hello.message);
                 NetworkEvent event;
                 event.type = NetworkEvent::Type::HandshakeFailed;
-                event.message = message;
+                event.message = hello.message;
                 PushEvent(std::move(event));
                 Disconnect(false);
                 return;
             }
-            m_serverConnectionId.store(connectionId);
+            m_serverConnectionId.store(hello.connectionId);
             m_lastPongTime = std::chrono::steady_clock::now();
             SetState(NetworkState::Ready);
             NetworkEvent event;
             event.type = NetworkEvent::Type::HandshakeSuccess;
-            event.message = serverName;
+            event.message = hello.serverName;
             PushEvent(std::move(event));
             ScheduleHeartbeat(); // 指令六十二：Ready 后心跳
             return;
@@ -193,30 +210,36 @@ void GameNetworkClient::OnPacket(const Packet& packet) {
             return;
         }
         case MessageId::LoginResponse: {
-            ByteReader reader(packet.payload.data(), packet.payload.size());
-            const bool success = reader.ReadBool();
-            const std::uint32_t accountId = reader.ReadUInt32();
-            std::string displayName;
-            std::string message;
-            if (!reader.IsValid() || !reader.ReadString(displayName) ||
-                !reader.ReadString(message)) {
+            // 阶段9.2指令一/四/五：DecodeLoginResponse（u64 accountId + errorCode）
+            LoginResponsePayload response;
+            std::string decodeError;
+            if (!DecodeLoginResponse(packet.payload.data(), packet.payload.size(), response,
+                                     decodeError)) {
                 return;
             }
-            if (success) {
+            if (response.success) {
                 m_authenticated.store(true);
             }
             // 指令一百零七：登录失败不断网，TCP 保持
             NetworkEvent event;
             event.type = NetworkEvent::Type::LoginResponse;
-            event.loginSuccess = success;
-            event.accountId = accountId;
-            event.displayName = displayName;
-            event.message = message;
+            event.loginSuccess = response.success;
+            event.accountId = response.accountId;
+            event.errorCode = response.errorCode;
+            event.displayName = response.displayName;
+            event.message = response.message;
             PushEvent(std::move(event));
             return;
         }
-        default:
-            return; // Client 侧未知消息忽略（Server 侧按协议错误断开）
+        default: {
+            // 阶段9.2指令十：未知 MessageId -> ProtocolError 事件 + 断开（不再静默忽略）
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::ProtocolError;
+            event.message = "unknown message id " + std::to_string(packet.header.messageId);
+            PushEvent(std::move(event));
+            Disconnect(false);
+            return;
+        }
     }
 }
 
@@ -245,15 +268,19 @@ void GameNetworkClient::SendHeartbeat() {
     if (!m_connection) {
         return;
     }
-    Packet ping;
-    ping.header.messageId = static_cast<std::uint16_t>(MessageId::HeartbeatPing);
-    ByteWriter writer(ping.payload);
-    writer.WriteUInt32(++m_pingSequence);
-    const auto now = std::chrono::steady_clock::now().time_since_epoch();
-    writer.WriteUInt64(
-        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count()));
+    // 阶段9.2指令一：EncodeHeartbeatPing
+    HeartbeatPingPayload ping;
+    ping.pingSequence = ++m_pingSequence;
+    ping.clientTimeMs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
     m_lastPingTime = std::chrono::steady_clock::now();
-    m_connection->Send(ping);
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::HeartbeatPing);
+    if (EncodeHeartbeatPing(ping, out.payload)) {
+        m_connection->Send(out);
+    }
 }
 
 void GameNetworkClient::PushEvent(NetworkEvent event) {
