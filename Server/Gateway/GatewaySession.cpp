@@ -72,6 +72,8 @@ bool GatewaySession::HandleHandshake(const Packet& packet, std::string& error) {
         return false;
     }
     SendPacket(out);
+    LOG_INFO("[Gateway] ServerHello(accepted=" + std::string(accepted ? "true" : "false") +
+             ") queued for #" + std::to_string(m_connectionId));
 
     if (!accepted) {
         error = "protocol version mismatch";

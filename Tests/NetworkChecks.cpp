@@ -454,37 +454,36 @@ void RunNetworkChecks() {
         bool rejected = false;
         if (!ec) {
             asio::write(socket, asio::buffer(hello), ec);
-            socket.non_blocking(true);
+            // 阻塞读线程：ServerHello 到达即返回（2s 无数据 = 服务器未发）
             std::vector<std::uint8_t> response(256);
-            std::size_t received = 0;
-            const auto deadline =
-                std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-            while (std::chrono::steady_clock::now() < deadline) {
+            std::atomic<std::size_t> received{0};
+            std::thread reader([&] {
                 std::error_code readEc;
-                received += socket.read_some(asio::buffer(response), readEc);
-                if (received >= kPacketHeaderSize) {
-                    PacketHeader header;
-                    std::string headerError;
-                    if (PacketCodec::DecodeHeader(response.data(), received, header,
-                                                  headerError) &&
-                        received >= kPacketHeaderSize + header.payloadSize) {
-                        break;
-                    }
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                const auto n =
+                    socket.read_some(asio::buffer(response.data(), response.size()), readEc);
+                received.store(n);
+            });
+            const bool gotData = WaitUntil([&] { return received.load() > 0; }, 2000);
+            if (reader.joinable()) {
+                reader.detach(); // 阻塞读：进程退出前 socket 关闭自然返回
             }
-            if (received >= kPacketHeaderSize) {
+            const std::size_t receivedCount = received.load();
+            bool rejected = false;
+            if (gotData && receivedCount >= kPacketHeaderSize) {
                 Packet decoded;
                 std::string decodeError;
-                if (PacketCodec::DecodePacket(response.data(), received, decoded, decodeError)) {
-                    ByteReader reader(decoded.payload.data(), decoded.payload.size());
-                    rejected = !reader.ReadBool(); // accepted == false
+                if (PacketCodec::DecodePacket(response.data(), receivedCount, decoded,
+                                              decodeError)) {
+                    ByteReader r(decoded.payload.data(), decoded.payload.size());
+                    rejected = !r.ReadBool(); // accepted == false
+                } else {
+                    std::printf("[diag] decode failed: %s (received=%zu)\n",
+                                decodeError.c_str(), receivedCount);
                 }
+            } else {
+                std::printf("[diag] no response (received=%zu)\n", receivedCount);
             }
-        }
-        std::error_code closeEc;
-        socket.close(closeEc);
-        Check("BadVersionHandshakeCheck", rejected);
+            Check("BadVersionHandshakeCheck: version 999 rejected (accepted=false)", rejected);
     }
     // 16-19 [LoginResponseExactlyOnceCheck]（指令二十三）四场景各 count==1
     {
