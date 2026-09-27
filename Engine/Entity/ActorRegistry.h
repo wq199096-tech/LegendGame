@@ -24,6 +24,8 @@ public:
 
     // 按 id 查找（不存在返回 nullptr）；只查活跃注册项，不校验 active。
     // 注册表本身不拥有对象，const 查询同样返回可变指针（const_cast 语义集中于此）。
+    // 行为明确：Get(id) 按注册表登记返回，包括 inactive Actor（active 过滤由
+    // GetByType/FindInRadius/TargetHandle 负责）。
     Character* Get(EntityId id) const;
 
     // 全部 Actor（注册顺序）

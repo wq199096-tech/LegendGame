@@ -11,6 +11,10 @@
 #include "Engine/Entity/Entity.h"
 #include "Engine/Math/Vector2.h"
 
+namespace legend::animation {
+class AnimationStateMachine;
+}
+
 namespace legend::entity {
 
 // 角色脚底碰撞区域（相对 Feet Position 的偏移）
@@ -38,6 +42,12 @@ public:
               std::shared_ptr<const std::unordered_map<std::string, animation::AnimationClip>> clips);
 
     ActorType GetActorType() const { return m_actorType; }
+
+    // 统一动画更新入口：
+    // 1) AnimationStateMachine 按最终 moving/direction 选择正确 Clip（同名 Play 不重置进度）
+    // 2) AnimationPlayer::Update(deltaTime) 真正推进当前帧（Loop/NonLoop）
+    // 没有这一步推进，动画会永远卡在 Clip 第一帧
+    void UpdateAnimation(float deltaTime);
 
     Direction8 GetDirection() const { return m_direction; }
     void SetDirection(Direction8 direction) { m_direction = direction; }

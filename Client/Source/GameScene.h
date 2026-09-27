@@ -55,6 +55,10 @@ private:
     void RunActorRegistryCheck();
     void RunTargetHandleCheck();
     void RunSpawnerCheck(const legend::world::WorldSpawnStats& stats);
+    // 阶段4.1 自检：动画真正逐帧推进 / monster.json 配置一致性 / 无效模板容错
+    void RunAnimationRuntimeCheck();
+    void RunMonsterConfigCheck();
+    void RunMonsterTemplateFailureCheck();
     // F3：AI Debug 覆盖层（最近几只怪的 Aggro/Leash 圈、Home 十字、Wander 目标、目标连线）
     void DrawAIDebugOverlay(legend::render::SpriteBatch& batch);
     void DrawLine(legend::render::SpriteBatch& batch, const legend::math::Vector2& from,

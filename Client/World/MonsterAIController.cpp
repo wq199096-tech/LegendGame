@@ -12,8 +12,11 @@ namespace legend::world {
 namespace {
 constexpr float kLoseTargetMultiplier = 1.5f; // loseTargetRange = aggroRange x 1.5
 
-float Distance(const math::Vector2& a, const math::Vector2& b) {
-    return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+// 全程使用 DistanceSquared 判定（避免无谓 sqrt）；F3 显示真实距离时才开方
+float DistanceSq(const math::Vector2& a, const math::Vector2& b) {
+    const float dx = a.x - b.x;
+    const float dy = a.y - b.y;
+    return dx * dx + dy * dy;
 }
 
 float RandomRange(std::mt19937& rng, float minValue, float maxValue) {
@@ -69,9 +72,9 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
             EnterIdle(monster, rng);
             break;
         }
-        // Leash 保护：Wander 不会超范围，但保险检查
-        if (Distance(monster.GetPosition(), monster.GetHomePosition()) >
-            monster.GetLeashRange()) {
+        // Leash 保护：Wander 不会超范围，但保险检查（DistanceSquared）
+        if (DistanceSq(monster.GetPosition(), monster.GetHomePosition()) >
+            monster.GetLeashRange() * monster.GetLeashRange()) {
             EnterReturnHome(monster);
             break;
         }
@@ -99,8 +102,8 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
     }
     case MonsterAIState::Chase: {
         // Leash：距 home 超限 -> 清目标回出生点（怪物不能追遍整张地图）
-        if (Distance(monster.GetPosition(), monster.GetHomePosition()) >
-            monster.GetLeashRange()) {
+        if (DistanceSq(monster.GetPosition(), monster.GetHomePosition()) >
+            monster.GetLeashRange() * monster.GetLeashRange()) {
             LOG_INFO("[AI] " + monster.GetName() + " leash exceeded (>" +
                      std::to_string(monster.GetLeashRange()) + "), return home.");
             monster.GetTargetHandle().Clear();
@@ -115,18 +118,19 @@ void MonsterAIController::Update(MonsterCharacter& monster, const map::Map& map,
             EnterIdle(monster, rng);
             break;
         }
-        const float distToTarget = Distance(monster.GetPosition(), target->GetPosition());
-        // 离开 loseTargetRange -> 放弃目标
-        if (distToTarget > monster.GetAggroRange() * kLoseTargetMultiplier) {
+        const float distToTargetSq = DistanceSq(monster.GetPosition(), target->GetPosition());
+        // 离开 loseTargetRange -> 放弃目标（DistanceSquared 判定）
+        const float loseTargetRange = monster.GetAggroRange() * kLoseTargetMultiplier;
+        if (distToTargetSq > loseTargetRange * loseTargetRange) {
             monster.GetTargetHandle().Clear();
             m_aggro.Clear();
             EnterIdle(monster, rng);
             break;
         }
         // stopDistance / resumeDistance 滞回：贴近后停步，拉开 resume 距离才继续
-        if (distToTarget <= monster.GetStopDistance()) {
+        if (distToTargetSq <= monster.GetStopDistance() * monster.GetStopDistance()) {
             m_context.chasePaused = true;
-        } else if (distToTarget > monster.GetResumeDistance()) {
+        } else if (distToTargetSq > monster.GetResumeDistance() * monster.GetResumeDistance()) {
             m_context.chasePaused = false;
         }
         if (m_context.chasePaused) {
@@ -182,7 +186,9 @@ void MonsterAIController::EnterIdle(MonsterCharacter& monster, std::mt19937& rng
     m_context.stateTimer = 0.0f;
     m_context.hasWanderTarget = false;
     m_context.chasePaused = false;
-    m_context.idleDuration = RandomRange(rng, 2.0f, 4.0f);
+    // Idle 等待时长数据驱动：来自 monster.json wanderIntervalMin/Max（禁止硬编码）
+    m_context.idleDuration = RandomRange(rng, monster.GetWanderIntervalMin(),
+                                         monster.GetWanderIntervalMax());
 }
 
 void MonsterAIController::EnterWander(MonsterCharacter& monster, const map::Map& map,

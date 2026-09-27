@@ -20,15 +20,28 @@ bool MonsterSpawner::Initialize(const std::string& assetsRoot,
         return false;
     }
 
-    // 预加载全部模板资源（SpriteSheet/Clips 共享给同模板所有怪物实例）
+    // 预加载全部模板资源（SpriteSheet/Clips 共享给同模板所有怪物实例）。
+    // 单模板失败：LOG_ERROR + 跳过，继续加载其他模板；全部失败才初始化失败。
+    int skipped = 0;
     for (auto& [id, definition] : definitions) {
         TemplateAssets assets;
         assets.definition = definition;
         if (!LoadTemplateAssets(definition, assets)) {
-            LOG_ERROR("MonsterSpawner: template '" + id + "' asset load failed.");
-            return false;
+            LOG_ERROR("MonsterSpawner: template '" + id +
+                      "' asset load failed, skipped (other templates continue).");
+            ++skipped;
+            continue;
         }
         m_templates[id] = std::move(assets);
+    }
+    if (m_templates.empty()) {
+        LOG_ERROR("MonsterSpawner: all " + std::to_string(definitions.size()) +
+                  " template(s) failed to load.");
+        return false;
+    }
+    if (skipped > 0) {
+        LOG_WARN("MonsterSpawner: " + std::to_string(skipped) + " template(s) skipped, " +
+                 std::to_string(m_templates.size()) + " valid template(s) ready.");
     }
     LOG_INFO("MonsterSpawner initialized: " + std::to_string(m_templates.size()) +
              " template(s) ready.");

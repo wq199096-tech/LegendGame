@@ -32,6 +32,8 @@ MonsterCharacter::MonsterCharacter(
       m_aggroRange(definition.ai.aggroRange),
       m_leashRange(definition.ai.leashRange),
       m_wanderRadius(definition.ai.wanderRadius),
+      m_wanderIntervalMin(definition.ai.wanderIntervalMin),
+      m_wanderIntervalMax(definition.ai.wanderIntervalMax),
       m_stopDistance(definition.ai.stopDistance),
       m_resumeDistance(definition.ai.resumeDistance) {
     SetSpriteSheet(std::move(spriteSheet));

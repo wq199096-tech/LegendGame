@@ -44,6 +44,8 @@ public:
     float GetAggroRange() const { return m_aggroRange; }
     float GetLeashRange() const { return m_leashRange; }
     float GetWanderRadius() const { return m_wanderRadius; }
+    float GetWanderIntervalMin() const { return m_wanderIntervalMin; }
+    float GetWanderIntervalMax() const { return m_wanderIntervalMax; }
     float GetStopDistance() const { return m_stopDistance; }
     float GetResumeDistance() const { return m_resumeDistance; }
 
@@ -63,6 +65,8 @@ private:
     float m_aggroRange = 300.0f;
     float m_leashRange = 600.0f;
     float m_wanderRadius = 180.0f;
+    float m_wanderIntervalMin = 2.0f;
+    float m_wanderIntervalMax = 5.0f;
     float m_stopDistance = 60.0f;
     float m_resumeDistance = 80.0f;
     MonsterAIState m_aiState = MonsterAIState::Idle;

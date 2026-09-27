@@ -100,6 +100,9 @@ void GameScene::OnLoad() {
     RunActorRegistryCheck();
     RunTargetHandleCheck();
     RunSpawnerCheck(monsterStats);
+    RunMonsterConfigCheck();
+    RunMonsterTemplateFailureCheck();
+    RunAnimationRuntimeCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -258,9 +261,8 @@ void GameScene::Update(float deltaTime) {
         m_playerController.Update(input, m_characterController, *m_player, *m_map, deltaTime);
     }
 
-    // 动画状态机：Idle/Walk + 8 方向
-    legend::animation::AnimationStateMachine asmState;
-    asmState.Update(*m_player);
+    // 动画状态机 + 帧推进：Idle/Walk + 8 方向，真正逐帧播放
+    m_player->UpdateAnimation(deltaTime);
 
     // ---- 世界角色统一更新：NPC 动画 / Monster AI + 动画 ----
     m_worldActors.Update(*m_map, deltaTime);
@@ -1093,6 +1095,47 @@ void GameScene::RunActorRegistryCheck() {
     mutableRegistry.Unregister(tempId);
     check("Unregister removes actor", mutableRegistry.Get(tempId) == nullptr);
 
+    // 6. Active 语义：inactive Actor 不进入 GetByType/FindInRadius/TargetHandle
+    const auto inactiveId = legend::entity::EntityIdAllocator::Next();
+    auto inactive = std::make_unique<legend::entity::Character>(
+        inactiveId, "RegistryCheckInactive", legend::entity::ActorType::Monster, 0.0f,
+        legend::entity::CharacterFootprint{}, legend::entity::CharacterVisual{}, emptyClips);
+    inactive->SetActive(false);
+    if (m_player) {
+        inactive->SetPosition(m_player->GetPosition()); // 与 Player 同点，必进 FindInRadius 圆
+    }
+    mutableRegistry.Register(inactive.get());
+    // 行为明确：Get(id) 按登记返回（含 inactive）；过滤由 GetByType/FindInRadius/TargetHandle 负责
+    check("Get(id) returns registered inactive actor by id",
+          mutableRegistry.Get(inactiveId) == inactive.get());
+    bool inactiveInTypeQuery = false;
+    for (const legend::entity::Character* actor :
+         mutableRegistry.GetByType(legend::entity::ActorType::Monster)) {
+        if (actor->GetId() == inactiveId) {
+            inactiveInTypeQuery = true;
+            break;
+        }
+    }
+    check("GetByType excludes inactive", !inactiveInTypeQuery);
+    bool inactiveInRadius = false;
+    if (m_player) {
+        for (const legend::entity::Character* actor :
+             mutableRegistry.FindInRadius(m_player->GetPosition(), 100.0f)) {
+            if (actor->GetId() == inactiveId) {
+                inactiveInRadius = true;
+                break;
+            }
+        }
+    }
+    check("FindInRadius excludes inactive", !inactiveInRadius);
+    legend::entity::TargetHandle inactiveHandle;
+    inactiveHandle.Set(inactiveId);
+    check("TargetHandle invalid for inactive target",
+          !inactiveHandle.IsValid(registry) && inactiveHandle.Resolve(registry) == nullptr);
+    inactiveHandle.Clear();
+    mutableRegistry.Unregister(inactiveId);
+    check("Unregister removes inactive actor", mutableRegistry.Get(inactiveId) == nullptr);
+
     LOG_INFO("[ActorRegistryCheck] completed, failures = " + std::to_string(failures));
 }
 
@@ -1375,4 +1418,203 @@ void GameScene::UpdateAITest(float deltaTime) {
     default:
         break;
     }
+}
+
+// ==================== 阶段4.1：动画推进 / 配置一致性 / 模板容错 ====================
+
+void GameScene::RunAnimationRuntimeCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[AnimationRuntimeCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    const legend::animation::AnimationStateMachine stateMachine;
+
+    // ---- Player：walk_east 逐帧推进 + Loop ----
+    auto& playerAnim = m_player->GetAnimationPlayer();
+    m_player->SetMoving(true);
+    m_player->SetDirection(legend::entity::Direction8::East);
+    stateMachine.Update(*m_player); // 选 walk_east（同名 Play 不重置进度）
+    const int walkFrameA = playerAnim.GetCurrentFrameOrdinal();
+    playerAnim.Update(0.25f); // 单帧约 0.12s -> 前进 >= 2 帧
+    const int walkFrameB = playerAnim.GetCurrentFrameOrdinal();
+    check("player walk_east frame advances (" + std::to_string(walkFrameA) + " -> " +
+              std::to_string(walkFrameB) + ")",
+          walkFrameB != walkFrameA);
+    // 持续推进一个完整周期后必须 Loop 回到起点
+    const int loopStart = walkFrameB;
+    float advanced = 0.0f;
+    bool looped = false;
+    while (advanced < 5.0f) {
+        playerAnim.Update(0.05f);
+        advanced += 0.05f;
+        if (advanced > 0.3f && playerAnim.GetCurrentFrameOrdinal() == loopStart) {
+            looped = true;
+            break;
+        }
+    }
+    check("player walk_east loops back to frame " + std::to_string(loopStart), looped);
+
+    // ---- Player：idle 两帧循环（帧时长较长，累计推进检测避免回卷歧义） ----
+    m_player->SetMoving(false);
+    stateMachine.Update(*m_player); // idle_east
+    const int idleStart = playerAnim.GetCurrentFrameOrdinal();
+    bool idleAdvanced = false;
+    for (int i = 0; i < 20; ++i) {
+        playerAnim.Update(0.1f); // 累计 2.0s，必跨 idle 帧
+        if (playerAnim.GetCurrentFrameOrdinal() != idleStart) {
+            idleAdvanced = true;
+            break;
+        }
+    }
+    check("player idle frame advances", idleAdvanced);
+
+    // ---- NPC：Idle 逐帧循环（固定朝向，累计推进检测） ----
+    const auto npcs = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::NPC);
+    if (!npcs.empty()) {
+        legend::entity::Character* npc = npcs.front();
+        auto& npcAnim = npc->GetAnimationPlayer();
+        stateMachine.Update(*npc); // idle_<固定朝向>
+        const int npcStart = npcAnim.GetCurrentFrameOrdinal();
+        bool npcAdvanced = false;
+        for (int i = 0; i < 20; ++i) {
+            npcAnim.Update(0.1f); // 累计 2.0s，必跨 idle 帧
+            if (npcAnim.GetCurrentFrameOrdinal() != npcStart) {
+                npcAdvanced = true;
+                break;
+            }
+        }
+        check("npc idle frame advances", npcAdvanced);
+    } else {
+        check("npc available for animation check", false);
+    }
+
+    // ---- Monster：walk 逐帧推进 ----
+    const auto monsters =
+        m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    if (!monsters.empty()) {
+        legend::entity::Character* monster = monsters.front();
+        auto& monsterAnim = monster->GetAnimationPlayer();
+        monster->SetMoving(true);
+        monster->SetDirection(legend::entity::Direction8::East);
+        stateMachine.Update(*monster); // walk_east
+        monsterAnim.Update(0.0f);
+        const int monsterFrameA = monsterAnim.GetCurrentFrameOrdinal();
+        monsterAnim.Update(0.25f);
+        const int monsterFrameB = monsterAnim.GetCurrentFrameOrdinal();
+        check("monster walk frame advances (" + std::to_string(monsterFrameA) + " -> " +
+                  std::to_string(monsterFrameB) + ")",
+              monsterFrameB != monsterFrameA);
+        monster->SetMoving(false); // 还原
+    } else {
+        check("monster available for animation check", false);
+    }
+
+    // 还原 Player 状态（后续帧由 PlayerController/ASM 正常驱动）
+    m_player->SetDirection(legend::entity::Direction8::South);
+    m_player->SetMoving(false);
+    LOG_INFO("[AnimationRuntimeCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunMonsterConfigCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, float actual, float expected) {
+        const bool pass = std::fabs(actual - expected) < 0.001f;
+        LOG_INFO("[MonsterConfigCheck] " + name + " expected " + std::to_string(expected) +
+                 ", got " + std::to_string(actual) + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    struct Expected {
+        const char* id;
+        float aggro;
+        float leash;
+        float wander;
+        float intervalMin;
+        float intervalMax;
+        float stop;
+        float resume;
+    };
+    const Expected expected[] = {
+        {"slime", 260.0f, 520.0f, 160.0f, 2.0f, 5.0f, 55.0f, 75.0f},
+        {"wolf", 340.0f, 700.0f, 200.0f, 2.5f, 6.0f, 60.0f, 85.0f},
+        {"boar", 300.0f, 600.0f, 180.0f, 2.0f, 5.5f, 60.0f, 80.0f},
+    };
+    for (const Expected& entry : expected) {
+        const legend::world::MonsterDefinition* def =
+            m_worldActors.GetSpawner().GetDefinition(entry.id);
+        if (def == nullptr) {
+            LOG_INFO(std::string("[MonsterConfigCheck] ") + entry.id +
+                     " definition missing -> FAIL");
+            ++failures;
+            continue;
+        }
+        const std::string prefix = std::string(entry.id) + " ";
+        check(prefix + "aggroRange", def->ai.aggroRange, entry.aggro);
+        check(prefix + "leashRange", def->ai.leashRange, entry.leash);
+        check(prefix + "wanderRadius", def->ai.wanderRadius, entry.wander);
+        check(prefix + "wanderIntervalMin", def->ai.wanderIntervalMin, entry.intervalMin);
+        check(prefix + "wanderIntervalMax", def->ai.wanderIntervalMax, entry.intervalMax);
+        check(prefix + "stopDistance", def->ai.stopDistance, entry.stop);
+        check(prefix + "resumeDistance", def->ai.resumeDistance, entry.resume);
+    }
+
+    // 实例化参数与模板一致：wanderInterval 已数据驱动到 MonsterCharacter
+    const auto monsters =
+        m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    if (!monsters.empty()) {
+        const auto* monster =
+            static_cast<const legend::world::MonsterCharacter*>(monsters.front());
+        const legend::world::MonsterDefinition* def =
+            m_worldActors.GetSpawner().GetDefinition(monster->GetMonsterTemplateId());
+        if (def != nullptr) {
+            check("instance wanderIntervalMin == template",
+                  monster->GetWanderIntervalMin(), def->ai.wanderIntervalMin);
+            check("instance wanderIntervalMax == template",
+                  monster->GetWanderIntervalMax(), def->ai.wanderIntervalMax);
+        }
+    } else {
+        LOG_INFO("[MonsterConfigCheck] monster available for config check -> FAIL");
+        ++failures;
+    }
+    LOG_INFO("[MonsterConfigCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunMonsterTemplateFailureCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[MonsterTemplateFailureCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+
+    // 构造指向不存在模板的临时 SpawnArea（不修改正式 monster.json）
+    legend::map::MapSpawnArea badArea;
+    badArea.id = 9999;
+    badArea.monsterId = "nonexistent_template";
+    badArea.x = 3200.0f;
+    badArea.y = 3200.0f;
+    badArea.count = 3;
+    badArea.radius = 100.0f;
+
+    const std::size_t before = m_worldActors.GetRegistry().Count();
+    std::mt19937 testRng(12345); // 独立 rng，不影响 WorldActorManager 随机状态
+    const auto spawned = m_worldActors.GetSpawner().SpawnArea(badArea, *m_map, testRng);
+    check("invalid template area Spawned=0", spawned.empty());
+    check("invalid template area Failed == count (3)", 3 - static_cast<int>(spawned.size()) == 3);
+    check("registry unchanged after invalid spawn",
+          m_worldActors.GetRegistry().Count() == before);
+
+    // 已有合法模板与怪物不受影响
+    const auto monsters =
+        m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::Monster);
+    check("existing legal monsters still 17", monsters.size() == 17);
+    check("valid templates still 3", m_worldActors.GetSpawner().TemplateCount() == 3);
+
+    LOG_INFO("[MonsterTemplateFailureCheck] completed, failures = " + std::to_string(failures));
 }

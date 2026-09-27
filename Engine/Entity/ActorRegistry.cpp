@@ -41,6 +41,10 @@ Character* ActorRegistry::Get(EntityId id) const {
 std::vector<Character*> ActorRegistry::GetByType(ActorType type) const {
     std::vector<Character*> result;
     for (Character* actor : m_actors) {
+        // 只返回活跃 Actor：inactive 不得进入类型查询（目标/遍历语义）
+        if (actor == nullptr || !actor->IsActive()) {
+            continue;
+        }
         if (actor->GetActorType() == type) {
             result.push_back(actor);
         }
@@ -56,6 +60,10 @@ std::vector<Character*> ActorRegistry::FindInRadius(const math::Vector2& positio
     }
     const float radiusSq = radius * radius;
     for (Character* actor : m_actors) {
+        // 只返回活跃 Actor：inactive 不能进入附近目标查询
+        if (actor == nullptr || !actor->IsActive()) {
+            continue;
+        }
         const math::Vector2 delta = actor->GetPosition() - position;
         if (delta.LengthSq() < radiusSq) {
             result.push_back(actor);

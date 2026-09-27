@@ -20,13 +20,20 @@ bool ParseAiBlock(const json& ai, MonsterAIDefinition& out) {
     out.wanderIntervalMax = ai.value("wanderIntervalMax", 5.0f);
     out.stopDistance = ai.value("stopDistance", 60.0f);
     out.resumeDistance = ai.value("resumeDistance", 80.0f);
-    // 参数合法性：resume 必须大于 stop（滞回）；leash 必须大于 aggro
+    // 参数合法性：resume 必须大于 stop（滞回）；leash 必须大于 aggro；
+    // wanderIntervalMin >= 0 且 Max >= Min（Idle 等待时长数据驱动）
     if (out.resumeDistance <= out.stopDistance) {
         LOG_ERROR("MonsterDefinition: resumeDistance must be > stopDistance.");
         return false;
     }
     if (out.leashRange <= out.aggroRange) {
         LOG_ERROR("MonsterDefinition: leashRange must be > aggroRange.");
+        return false;
+    }
+    if (out.wanderIntervalMin < 0.0f || out.wanderIntervalMax < out.wanderIntervalMin) {
+        LOG_ERROR("MonsterDefinition: invalid wanderInterval range [" +
+                  std::to_string(out.wanderIntervalMin) + ", " +
+                  std::to_string(out.wanderIntervalMax) + "] (need Min >= 0, Max >= Min).");
         return false;
     }
     return true;

@@ -5,7 +5,6 @@
 #include <ctime>
 
 #include "Client/World/MonsterCharacter.h"
-#include "Engine/Animation/AnimationStateMachine.h"
 #include "Engine/Debug/Logger.h"
 #include "Engine/Entity/EntityIdAllocator.h"
 #include "Engine/Map/Map.h"
@@ -132,15 +131,14 @@ WorldSpawnStats WorldActorManager::SpawnMonsters(const map::Map& map) {
 }
 
 void WorldActorManager::Update(const map::Map& map, float deltaTime) {
-    const legend::animation::AnimationStateMachine stateMachine;
     for (entity::Character* actor : m_registry.GetAll()) {
         if (actor == nullptr || !actor->IsActive()) {
             continue;
         }
         switch (actor->GetActorType()) {
         case entity::ActorType::NPC: {
-            // 静态站立：仅驱动 Idle 动画
-            stateMachine.Update(*actor);
+            // 静态站立：Idle Clip 逐帧循环播放（moving=false 保持 Idle + 固定朝向）
+            actor->UpdateAnimation(deltaTime);
             break;
         }
         case entity::ActorType::Monster: {
@@ -150,7 +148,9 @@ void WorldActorManager::Update(const map::Map& map, float deltaTime) {
             }
             it->second.Update(*static_cast<MonsterCharacter*>(actor), map, m_registry,
                               m_characterController, m_rng, deltaTime);
-            stateMachine.Update(*actor);
+            // AI 决定 moving/direction 后：Idle 播 idle_，移动/Chase 播 walk_，
+            // 撞墙未实际位移时 CharacterController 已置 moving=false -> 自动回落 idle_
+            actor->UpdateAnimation(deltaTime);
             break;
         }
         default:
