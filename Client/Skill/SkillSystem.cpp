@@ -26,6 +26,11 @@ void SkillSystem::Initialize(const SkillDatabase* database,
 SkillCastResult SkillSystem::CanCast(const PlayerCharacter& player, const std::string& skillId,
                                      const legend::combat::CombatTarget& target,
                                      const SkillCooldowns& cooldowns) const {
+    // 阶段8.1指令十六：最前置 Active 校验——Inactive Player 绝不能施法
+    //（CombatSystem::ApplySkillDamage 的 attacker/target IsActive 双保险继续保留，两层防线）
+    if (!player.IsActive()) {
+        return {false, "player inactive"};
+    }
     // 顺序（阶段8指令三十四）：Skill存在 -> 状态允许 -> CD -> Mana -> 目标 -> 距离
     if (m_database == nullptr || m_registry == nullptr || m_combat == nullptr) {
         return {false, "skill system not initialized"};

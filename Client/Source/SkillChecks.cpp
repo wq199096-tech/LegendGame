@@ -52,6 +52,17 @@ void LogSkillCheck(const char* tag, const std::string& name, bool pass, int& fai
     }
 }
 
+// 阶段8.1指令二十一：RAII 恢复守卫——Integration Check 的任何 return 路径
+//（含 FAIL / 早退 / 中途 return）都会恢复快照世界（位置/HP/Active/ActionState/
+// Player 状态/新增 GroundLoot 清理/Combat recent events 清空），避免早退漏 Restore。
+struct RestoreGuard {
+    GameScene* scene;
+    explicit RestoreGuard(GameScene* sceneIn) : scene(sceneIn) {}
+    ~RestoreGuard() { scene->RestoreSkillWorldSnapshot(); }
+    RestoreGuard(const RestoreGuard&) = delete;
+    RestoreGuard& operator=(const RestoreGuard&) = delete;
+};
+
 } // namespace
 
 // ==================== [SkillDatabaseCheck] ====================
@@ -303,6 +314,8 @@ void GameScene::RunSkillCastValidationCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillCastValidationCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     auto& cooldowns = m_playerSkill.GetSkillSystem(); // 仅用于可读性命名（实际 CD 在控制器内）
     (void)cooldowns;
@@ -402,6 +415,8 @@ void GameScene::RunSkillManaCooldownCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillManaCooldownCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     if (m_player == nullptr) {
         check("player present", false);
         LOG_INFO("[SkillManaCooldownCheck] completed, failures = " + std::to_string(failures));
@@ -492,6 +507,8 @@ void GameScene::RunSkillInterruptCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillInterruptCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -563,6 +580,8 @@ void GameScene::RunSkillSingleTargetDamageCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillSingleTargetDamageCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -624,6 +643,8 @@ void GameScene::RunSkillDefenseCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillDefenseCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -699,6 +720,8 @@ void GameScene::RunSkillRangeCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillRangeCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     if (m_player == nullptr) {
         check("player present", false);
         LOG_INFO("[SkillRangeCheck] completed, failures = " + std::to_string(failures));
@@ -751,6 +774,8 @@ void GameScene::RunSkillAOECheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillAOECheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -843,6 +868,8 @@ void GameScene::RunSkillAOEDeathCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillAOEDeathCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -914,6 +941,8 @@ void GameScene::RunSkillTargetDeathBeforeEventCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillTargetDeathBeforeEventCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -975,6 +1004,8 @@ void GameScene::RunSkillTargetDespawnCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillTargetDespawnCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1025,6 +1056,8 @@ void GameScene::RunSkillCastStateCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillCastStateCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1093,6 +1126,8 @@ void GameScene::RunSkillMovementLockCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillMovementLockCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1147,6 +1182,8 @@ void GameScene::RunSkillBasicAttackInteractionCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillBasicAttackInteractionCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1218,6 +1255,8 @@ void GameScene::RunEquipmentSkillDamageCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("EquipmentSkillDamageCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1299,6 +1338,8 @@ void GameScene::RunSkillAttackSnapshotCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillAttackSnapshotCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1364,6 +1405,8 @@ void GameScene::RunSkillRespawnResetCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillRespawnResetCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1423,6 +1466,8 @@ void GameScene::RunSkillAggroCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillAggroCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1502,6 +1547,8 @@ void GameScene::RunSkillDeathRewardCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillDeathRewardCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1527,6 +1574,17 @@ void GameScene::RunSkillDeathRewardCheck() {
     // 清空前面 Check 遗留的 pending 死亡（如 RespawnReset 的 whirlwind 误伤），
     // 否则 "exactly 1 DeathEvent" 会把旧死亡也算进来
     m_worldActors.GetCombatSystem().ClearRecentDeaths();
+    // 指令十/二十：确定性 Loot——保存正式表 -> Override small_potion 1.0/1/1，
+    // 禁止依赖正式随机概率作为唯一断言；结束恢复正式表（guard 清测试 GroundLoot）
+    const auto originalLoot = m_worldActors.GetSpawner().GetLootEntries("slime");
+    std::vector<legend::world::LootEntry> guaranteed;
+    legend::world::LootEntry guaranteedEntry;
+    guaranteedEntry.itemId = "small_potion";
+    guaranteedEntry.chance = 1.0f;
+    guaranteedEntry.min = 1;
+    guaranteedEntry.max = 1;
+    guaranteed.push_back(guaranteedEntry);
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", guaranteed);
     const auto expBefore = m_player->GetProgression().GetTotalExp();
     const std::size_t lootBefore = m_worldActors.GetLoot().GetAll().size();
 
@@ -1548,13 +1606,25 @@ void GameScene::RunSkillDeathRewardCheck() {
     const std::size_t lootAfter1 = m_worldActors.GetLoot().GetAll().size();
     check("reward processed once", rewarded1 == 1);
     check("exp increased exactly once", expAfter1 > expBefore);
-    check("loot rolled (ground loot spawned)", lootAfter1 > lootBefore);
+    // 指令二十：确定性断言（不依赖正式随机概率）——恰好 +1 件且为 small_potion x1
+    check("deterministic ground loot small_potion x1",
+          lootAfter1 - lootBefore == 1 &&
+              [this]() {
+                  for (const auto& loot : m_worldActors.GetLoot().GetAll()) {
+                      if (loot.itemId == "small_potion" && loot.quantity == 1) {
+                          return true;
+                      }
+                  }
+                  return false;
+              }());
     const int rewarded2 = m_worldActors.ProcessDeathRewards();
     check("second reward pass is no-op (exactly-once)",
           rewarded2 == 0 &&
               m_player->GetProgression().GetTotalExp() == expAfter1 &&
               m_worldActors.GetLoot().GetAll().size() == lootAfter1);
     m_playerSkill.ResetForRespawn(*m_player);
+    // 指令十：恢复正式 LootTable（guard 同时清理测试新增 GroundLoot / 复活 slime）
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", originalLoot);
     LOG_INFO("[SkillDeathRewardCheck] completed, failures = " + std::to_string(failures));
 }
 
@@ -1567,6 +1637,8 @@ void GameScene::RunSkillAOERewardCheck() {
     auto check = [&failures](const std::string& name, bool pass) {
         LogSkillCheck("SkillAOERewardCheck", name, pass, failures);
     };
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
     auto& input = Engine::Get().GetInput();
     if (m_player == nullptr) {
         check("player present", false);
@@ -1707,6 +1779,24 @@ void GameScene::UpdateSkillTest(float deltaTime) {
                   m_player->GetLoadout().GetSkillId(2) == "piercing_strike" &&
                   m_player->GetLoadout().GetSkillId(3) == "heavy_strike");
         m_playerSkill.ResetForRespawn(*m_player);
+        // 阶段8.1指令十二/十三：保存正式 slime 掉落表（Override 前一次）→
+        // Override 确定性 small_potion 1.0/1/1（Stage9 精确验证，不依赖随机概率）
+        if (!m_skillTestLootSaved) {
+            m_skillTestOriginalSlimeLoot = m_worldActors.GetSpawner().GetLootEntries("slime");
+            m_skillTestLootSaved = true;
+            LOG_INFO("[SkillTest] official slime loot saved (" +
+                     std::to_string(m_skillTestOriginalSlimeLoot.size()) + " entries).");
+            std::vector<legend::world::LootEntry> guaranteed;
+            legend::world::LootEntry guaranteedEntry;
+            guaranteedEntry.itemId = "small_potion";
+            guaranteedEntry.chance = 1.0f;
+            guaranteedEntry.min = 1;
+            guaranteedEntry.max = 1;
+            guaranteed.push_back(guaranteedEntry);
+            m_worldActors.GetSpawner().SetTestLootOverride("slime", guaranteed);
+        }
+        // 阶段8.1指令十四：Stage0 保存世界快照（Stage90 统一恢复全部 Actor 状态）
+        CaptureSkillWorldSnapshot();
         pass("stage 0 complete");
         m_skillTestStage = 1;
         break;
@@ -2061,10 +2151,19 @@ void GameScene::UpdateSkillTest(float deltaTime) {
         (void)m_worldActors.ProcessDeathRewards();
         check("exp gained from skill kill",
               m_player->GetProgression().GetTotalExp() > expBefore);
-        check("loot rolled from skill kill",
-              m_worldActors.GetLoot().GetAll().size() > lootBefore);
+        // 阶段8.1指令十二：确定性断言——Override 表保证 slime 必掉 small_potion x1
+        const auto& lootsAfterKill = m_worldActors.GetLoot().GetAll();
+        check("exactly one deterministic ground loot", lootsAfterKill.size() - lootBefore == 1);
+        bool potionOnGround = false;
+        for (const auto& loot : lootsAfterKill) {
+            if (loot.itemId == "small_potion" && loot.quantity == 1) {
+                potionOnGround = true;
+                break;
+            }
+        }
+        check("deterministic small_potion x1 on ground", potionOnGround);
         const auto expAfter = m_player->GetProgression().GetTotalExp();
-        const std::size_t lootAfter = m_worldActors.GetLoot().GetAll().size();
+        const std::size_t lootAfter = lootsAfterKill.size();
         (void)m_worldActors.ProcessDeathRewards();
         check("no duplicate reward",
               m_player->GetProgression().GetTotalExp() == expAfter &&
@@ -2125,13 +2224,23 @@ void GameScene::UpdateSkillTest(float deltaTime) {
         m_skillTestStage = 90;
         break;
     }
-    case 90: { // 汇总（所有退出路径统一入口）
+    case 90: { // 汇总 + 世界恢复（所有退出路径统一入口：正常/FAIL/timeout 均到达此处）
         if (!m_skillTestSummaryDone) {
             m_skillTestSummaryDone = true;
+            // 阶段8.1指令十三：恢复正式 slime 掉落表（禁止空表冒充，阶段7.2 同原则）
+            RestoreSkillTestLootOverride(); // [SkillTest] official loot restored.
+            // 阶段8.1指令十四/十五：恢复全部 Actor（位置/HP/Active/State）+
+            // 清理测试新增 GroundLoot + 清空 Combat 事件
+            RestoreSkillWorldSnapshot();
+            // Player 恢复可玩基线：清目标 / 取消施法 / 清 CD / FillMana（Restore 内已做，
+            // 此处显式补一次确保语义）
+            m_playerCombat.GetTarget().ClearTarget();
             m_playerSkill.ResetForRespawn(*m_player);
+            m_player->ReturnToNormal();
             LOG_INFO("[SkillTest] completed, failures = " +
                      std::to_string(m_skillTestFailures) + ", elapsed = " +
                      std::to_string(m_skillTestElapsed) + "s");
+            LOG_INFO("[SkillTest] world state restored.");
         }
         break;
     }
@@ -2225,4 +2334,324 @@ std::string GameScene::GetSkillStatusText() const {
     }
     (void)database;
     return status;
+}
+
+// ==================== 阶段8.1：世界快照 Capture / Restore ====================
+// Integration Check 与 Auto Skill Test 的保存/恢复核心（含 FAIL/timeout 路径）。
+
+void GameScene::CaptureSkillWorldSnapshot() {
+    auto& snapshot = m_skillWorldSnapshot;
+    snapshot.actors.clear();
+    snapshot.groundLootIds.clear();
+    if (m_player != nullptr) {
+        snapshot.playerPosition = m_player->GetPosition();
+        snapshot.playerHp = m_player->GetCombatStats().hp;
+        snapshot.playerLevel = m_player->GetProgression().GetLevel();
+        snapshot.playerTotalExp = m_player->GetProgression().GetTotalExp();
+    }
+    snapshot.aliveMonsters = m_worldActors.GetAliveMonsterCount();
+    const auto& loots = m_worldActors.GetLoot().GetAll();
+    snapshot.groundLootCount = loots.size();
+    for (const auto& loot : loots) {
+        snapshot.groundLootIds.push_back(loot.lootEntityId);
+    }
+    auto captureActor = [&snapshot](legend::entity::Character* actor) {
+        if (actor == nullptr) {
+            return;
+        }
+        legend::skill::SkillWorldSnapshot::ActorState state;
+        state.id = actor->GetId();
+        state.position = actor->GetPosition();
+        state.hp = actor->GetCombatStats().hp;
+        state.active = actor->IsActive();
+        state.actionState = static_cast<std::uint8_t>(actor->GetActionState());
+        snapshot.actors.push_back(state);
+    };
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        captureActor(monster);
+    }
+    for (legend::entity::Character* npc :
+         m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::NPC)) {
+        captureActor(npc);
+    }
+    snapshot.captured = true;
+}
+
+void GameScene::RestoreSkillWorldSnapshot() {
+    const auto& snapshot = m_skillWorldSnapshot;
+    if (!snapshot.captured) {
+        return; // 未捕获过快照：无事可做
+    }
+    for (const auto& state : snapshot.actors) {
+        legend::entity::Character* actor = m_worldActors.GetRegistry().Get(state.id);
+        if (actor == nullptr) {
+            continue; // 已 Despawn（重生由 World 系统负责，不在此重建）
+        }
+        actor->SetPosition(state.position);
+        actor->SetActive(state.active);
+        auto& stats = actor->GetCombatStats();
+        if (state.hp > 0.0f && stats.hp <= 0.0f) {
+            actor->ReturnToNormal(); // 测试致死：复活（先退出 Dead 状态再恢复 HP）
+        }
+        stats.SetHp(std::min(state.hp, stats.maxHp));
+        if (stats.hp > 0.0f &&
+            actor->GetActionState() == legend::entity::CharacterActionState::Dead) {
+            actor->ReturnToNormal();
+        }
+    }
+    if (m_player != nullptr) {
+        m_player->SetPosition(snapshot.playerPosition);
+        m_player->GetCombatStats().SetHp(snapshot.playerHp);
+        // Player 恢复可玩基线：清目标 + 取消施法 + 清 CD + FillMana + Normal（指令十五）
+        m_playerCombat.GetTarget().ClearTarget();
+        m_playerSkill.ResetForRespawn(*m_player);
+        m_player->ReturnToNormal();
+    }
+    // 清理测试新增 GroundLoot：快照里没有的 id 一律移除（指令二十三）
+    const std::vector<legend::world::LootEntityId>& keep = snapshot.groundLootIds;
+    std::vector<legend::world::LootEntityId> toRemove;
+    for (const auto& loot : m_worldActors.GetLoot().GetAll()) {
+        if (std::find(keep.begin(), keep.end(), loot.lootEntityId) == keep.end()) {
+            toRemove.push_back(loot.lootEntityId);
+        }
+    }
+    for (legend::world::LootEntityId id : toRemove) {
+        m_worldActors.GetLoot().RemoveById(id);
+    }
+    // 清空测试期间累计的 Combat 事件，防止 Aggro/Reward 二次消费（指令二十二）
+    m_worldActors.GetCombatSystem().ClearRecentEvents();
+    m_worldActors.GetCombatSystem().ClearRecentDeaths();
+}
+
+// ==================== [SkillWorldStateIsolationCheck] ====================
+// 指令五/三十二：普通启动（仅 Pure Check 执行后）验证真实世界完全未被验收代码污染。
+
+void GameScene::RunSkillWorldStateIsolationCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillWorldStateIsolationCheck", name, pass, failures);
+    };
+    const auto& snapshot = m_skillWorldSnapshot;
+    check("world snapshot captured", snapshot.captured);
+    check("player exp unchanged (no test reward)",
+          m_player != nullptr &&
+              m_player->GetProgression().GetTotalExp() == snapshot.playerTotalExp &&
+              m_player->GetProgression().GetLevel() == snapshot.playerLevel);
+    check("ground loot count unchanged (no test drop)",
+          m_worldActors.GetLoot().GetAll().size() == snapshot.groundLootCount);
+    check("alive monster count unchanged (no test kill)",
+          m_worldActors.GetAliveMonsterCount() == snapshot.aliveMonsters);
+    int posMismatch = 0;
+    int hpMismatch = 0;
+    int activeMismatch = 0;
+    for (const auto& state : snapshot.actors) {
+        const legend::entity::Character* actor = m_worldActors.GetRegistry().Get(state.id);
+        if (actor == nullptr) {
+            ++activeMismatch;
+            continue;
+        }
+        if ((actor->GetPosition() - state.position).LengthSq() > 0.0001f) {
+            ++posMismatch;
+        }
+        if (std::fabs(actor->GetCombatStats().hp - state.hp) > 0.0001f) {
+            ++hpMismatch;
+        }
+        if (actor->IsActive() != state.active) {
+            ++activeMismatch;
+        }
+    }
+    check("no monster teleported by checks", posMismatch == 0);
+    check("no monster hp changed by checks", hpMismatch == 0);
+    check("no monster killed/deactivated by checks", activeMismatch == 0);
+    LOG_INFO("[SkillWorldStateIsolationCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillNoFreeRewardCheck] ====================
+// 指令二十四：没有用户实际击杀前，Skill 测试不能改变正式 Player progression。
+// TestHero 正式配置起步即 Level1 / Exp0（若正式配置改变，此处基线需同步）。
+
+void GameScene::RunSkillNoFreeRewardCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillNoFreeRewardCheck", name, pass, failures);
+    };
+    check("player level is 1 (no free test exp)",
+          m_player != nullptr && m_player->GetProgression().GetLevel() == 1);
+    check("player total exp is 0 (no free test reward)",
+          m_player != nullptr && m_player->GetProgression().GetTotalExp() == 0);
+    LOG_INFO("[SkillNoFreeRewardCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillActiveCheck] ====================
+// 指令十七/十九：Inactive Player 不能 CanCast（无副作用）；Inactive Target 拒绝；
+// CombatSystem::ApplySkillDamage 的 IsActive 双保险继续生效（指令十八）。
+
+void GameScene::RunSkillActiveCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillActiveCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillActiveCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillActiveCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    auto& skillSystem = m_playerSkill.GetSkillSystem();
+    const auto& cooldowns = m_playerSkill.GetCooldowns();
+
+    // 1. Active + Alive：CanCast 成功
+    auto result =
+        skillSystem.CanCast(*m_player, "power_slash", m_playerCombat.GetTarget(), cooldowns);
+    check("active alive player can cast", result.success);
+    const float manaBefore = m_player->GetSkillResource().GetMana();
+
+    // 2. Player inactive：CanCast 最前置失败，无任何副作用（指令十六/十七）
+    m_player->SetActive(false);
+    auto inactive =
+        skillSystem.CanCast(*m_player, "power_slash", m_playerCombat.GetTarget(), cooldowns);
+    check("inactive player can cast -> fail", !inactive.success);
+    check("inactive player: mana unchanged",
+          std::fabs(m_player->GetSkillResource().GetMana() - manaBefore) < 0.0001f);
+    check("inactive player: no cooldown started", cooldowns.IsReady("power_slash"));
+    check("inactive player: action state unchanged",
+          m_player->GetActionState() == legend::entity::CharacterActionState::Normal);
+    m_player->SetActive(true);
+
+    // 3. Target inactive：SingleTarget CanCast 失败（指令十九）
+    boar->SetActive(false);
+    auto noTarget =
+        skillSystem.CanCast(*m_player, "power_slash", m_playerCombat.GetTarget(), cooldowns);
+    check("inactive target can cast -> fail", !noTarget.success);
+    check("inactive target: mana unchanged",
+          std::fabs(m_player->GetSkillResource().GetMana() - manaBefore) < 0.0001f);
+    check("inactive target: no cooldown started", cooldowns.IsReady("power_slash"));
+
+    // 4. CombatSystem 双保险仍在：ApplySkillDamage 直接探测 inactive 目标被拒（指令十八）
+    legend::combat::DamageEvent probe;
+    check("apply skill damage to inactive target rejected",
+          !m_worldActors.GetCombatSystem().ApplySkillDamage(*m_player, *boar, 10.0f,
+                                                            "active_check_probe", probe));
+    boar->SetActive(true);
+
+    // 5. 恢复后 CanCast 重新成功
+    auto restored =
+        skillSystem.CanCast(*m_player, "power_slash", m_playerCombat.GetTarget(), cooldowns);
+    check("restored active target can cast again", restored.success);
+    LOG_INFO("[SkillActiveCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillDeterministicRewardCheck] ====================
+// 指令十/二十/三十：确定性 Loot 语义——Override slime 表为 small_potion 1.0/1/1，
+// 真实技能击杀后 GroundLoot 精确 +1 且内容为 small_potion x1；结束恢复正式表。
+
+void GameScene::RunSkillDeterministicRewardCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillDeterministicRewardCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillDeterministicRewardCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    CaptureSkillWorldSnapshot();
+    RestoreGuard skillRestoreGuard{this};
+    legend::world::MonsterCharacter* slime = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Slime") {
+            slime = monster;
+            break;
+        }
+    }
+    check("slime present", slime != nullptr);
+    if (slime == nullptr) {
+        LOG_INFO("[SkillDeterministicRewardCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    // 保存正式表 -> Override 确定性掉落（结束恢复，guard 同时清测试 GroundLoot）
+    const auto originalLoot = m_worldActors.GetSpawner().GetLootEntries("slime");
+    std::vector<legend::world::LootEntry> guaranteed;
+    legend::world::LootEntry guaranteedEntry;
+    guaranteedEntry.itemId = "small_potion";
+    guaranteedEntry.chance = 1.0f;
+    guaranteedEntry.min = 1;
+    guaranteedEntry.max = 1;
+    guaranteed.push_back(guaranteedEntry);
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", guaranteed);
+
+    m_player->SetPosition(slime->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(slime->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    m_worldActors.GetCombatSystem().ClearRecentDeaths();
+    slime->GetCombatStats().SetHp(1.0f);
+    const std::size_t lootBefore = m_worldActors.GetLoot().GetAll().size();
+    const auto expBefore = m_player->GetProgression().GetTotalExp();
+
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    check("slime killed by skill", !slime->IsCombatAlive());
+    const int rewarded = m_worldActors.ProcessDeathRewards();
+    check("reward processed once", rewarded == 1);
+    const auto& loots = m_worldActors.GetLoot().GetAll();
+    check("exactly one deterministic ground loot", loots.size() - lootBefore == 1);
+    bool potionOnGround = false;
+    for (const auto& loot : loots) {
+        if (loot.itemId == "small_potion" && loot.quantity == 1) {
+            potionOnGround = true;
+            break;
+        }
+    }
+    check("ground loot is small_potion x1", potionOnGround);
+    check("exp gained from deterministic kill",
+          m_player->GetProgression().GetTotalExp() > expBefore);
+    const auto expAfter = m_player->GetProgression().GetTotalExp();
+    const std::size_t lootAfter = loots.size();
+    check("second reward pass is no-op",
+          m_worldActors.ProcessDeathRewards() == 0 &&
+              m_player->GetProgression().GetTotalExp() == expAfter &&
+              m_worldActors.GetLoot().GetAll().size() == lootAfter);
+    // 恢复正式表（guard 同时清理测试 GroundLoot / 复活 slime）
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", originalLoot);
+    LOG_INFO("[SkillDeterministicRewardCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== 阶段8.1：Auto Skill Test 掉落恢复 ====================
+// 与阶段7.2 相同原则：Stage0 保存正式表，Stage90（所有退出路径）统一恢复。
+
+void GameScene::RestoreSkillTestLootOverride() {
+    if (!m_skillTestLootSaved) {
+        return; // 未保存过正式表（无 Override 发生）
+    }
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", m_skillTestOriginalSlimeLoot);
+    m_skillTestLootSaved = false;
+    LOG_INFO("[SkillTest] official loot restored.");
 }

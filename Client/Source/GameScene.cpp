@@ -139,12 +139,11 @@ void GameScene::OnLoad() {
     RunInventoryStackCheck();
     RunInventoryFullCheck();
     RunLootRollCheck();
-    RunGroundLootPickupCheck();
-    RunPartialPickupCheck();
-    RunDeathRewardCheck();
     RunExperience64Check();
     RunItemDatabaseFailureCheck();
-    RunDeathLootIntegrationCheck();
+    // 注意：RunGroundLootPickupCheck / RunPartialPickupCheck / RunDeathRewardCheck /
+    // RunDeathLootIntegrationCheck 会给真实 Player 加经验并生成测试 GroundLoot
+    //（阶段6 遗留），阶段8.1 起移入下方 m_skillChecks 门——普通启动零污染。
     RunEquipmentDefinitionCheck();
     RunEquipmentSlotCheck();
     RunInventoryInstanceCheck();
@@ -157,40 +156,59 @@ void GameScene::OnLoad() {
     RunEquipmentStatsCheck();
     RunEquipmentHpClampCheck();
     RunLevelEquipmentCheck();
-    RunEquipmentLootCheck();
     RunEquipmentComparisonCheck();
     RunEquipmentTypeGuardCheck();
     RunEquipmentLootConfigCheck();
     RunSlotOverwriteGuardCheck();
     RunOfficialEquipmentLootCheck();
     RunEquipmentTestRestoreCheck();
-    // 阶段8：Skill Core 自检（26 Check，实现在 SkillChecks.cpp）
+
+    // ---- 阶段8.1：Skill Check 隔离策略 ----
+    // Pure Check（局部对象，不碰真实世界）：普通启动执行；
+    // World Integration Check（操作 Player/Monster/Loot/Aggro）：仅 LEGEND_RUN_SKILL_CHECKS=1
+    // 或 LEGEND_AUTO_SKILL_TEST=1 时执行（普通启动绝不污染真实世界）。
+    CaptureSkillWorldSnapshot(); // 隔离基线：初始化完成后的真实世界状态
     RunSkillDatabaseCheck();
     RunSkillDatabaseFailureCheck();
     RunSkillDefinitionValidationCheck();
     RunSkillLoadoutCheck();
     RunSkillManaCheck();
     RunSkillCooldownCheck();
-    RunSkillCastValidationCheck();
-    RunSkillManaCooldownCheck();
     RunSkillAnimationEventCheck();
-    RunSkillInterruptCheck();
-    RunSkillSingleTargetDamageCheck();
-    RunSkillDefenseCheck();
-    RunSkillRangeCheck();
-    RunSkillAOECheck();
-    RunSkillAOEDeathCheck();
-    RunSkillTargetDeathBeforeEventCheck();
-    RunSkillTargetDespawnCheck();
-    RunSkillCastStateCheck();
-    RunSkillMovementLockCheck();
-    RunSkillBasicAttackInteractionCheck();
-    RunEquipmentSkillDamageCheck();
-    RunSkillAttackSnapshotCheck();
-    RunSkillRespawnResetCheck();
-    RunSkillAggroCheck();
-    RunSkillDeathRewardCheck();
-    RunSkillAOERewardCheck();
+    RunSkillNoFreeRewardCheck();
+    RunSkillWorldStateIsolationCheck();
+    if (m_skillChecks) {
+        LOG_INFO("[SkillChecks] world integration checks enabled.");
+        // 阶段6/7 遗留的世界修改 Check（加经验/生成掉落/真实拾取）同样只在测试模式执行
+        RunGroundLootPickupCheck();
+        RunPartialPickupCheck();
+        RunDeathRewardCheck();
+        RunDeathLootIntegrationCheck();
+        RunEquipmentLootCheck();
+        RunSkillActiveCheck();
+        RunSkillCastValidationCheck();
+        RunSkillManaCooldownCheck();
+        RunSkillInterruptCheck();
+        RunSkillSingleTargetDamageCheck();
+        RunSkillDefenseCheck();
+        RunSkillRangeCheck();
+        RunSkillAOECheck();
+        RunSkillAOEDeathCheck();
+        RunSkillTargetDeathBeforeEventCheck();
+        RunSkillTargetDespawnCheck();
+        RunSkillCastStateCheck();
+        RunSkillMovementLockCheck();
+        RunSkillBasicAttackInteractionCheck();
+        RunEquipmentSkillDamageCheck();
+        RunSkillAttackSnapshotCheck();
+        RunSkillRespawnResetCheck();
+        RunSkillAggroCheck();
+        RunSkillDeathRewardCheck();
+        RunSkillDeterministicRewardCheck();
+        RunSkillAOERewardCheck();
+    } else {
+        LOG_INFO("[SkillChecks] pure checks only; world integration checks disabled.");
+    }
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -668,9 +686,15 @@ void GameScene::ApplyAutoTestHooks() {
     const char* skillTest = SDL_getenv("LEGEND_AUTO_SKILL_TEST");
     if (skillTest != nullptr && skillTest[0] == '1') {
         m_skillTest = true;
+        m_skillChecks = true; // 阶段8.1：Auto Skill Test 自动启用 Integration Checks
         LOG_INFO("Auto-test: skill acceptance timeline enabled (LEGEND_AUTO_SKILL_TEST=1), "
                  "stages: Init -> Target -> Cast -> Event -> CD -> Range -> AOE -> Equip "
                  "-> Interrupt -> DeathReward -> PlayerRespawn -> MonsterRespawn.");
+    }
+    const char* skillChecks = SDL_getenv("LEGEND_RUN_SKILL_CHECKS");
+    if (skillChecks != nullptr && skillChecks[0] == '1') {
+        m_skillChecks = true;
+        LOG_INFO("Auto-test: skill world integration checks enabled (LEGEND_RUN_SKILL_CHECKS=1).");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {

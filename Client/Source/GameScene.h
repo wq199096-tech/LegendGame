@@ -7,6 +7,7 @@
 #include "Client/Character/PlayerController.h"
 #include "Client/Combat/PlayerCombatController.h"
 #include "Client/Skill/PlayerSkillController.h"
+#include "Client/Skill/SkillWorldSnapshot.h"
 #include "Client/World/WorldActorManager.h"
 #include "Engine/Entity/CharacterController.h"
 #include "Engine/Entity/EntityId.h"
@@ -24,6 +25,9 @@ public:
     void OnLoad() override;
     void Update(float deltaTime) override;
     void Render(legend::render::Renderer& renderer, legend::render::Camera2D& camera) override;
+
+    // 阶段8.1：快照恢复供 RAII RestoreGuard（SkillChecks.cpp 匿名命名空间）调用
+    void RestoreSkillWorldSnapshot();
 
 private:
     bool LoadPlayerCharacter();
@@ -310,4 +314,19 @@ private:
     legend::item::ItemInstanceId m_skillTestSwordId = 0;  // Stage7 装备测试实例
     bool m_skillTestInterrupted = false;                  // Stage8 打断已施加
     int m_skillTestLastStage = -1;                        // 阶段切换检测（重置 stageElapsed）
+    // 阶段8.1：Auto Skill Test slime 掉落保存（Stage0 保存一次，Stage90 统一恢复）
+    std::vector<legend::world::LootEntry> m_skillTestOriginalSlimeLoot;
+    bool m_skillTestLootSaved = false;
+    // 阶段8.1：世界快照（Integration Check / Auto Test 的保存/恢复 + 隔离验证）
+    legend::skill::SkillWorldSnapshot m_skillWorldSnapshot;
+    // 阶段8.1：LEGEND_RUN_SKILL_CHECKS=1（或 Auto Skill Test）时才执行 Integration Check
+    bool m_skillChecks = false;
+    // ---- 阶段8.1 新增 Check / 快照方法（实现在 SkillChecks.cpp） ----
+    void CaptureSkillWorldSnapshot();
+    void RunSkillWorldStateIsolationCheck();
+    void RunSkillActiveCheck();
+    void RunSkillNoFreeRewardCheck();
+    void RunSkillDeterministicRewardCheck();
+    // 阶段8.1：Auto Skill Test 掉落恢复（Stage90 统一，禁止空表冒充）
+    void RestoreSkillTestLootOverride();
 };

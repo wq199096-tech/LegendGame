@@ -48,6 +48,10 @@ public:
     // 范围内最近可拾取（E 提示 / F5 Debug）；无返回 nullptr
     const GroundLoot* FindNearestPickup(const math::Vector2& playerPos, float radius) const;
 
+    // 阶段8.1：按 lootEntityId 移除地上掉落（Skill Check / Auto Test 清理测试新增
+    // GroundLoot 专用，普通游戏不调用）；不存在返回 false
+    bool RemoveById(LootEntityId id);
+
     std::size_t GetCount() const { return m_loots.size(); }
     const std::vector<GroundLoot>& GetAll() const { return m_loots; }
     std::uint64_t GetTotalSpawned() const { return m_totalSpawned; } // 测试统计（含直接生成）

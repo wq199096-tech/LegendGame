@@ -59,6 +59,18 @@ GroundLoot* LootManager::SpawnGroundLoot(const std::string& itemId, int quantity
     return &m_loots.back();
 }
 
+bool LootManager::RemoveById(LootEntityId id) {
+    const auto it = std::remove_if(m_loots.begin(), m_loots.end(),
+                                   [id](const GroundLoot& loot) {
+                                       return loot.lootEntityId == id;
+                                   });
+    if (it == m_loots.end()) {
+        return false; // 不存在（可能已被拾取/过期）
+    }
+    m_loots.erase(it, m_loots.end());
+    return true;
+}
+
 void LootManager::Update(float deltaTime) {
     for (GroundLoot& loot : m_loots) {
         loot.age += deltaTime; // 屏幕外也继续计时
