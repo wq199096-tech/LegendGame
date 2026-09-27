@@ -28,7 +28,8 @@ public:
     const legend::item::Inventory& GetInventory() const { return m_inventory; }
 
     // 击杀奖励入口：加经验（内部连续升级 + 属性成长 MaxHP+X->HP+X）
-    std::vector<legend::progression::LevelUpEvent> AddExperience(int amount);
+    std::vector<legend::progression::LevelUpEvent> AddExperience(
+        legend::progression::ExperienceValue amount);
 
 private:
     legend::animation::CharacterDefinition m_definition;

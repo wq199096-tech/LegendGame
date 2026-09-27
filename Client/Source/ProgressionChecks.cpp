@@ -1,12 +1,16 @@
-﻿// 阶段6：Progression / Loot / Inventory 自检实现（从 GameScene.cpp 拆出，避免单文件过大）。
+// 阶段6：Progression / Loot / Inventory 自检实现（从 GameScene.cpp 拆出，避免单文件过大）。
 // 全部 Check 结果写日志 [XxxCheck] ... -> PASS/FAIL + completed, failures = N。
 #include "Client/Source/GameScene.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <random>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "Client/Character/PlayerCharacter.h"
@@ -94,6 +98,21 @@ void GameScene::RunLootRollCheck() {
     check("chance 1.0 always drops (200/200)", alwaysDropped == 200);
     check("chance 0.0 never drops", neverDropped == 0);
     check("quantity in [min,max] inclusive", quantityInRange);
+
+    // 阶段6.1：同一 seed 连续运行结果必须一致（item + 数量逐项相等）
+    auto runOnce = [entries](unsigned int seed) {
+        std::mt19937 rng(seed);
+        return legend::world::RollLootTable(entries, rng);
+    };
+    const auto firstRun = runOnce(12345u);
+    const auto secondRun = runOnce(12345u);
+    bool reproducible = firstRun.size() == secondRun.size();
+    for (std::size_t i = 0; reproducible && i < firstRun.size(); ++i) {
+        reproducible = firstRun[i].itemId == secondRun[i].itemId &&
+                       firstRun[i].quantity == secondRun[i].quantity;
+    }
+    check("fixed seed 12345 reproducible (item+qty identical)",
+          reproducible && !firstRun.empty());
     LOG_INFO("[LootRollCheck] completed, failures = " + std::to_string(failures));
 }
 
@@ -109,6 +128,14 @@ void GameScene::RunGroundLootPickupCheck() {
     legend::world::LootManager loot;
     loot.Initialize(20260927u, &items);
     legend::item::Inventory inventory;
+
+    // 阶段6.1：LootEntityIdAllocator Reset(nextValue) 语义 —— Reset(9) 后 Next()==9
+    legend::world::LootEntityIdAllocator::Reset(9);
+    check("loot entity allocator Reset(9) -> Next()==9",
+          legend::world::LootEntityIdAllocator::Next() == 9);
+    check("loot entity allocator Next() increments",
+          legend::world::LootEntityIdAllocator::Next() == 10);
+    legend::world::LootEntityIdAllocator::Reset(1); // 还原默认起点
 
     const legend::math::Vector2 playerPos(1000.0f, 1000.0f);
     (void)loot.SpawnGroundLoot("small_potion", 5, playerPos + legend::math::Vector2(20.0f, 0.0f));
@@ -228,24 +255,29 @@ void GameScene::RunDeathRewardCheck() {
     check("slime entered Dead",
           slime->GetActionState() == legend::entity::CharacterActionState::Dead);
 
-    // 1) 第一次消费：Exp 只发一次 + Loot 只 Roll 一次
+    // 1) 第一次消费：Exp 只发一次（Loot 是否 Roll 取决于随机概率——必掉验证归
+    //    [DeathLootIntegrationCheck] 的 Test Override；本 Check 只验证 exactly-once）
     const int processed1 = m_worldActors.ProcessDeathRewards();
     check("death rewards processed once", processed1 == 1);
-    const long long expGained =
-        m_player->GetProgression().GetTotalExp() - totalExpBefore;
-    check("exp granted exactly def.expReward", expGained == def->expReward);
-    check("loot rolled (spawned counter increased)",
-          m_worldActors.GetLoot().GetTotalSpawned() >= lootSpawnedBefore);
-    check("ground loot generated", m_worldActors.GetLoot().GetCount() >= groundLootBefore);
+    const legend::progression::ExperienceValue expAfterFirst =
+        m_player->GetProgression().GetTotalExp();
+    const std::uint64_t lootSpawnedAfterFirst = m_worldActors.GetLoot().GetTotalSpawned();
+    const std::size_t groundLootAfterFirst = m_worldActors.GetLoot().GetCount();
+    check("exp granted exactly def.expReward",
+          expAfterFirst - totalExpBefore == def->expReward);
+    check("loot counter never decreases", lootSpawnedAfterFirst >= lootSpawnedBefore);
 
-    // 2) 再次消费：必须无变化（exactly-once）
+    // 2) 再次消费：必须与第一次之后完全一致（阶段6.1 严格相等断言，无任何新增）
     const int processed2 = m_worldActors.ProcessDeathRewards();
+    const legend::progression::ExperienceValue expAfterSecond =
+        m_player->GetProgression().GetTotalExp();
+    const std::uint64_t lootSpawnedAfterSecond = m_worldActors.GetLoot().GetTotalSpawned();
+    const std::size_t groundLootAfterSecond = m_worldActors.GetLoot().GetCount();
     check("second process is no-op", processed2 == 0);
-    check("exp not double granted",
-          m_player->GetProgression().GetTotalExp() - totalExpBefore == def->expReward);
-    check("loot not double rolled",
-          m_worldActors.GetLoot().GetTotalSpawned() >= lootSpawnedBefore &&
-              m_worldActors.GetLoot().GetTotalSpawned() <= lootSpawnedBefore + 2);
+    check("exp exactly-once (afterSecond == afterFirst)", expAfterSecond == expAfterFirst);
+    check("loot exactly-once (spawned afterSecond == afterFirst)",
+          lootSpawnedAfterSecond == lootSpawnedAfterFirst);
+    check("ground count unchanged", groundLootAfterSecond == groundLootAfterFirst);
 
     // 还原（slime 会自然走 Respawn 流程）
     m_player->SetPosition(savedPlayerPos);
@@ -304,6 +336,7 @@ void GameScene::UpdateProgressionTest(float deltaTime) {
         m_progTestBaselineDefense = m_player->GetCombatStats().defense;
         m_progTestBagBaseline = static_cast<int>(m_player->GetInventory().GetUsedSlots());
         m_progTestLootBaseline = m_worldActors.GetLoot().GetTotalSpawned();
+        m_progTestGroundBaseline = m_worldActors.GetLoot().GetCount();
         m_playerCombat.GetTarget().SetTarget(slime->GetId());
         m_progTestStage = 1;
         break;
@@ -341,13 +374,26 @@ void GameScene::UpdateProgressionTest(float deltaTime) {
                  std::to_string(expectedExp) + ")");
         }
         const std::uint64_t lootSpawned = m_worldActors.GetLoot().GetTotalSpawned();
-        if (lootSpawned > m_progTestLootBaseline) {
-            pass("ground loot spawned (total " + std::to_string(lootSpawned) + ")");
+        // 阶段6.1：Test Override LootTable（slime 必掉 small_potion x2）——
+        // 真实 Death -> Reward -> Roll -> GroundLoot 链路必须发生，禁止 SpawnGroundLoot 兜底掩盖
+        if (lootSpawned <= m_progTestLootBaseline) {
+            fail("REAL monster loot did NOT roll (integration broken, fallback forbidden)");
+            m_progTestStage = 90;
+            break;
+        }
+        pass("Real monster loot integration PASS (total " + std::to_string(lootSpawned) + ")");
+        // 验证新增 GroundLoot 内容（Override：small_potion x2）
+        const auto& allLoot = m_worldActors.GetLoot().GetAll();
+        bool realLootOk = false;
+        for (std::size_t i = m_progTestGroundBaseline; i < allLoot.size(); ++i) {
+            if (allLoot[i].itemId == "small_potion" && allLoot[i].quantity == 2) {
+                realLootOk = true;
+            }
+        }
+        if (realLootOk) {
+            pass("real loot content (small_potion x2)");
         } else {
-            // 本 seed 可能没掉落：保底生成一件测试掉落，拾取链路仍然验证
-            LOG_INFO("[ProgressionTest] no loot rolled this kill, spawn test loot for pickup link.");
-            (void)m_worldActors.GetLoot().SpawnGroundLoot("small_potion", 2,
-                                                          m_player->GetPosition());
+            fail("real loot content mismatch (want small_potion x2)");
         }
         // 传送玩家到最近掉落旁
         const legend::world::GroundLoot* nearest =
@@ -367,7 +413,8 @@ void GameScene::UpdateProgressionTest(float deltaTime) {
             m_player->GetPosition(), 80.0f, m_player->GetInventory(),
             m_worldActors.GetItemDatabase());
         if (picked > 0) {
-            pass("picked " + std::to_string(picked) + " via E");
+            pass("picked " + std::to_string(picked) +
+                 " via E (from real monster loot, not isolated spawn)");
         } else {
             fail("pickup failed (nothing picked)");
         }
@@ -512,4 +559,231 @@ void GameScene::DrawProgressionDebugOverlay(legend::render::SpriteBatch& batch) 
                     : legend::math::Color(0.8f, 0.8f, 0.2f, 0.4f);
         DrawLine(batch, playerPos, loot->position, 1.5f, lineColor);
     }
+}
+
+// ==================== [Experience64Check] ====================
+// 阶段6.1：64 位经验安全——高等级 RequiredExp 真实值（无 INT32 截断）、
+// lv49 边界升级、一次 3e9+ 大经验连续升级无溢出/无负数。
+
+void GameScene::RunExperience64Check() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogCheck("Experience64Check", name, pass, failures);
+    };
+    using namespace legend::progression;
+
+    // 1) 高等级经验需求全部 > 0（真实 int64 值，无 INT32 截断）
+    const ExperienceValue req40 = RequiredExp(40);
+    const ExperienceValue req41 = RequiredExp(41);
+    const ExperienceValue req42 = RequiredExp(42);
+    const ExperienceValue req43 = RequiredExp(43);
+    const ExperienceValue req49 = RequiredExp(49);
+    check("RequiredExp(40) > 0 real value", req40 > 0);
+    check("RequiredExp(41) > 0 real value", req41 > 0);
+    check("RequiredExp(42) > 0 real value", req42 > 0);
+    check("RequiredExp(43) > 0 real value", req43 > 0);
+    check("RequiredExp(49) > 0 real value", req49 > 0);
+    // 单调递增
+    check("required exp strictly increasing",
+          req40 < req41 && req41 < req42 && req42 < req43 && req43 < req49);
+    // Level43+ 超过 INT32_MAX（int32 会截断的级别，int64 必须无损）
+    constexpr ExperienceValue kInt32Max = 2147483647LL;
+    check("RequiredExp(43) exceeds INT32_MAX (int64 safe)", req43 > kInt32Max);
+    check("RequiredExp(49) far exceeds INT32_MAX", req49 > kInt32Max * 10);
+
+    // 2) Level49 差 50 exp -> 加 100 -> 安全升 50（无负数/溢出/UB）
+    int level = 49;
+    ExperienceValue currentExp = req49 - 50;
+    ExperienceValue totalExp = 0;
+    auto events = LevelSystem::AddExperience(level, currentExp, totalExp, 100);
+    check("lv49 (req-50) +100 -> level 50",
+          level == 50 && events.size() == 1 && events[0].oldLevel == 49 &&
+              events[0].newLevel == 50);
+    check("lv50 currentExp == 0 (capped)", currentExp == 0);
+    check("totalExp accumulated exactly", totalExp == 100);
+
+    // 3) 一次加入超过 3,000,000,000 EXP：不溢出、按规则连续升级（与独立模拟逐项对照）、
+    //    currentExp 始终非负且小于当前级需求
+    level = 1;
+    currentExp = 0;
+    totalExp = 0;
+    constexpr ExperienceValue kHugeExp = 3500000000LL; // > 3e9
+    events = LevelSystem::AddExperience(level, currentExp, totalExp, kHugeExp);
+    // 独立模拟：同规则手算期望级别与余量（不依赖被测实现）
+    ExperienceValue simulatedRemainder = kHugeExp;
+    int expectedLevel = 1;
+    while (expectedLevel < kMaxLevel && simulatedRemainder >= RequiredExp(expectedLevel)) {
+        simulatedRemainder -= RequiredExp(expectedLevel);
+        ++expectedLevel;
+    }
+    check("3.5e9 exp -> level matches independent simulation", level == expectedLevel);
+    check("3.5e9 exp -> remainder matches simulation (non-negative)",
+          currentExp == simulatedRemainder && currentExp >= 0);
+    check("3.5e9 exp -> remainder < next requirement",
+          level >= kMaxLevel || currentExp < RequiredExp(level));
+    check("3.5e9 exp -> totalExp exact", totalExp == kHugeExp);
+    check("level up events == levels gained",
+          events.size() == static_cast<std::size_t>(expectedLevel - 1));
+
+    // 4) 天文数字经验（1e14 >> 全级总需求）：封顶 50、currentExp 归 0、事件数 == 49
+    level = 1;
+    currentExp = 0;
+    totalExp = 0;
+    events = LevelSystem::AddExperience(level, currentExp, totalExp, 100000000000000LL);
+    check("1e14 exp -> capped at level 50", level == kMaxLevel && currentExp == 0);
+    check("1e14 exp -> exactly 49 level up events", events.size() == 49);
+
+    LOG_INFO("[Experience64Check] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [ItemDatabaseFailureCheck] ====================
+// 阶段6.1：加载失败路径——不存在的文件返回 false、空库 Exists()==false；
+// 正式 items.json 加载成功且 >= 5 item。（临时实例，不影响全局 ItemDatabase）
+
+void GameScene::RunItemDatabaseFailureCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogCheck("ItemDatabaseFailureCheck", name, pass, failures);
+    };
+    // 1) 不存在的文件：返回 false，不崩溃
+    legend::item::ItemDatabase missing;
+    const bool loadedMissing =
+        missing.LoadFromFile(Engine::Get().GetResources().GetAssetRoot() +
+                             "/Items/__no_such_items_file__.json");
+    check("missing file -> LoadFromFile false", !loadedMissing);
+    check("empty database -> Exists false", !missing.Exists("small_potion"));
+    check("empty database -> Get nullptr", missing.Get("small_potion") == nullptr);
+    check("empty database -> Count 0", missing.Count() == 0);
+
+    // 2) 非法 JSON：返回 false
+    legend::item::ItemDatabase malformed;
+    const std::string malformedPath = Engine::Get().GetResources().GetAssetRoot() +
+                                      "/Items/__malformed_test__.json";
+    {
+        std::ofstream out(malformedPath);
+        out << "{ this is not valid json !!!";
+    }
+    const bool loadedMalformed = malformed.LoadFromFile(malformedPath);
+    check("malformed json -> LoadFromFile false", !loadedMalformed);
+    std::error_code ec;
+    std::filesystem::remove(malformedPath, ec); // 清理临时文件
+    check("temp malformed file removed", !std::filesystem::exists(malformedPath));
+
+    // 3) 正式文件：加载成功且 >= 5 item
+    legend::item::ItemDatabase official;
+    const bool loadedOfficial = official.LoadFromFile(
+        Engine::Get().GetResources().GetAssetRoot() + "/Items/items.json");
+    check("official items.json -> LoadFromFile true", loadedOfficial);
+    check("official items.json >= 5 items", official.Count() >= 5);
+    check("official has small_potion", official.Exists("small_potion"));
+
+    LOG_INFO("[ItemDatabaseFailureCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [DeathLootIntegrationCheck] ====================
+// 阶段6.1：真实链路集成——Test Override LootTable（small_potion chance1.0 min2 max2）：
+// Monster DeathEvent(killer=Player) -> RewardSystem 消费 -> Exp 增加 + Loot 真实 Roll ->
+// GroundLoot 真实生成（itemId/quantity 精确验证）；二次消费 Exp/Loot 均不增加（exactly-once）。
+
+void GameScene::RunDeathLootIntegrationCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogCheck("DeathLootIntegrationCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player available", false);
+        LOG_INFO("[DeathLootIntegrationCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    // 找一只活 Slime
+    legend::world::MonsterCharacter* slime = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Slime") {
+            slime = monster;
+            break;
+        }
+    }
+    if (slime == nullptr) {
+        check("alive slime available", false);
+        LOG_INFO("[DeathLootIntegrationCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const legend::world::MonsterDefinition* def =
+        m_worldActors.GetSpawner().GetDefinition(slime->GetMonsterTemplateId());
+    if (def == nullptr) {
+        check("slime definition available", false);
+        LOG_INFO("[DeathLootIntegrationCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+
+    // Test Override：必掉 small_potion x2（保存原表，测试后还原）
+    const std::vector<legend::world::LootEntry> originalLoot =
+        m_worldActors.GetSpawner().GetLootEntries(slime->GetMonsterTemplateId());
+    std::vector<legend::world::LootEntry> guaranteed;
+    legend::world::LootEntry guaranteedEntry;
+    guaranteedEntry.itemId = "small_potion";
+    guaranteedEntry.chance = 1.0f;
+    guaranteedEntry.min = 2;
+    guaranteedEntry.max = 2;
+    guaranteed.push_back(guaranteedEntry);
+    m_worldActors.GetSpawner().SetTestLootOverride(slime->GetMonsterTemplateId(), guaranteed);
+
+    // 基线
+    const legend::progression::ExperienceValue expBefore =
+        m_player->GetProgression().GetTotalExp();
+    const std::uint64_t lootSpawnedBefore = m_worldActors.GetLoot().GetTotalSpawned();
+    const std::size_t groundLootBefore = m_worldActors.GetLoot().GetCount();
+
+    // 玩家致死一击（真实 DamageEvent -> Alive->Dead -> DeathEvent）
+    const auto savedPlayerPos = m_player->GetPosition();
+    const auto deathPosition = slime->GetPosition();
+    m_player->SetPosition(deathPosition + legend::math::Vector2(45.0f, 0.0f));
+    legend::combat::DamageEvent lethal;
+    lethal.sourceId = m_player->GetId();
+    lethal.targetId = slime->GetId();
+    lethal.rawDamage = 99999.0f;
+    lethal.finalDamage = 99999.0f;
+    const bool applied = m_worldActors.GetCombatSystem().ApplyDamage(lethal);
+    check("lethal damage applied", applied);
+    check("monster entered Dead",
+          slime->GetActionState() == legend::entity::CharacterActionState::Dead);
+
+    // 1) 第一次消费：Exp 增加 + 真实 Roll + GroundLoot 真实生成
+    const int processed1 = m_worldActors.ProcessDeathRewards();
+    check("death rewards processed once", processed1 == 1);
+    const legend::progression::ExperienceValue expAfterFirst =
+        m_player->GetProgression().GetTotalExp();
+    check("exp increased by def.expReward",
+          expAfterFirst - expBefore == def->expReward);
+    const std::uint64_t lootSpawnedAfterFirst = m_worldActors.GetLoot().GetTotalSpawned();
+    const std::size_t groundLootAfterFirst = m_worldActors.GetLoot().GetCount();
+    check("real loot rolled (spawned +1)", lootSpawnedAfterFirst == lootSpawnedBefore + 1);
+    check("ground loot spawned (+1)", groundLootAfterFirst == groundLootBefore + 1);
+    // 新增 GroundLoot 内容精确验证（Override：small_potion x2，位置 = 死亡位置）
+    bool contentOk = false;
+    const auto& allLoot = m_worldActors.GetLoot().GetAll();
+    for (std::size_t i = groundLootBefore; i < allLoot.size(); ++i) {
+        if (allLoot[i].itemId == "small_potion" && allLoot[i].quantity == 2 &&
+            std::fabs(allLoot[i].position.x - deathPosition.x) < 1.0f &&
+            std::fabs(allLoot[i].position.y - deathPosition.y) < 1.0f) {
+            contentOk = true;
+        }
+    }
+    check("ground loot is small_potion x2 at death position", contentOk);
+
+    // 2) 再次消费：Exp 与 Loot 均不增加（exactly-once 严格相等）
+    const int processed2 = m_worldActors.ProcessDeathRewards();
+    const legend::progression::ExperienceValue expAfterSecond =
+        m_player->GetProgression().GetTotalExp();
+    const std::uint64_t lootSpawnedAfterSecond = m_worldActors.GetLoot().GetTotalSpawned();
+    const std::size_t groundLootAfterSecond = m_worldActors.GetLoot().GetCount();
+    check("second process is no-op", processed2 == 0);
+    check("exp exactly-once", expAfterSecond == expAfterFirst);
+    check("loot exactly-once (spawned)", lootSpawnedAfterSecond == lootSpawnedAfterFirst);
+    check("loot exactly-once (ground count)", groundLootAfterSecond == groundLootAfterFirst);
+
+    // 还原原掉落表与玩家位置（slime 自然走 Respawn）
+    m_worldActors.GetSpawner().SetTestLootOverride(slime->GetMonsterTemplateId(), originalLoot);
+    m_player->SetPosition(savedPlayerPos);
+    LOG_INFO("[DeathLootIntegrationCheck] completed, failures = " + std::to_string(failures));
 }

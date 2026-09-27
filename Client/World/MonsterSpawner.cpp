@@ -144,4 +144,23 @@ void MonsterSpawner::ValidateLootEntries(const item::ItemDatabase& items) {
     }
 }
 
+void MonsterSpawner::SetTestLootOverride(const std::string& templateId,
+                                         const std::vector<LootEntry>& entries) {
+    const auto it = m_templates.find(templateId);
+    if (it == m_templates.end()) {
+        LOG_WARN("MonsterSpawner: SetTestLootOverride unknown template '" + templateId + "'.");
+        return;
+    }
+    it->second.definition.loot = entries;
+    LOG_INFO("MonsterSpawner: test loot override applied to '" + templateId + "' (" +
+             std::to_string(entries.size()) + " entries).");
+}
+
+const std::vector<LootEntry>& MonsterSpawner::GetLootEntries(const std::string& templateId) const {
+    // 模板不存在时返回空表（调用方在覆盖前已确认模板存在；空表作为安全回退）
+    static const std::vector<LootEntry> kEmpty;
+    const auto it = m_templates.find(templateId);
+    return it != m_templates.end() ? it->second.definition.loot : kEmpty;
+}
+
 } // namespace legend::world

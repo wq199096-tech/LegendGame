@@ -17,7 +17,7 @@ void PlayerProgression::Initialize(const legend::animation::CharacterDefinition&
 }
 
 std::vector<LevelUpEvent> PlayerProgression::AddExperience(combat::CombatStats& stats,
-                                                           int amount) {
+                                                           ExperienceValue amount) {
     auto events = LevelSystem::AddExperience(m_level, m_currentExp, m_totalExp, amount);
     // 每升一级应用一次成长：MaxHP +X -> 当前 HP 同步 +X（不直接满血）；clamp 防越界
     for (const LevelUpEvent& event : events) {
@@ -39,8 +39,10 @@ float PlayerProgression::GetExpPercent() const {
     if (m_level >= kMaxLevel) {
         return 1.0f; // 满级
     }
-    const int required = GetRequiredExp();
-    return required > 0 ? static_cast<float>(m_currentExp) / static_cast<float>(required) : 0.0f;
+    const ExperienceValue required = GetRequiredExp();
+    return required > 0 ? static_cast<float>(static_cast<double>(m_currentExp) /
+                                             static_cast<double>(required))
+                        : 0.0f;
 }
 
 } // namespace legend::progression

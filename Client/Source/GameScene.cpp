@@ -137,11 +137,28 @@ void GameScene::OnLoad() {
     RunGroundLootPickupCheck();
     RunPartialPickupCheck();
     RunDeathRewardCheck();
+    RunExperience64Check();
+    RunItemDatabaseFailureCheck();
+    RunDeathLootIntegrationCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
              std::to_string(npcSpawned) + ", monsters: " + std::to_string(monsterStats.spawned) +
              "/" + std::to_string(monsterStats.requested) + ".");
+
+    // 阶段6.1：Auto Progression Test 专用——slime 掉落覆盖为必掉 small_potion x2，
+    // 让 Death -> Reward -> Roll -> GroundLoot 链路可确定性验证（禁止 SpawnGroundLoot 兜底掩盖）。
+    // 放在全部静态 Check 之后：DeathRewardCheck 等仍用 monster.json 原表。
+    if (m_progTest) {
+        std::vector<legend::world::LootEntry> guaranteed;
+        legend::world::LootEntry guaranteedEntry;
+        guaranteedEntry.itemId = "small_potion";
+        guaranteedEntry.chance = 1.0f;
+        guaranteedEntry.min = 2;
+        guaranteedEntry.max = 2;
+        guaranteed.push_back(guaranteedEntry);
+        m_worldActors.GetSpawner().SetTestLootOverride("slime", guaranteed);
+    }
 }
 
 bool GameScene::LoadPlayerCharacter() {
@@ -2585,9 +2602,10 @@ void GameScene::RunExperienceCheck() {
     };
     using legend::progression::LevelSystem;
     using legend::progression::RequiredExp;
+    using legend::progression::ExperienceValue;
     int level = 1;
-    int currentExp = 0;
-    long long totalExp = 0;
+    ExperienceValue currentExp = 0;
+    ExperienceValue totalExp = 0;
     check("level1 exp0", level == 1 && currentExp == 0);
     // 经验表统一入口：100 * 1.5^(level-1)
     check("exp table 100/150/225", RequiredExp(1) == 100 && RequiredExp(2) == 150 &&
@@ -2602,9 +2620,9 @@ void GameScene::RunExperienceCheck() {
     events = LevelSystem::AddExperience(level, currentExp, totalExp, 1000);
     check("one big add multi level up", level > 2 && events.size() >= 2);
     // 满级封顶：从 lv49 满经验加 1 -> lv50，currentExp 归 0，继续获得不再升级
-    // （RequiredExp(49) clamp 后 = INT_MAX，站在满经验处只需 +1 即触发升级）
+    // （RequiredExp(49) ≈ 2.7e10，64 位下返回真实需求）
     level = legend::progression::kMaxLevel - 1;
-    currentExp = 2147483646;
+    currentExp = RequiredExp(49);
     events = LevelSystem::AddExperience(level, currentExp, totalExp, 1);
     check("capped at max level 50",
           level == legend::progression::kMaxLevel && currentExp == 0 && !events.empty());
@@ -2680,6 +2698,13 @@ void GameScene::RunInventoryStackCheck() {
     potion.name = "Small Potion";
     potion.type = legend::item::ItemType::Consumable;
     potion.maxStack = 20;
+    // 阶段6.1：ItemInstanceIdAllocator Reset(nextValue) 语义 —— Reset(7) 后 Next()==7
+    legend::item::ItemInstanceIdAllocator::Reset(7);
+    check("item instance allocator Reset(7) -> Next()==7",
+          legend::item::ItemInstanceIdAllocator::Next() == 7);
+    check("item instance allocator Next() increments",
+          legend::item::ItemInstanceIdAllocator::Next() == 8);
+    legend::item::ItemInstanceIdAllocator::Reset(1); // 还原默认起点
     const auto first = inventory.AddItem(potion, 18);
     check("add 18 -> 1 slot", first.added == 18 && first.remaining == 0 &&
                                  inventory.GetUsedSlots() == 1);

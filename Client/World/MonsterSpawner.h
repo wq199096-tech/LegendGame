@@ -54,6 +54,12 @@ public:
     // 阶段6：剔除指向不存在 Item 的 loot entry（ItemDatabase 加载后统一调用，不崩游戏）
     void ValidateLootEntries(const item::ItemDatabase& items);
 
+    // 阶段6.1：测试专用覆盖模板掉落表（LEGEND_AUTO_PROGRESSION_TEST 用，
+    // 让 Death->Reward->Roll->GroundLoot 链路可确定性验证；调用方负责还原原表）
+    void SetTestLootOverride(const std::string& templateId,
+                             const std::vector<LootEntry>& entries);
+    const std::vector<LootEntry>& GetLootEntries(const std::string& templateId) const; // 还原用
+
 private:
     struct TemplateAssets {
         MonsterDefinition definition;

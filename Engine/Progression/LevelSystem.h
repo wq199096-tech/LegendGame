@@ -20,12 +20,14 @@ struct LevelUpEvent {
 };
 
 // 升级循环纯逻辑：加经验 -> 支持一次大量经验连续升级（不能只升 1 级）。
-// MAX_LEVEL 封顶：满级后 currentExp 保持 0，继续击杀不再升级。
+// MAX_LEVEL 封顶：满级后 currentExp 归 0，继续获得经验只累计 totalExp 不再升级。
+// 阶段6.1：currentExp/totalExp/amount 全部 64 位（ExperienceValue），杜绝 int 溢出。
 class LevelSystem {
 public:
     // 推进 level/currentExp；totalExp 累计；返回本次产生的升级事件（0 到多次）
-    static std::vector<LevelUpEvent> AddExperience(int& level, int& currentExp,
-                                                   long long& totalExp, int amount);
+    static std::vector<LevelUpEvent> AddExperience(int& level, ExperienceValue& currentExp,
+                                                   ExperienceValue& totalExp,
+                                                   ExperienceValue amount);
 };
 
 } // namespace legend::progression

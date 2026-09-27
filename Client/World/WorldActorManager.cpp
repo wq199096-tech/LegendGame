@@ -44,8 +44,12 @@ bool WorldActorManager::Initialize(legend::resource::ResourceManager& resources)
     } else {
         m_rng.seed(static_cast<unsigned long>(time(nullptr)));
     }
-    // ---- 阶段6：物品库（启动加载一次） + 掉落管理器（LEGEND_LOOT_SEED 支持可重复测试） ----
-    m_itemDatabase.LoadFromFile(m_assetsRoot + "/Items/items.json");
+    // ---- 阶段6：物品库（启动加载一次，失败禁止继续——否则空库会把全部 Monster Loot 剔除
+    //      而游戏仍声称初始化成功） + 掉落管理器（LEGEND_LOOT_SEED 支持可重复测试） ----
+    if (!m_itemDatabase.LoadFromFile(m_assetsRoot + "/Items/items.json")) {
+        LOG_ERROR("WorldActorManager: item database load failed, abort initialize.");
+        return false;
+    }
     unsigned int lootSeed = 20260927u; // 固定默认：掉落结果可复现
     if (const char* lootSeedEnv = std::getenv("LEGEND_LOOT_SEED");
         lootSeedEnv != nullptr && lootSeedEnv[0] != '\0') {

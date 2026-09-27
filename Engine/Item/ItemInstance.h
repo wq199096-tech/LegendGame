@@ -17,13 +17,16 @@ struct ItemInstance {
 };
 
 // 堆叠进已有 Stack：保留已有 instanceId；溢出新 Stack：新 instanceId
+// ID 分配器 Reset 语义（阶段6.1统一）：Reset(nextValue) —— 重置后下一次 Next() 返回 nextValue
+// 本身（即 nextValue 视为"尚未分配"）。Reset(1) -> Next() == 1 -> 2 -> 3 ...；默认起点 1。
 class ItemInstanceIdAllocator {
 public:
     static ItemInstanceId Next() {
         return ++m_next;
     }
-    static void Reset(ItemInstanceId start = 1) {
-        m_next = start > 0 ? start : 1;
+    // nextValue < 1 时按 1 处理（0 保留为无效实例）
+    static void Reset(ItemInstanceId nextValue = 1) {
+        m_next = nextValue > 0 ? nextValue - 1 : 0;
     }
 
 private:

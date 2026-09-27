@@ -21,6 +21,7 @@ PlayerCharacter::PlayerCharacter(
     m_progression.Initialize(definition);
 }
 
-std::vector<legend::progression::LevelUpEvent> PlayerCharacter::AddExperience(int amount) {
+std::vector<legend::progression::LevelUpEvent> PlayerCharacter::AddExperience(
+    legend::progression::ExperienceValue amount) {
     return m_progression.AddExperience(GetCombatStats(), amount);
 }

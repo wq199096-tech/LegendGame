@@ -7,16 +7,19 @@
 
 namespace legend::world {
 
-// 掉落实体 ID：独立分配器（不与 EntityId / ItemInstanceId 混用）
+// 掉落实体 ID 类型：独立分配器（不与 EntityId / ItemInstanceId 混用）
 using LootEntityId = std::uint64_t;
 
+// Reset 语义（阶段6.1统一）：Reset(nextValue) —— 重置后下一次 Next() 返回 nextValue 本身
+// （nextValue 视为"尚未分配"）。Reset(1) -> Next() == 1 -> 2 -> 3 ...；默认起点 1。
 class LootEntityIdAllocator {
 public:
     static LootEntityId Next() {
         return ++m_next;
     }
-    static void Reset(LootEntityId start = 1) {
-        m_next = start > 0 ? start : 1;
+    // nextValue < 1 时按 1 处理（0 保留为无效实体）
+    static void Reset(LootEntityId nextValue = 1) {
+        m_next = nextValue > 0 ? nextValue - 1 : 0;
     }
 
 private:

@@ -93,6 +93,10 @@ private:
     void RunGroundLootPickupCheck();
     void RunPartialPickupCheck();
     void RunDeathRewardCheck();
+    // 阶段6.1 自检：64位经验 / ItemDatabase 失败路径 / 死亡掉落真实集成（exactly-once）
+    void RunExperience64Check();
+    void RunItemDatabaseFailureCheck();
+    void RunDeathLootIntegrationCheck();
     // LEGEND_AUTO_PROGRESSION_TEST=1：阶段6 验收时间线（击杀->Exp->Loot->拾取->升级->成长->Respawn）
     void UpdateProgressionTest(float deltaTime);
     // 阶段6：地上掉落 Debug 绘制（进 Y-Sort 队列后逐个绘制）
@@ -198,6 +202,7 @@ private:
     float m_progTestBaselineDefense = 0.0f;
     int m_progTestBagBaseline = 0;
     std::uint64_t m_progTestLootBaseline = 0;
+    std::size_t m_progTestGroundBaseline = 0; // 阶段6.1：真实掉落内容验证基线
     int m_progTestKills = 0;
     int m_progTestFailures = 0;
     bool m_progTestSummaryDone = false;
