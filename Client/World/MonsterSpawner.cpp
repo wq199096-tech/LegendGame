@@ -1,5 +1,7 @@
 #include "Client/World/MonsterSpawner.h"
 
+#include "Engine/Item/ItemDatabase.h"
+
 #include "Client/World/SpawnArea.h"
 #include "Engine/Debug/Logger.h"
 #include "Engine/Entity/EntityIdAllocator.h"
@@ -124,6 +126,22 @@ const MonsterDefinition* MonsterSpawner::GetDefinition(const std::string& templa
         return nullptr;
     }
     return &it->second.definition;
+}
+
+void MonsterSpawner::ValidateLootEntries(const item::ItemDatabase& items) {
+    for (auto& [templateId, assets] : m_templates) {
+        std::vector<LootEntry> valid;
+        valid.reserve(assets.definition.loot.size());
+        for (LootEntry& entry : assets.definition.loot) {
+            if (items.Exists(entry.itemId)) {
+                valid.push_back(std::move(entry));
+            } else {
+                LOG_WARN("MonsterSpawner: '" + templateId + "' loot item '" + entry.itemId +
+                         "' not in ItemDatabase, entry skipped.");
+            }
+        }
+        assets.definition.loot = std::move(valid);
+    }
 }
 
 } // namespace legend::world

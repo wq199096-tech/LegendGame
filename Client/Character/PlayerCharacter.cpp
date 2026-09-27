@@ -17,4 +17,10 @@ PlayerCharacter::PlayerCharacter(
     if (definition.hasCombat) {
         GetCombatStats() = definition.combat;
     }
+    // 阶段6：成长组件（growth 块，缺省 20/5/2）+ 空背包（20 格）
+    m_progression.Initialize(definition);
+}
+
+std::vector<legend::progression::LevelUpEvent> PlayerCharacter::AddExperience(int amount) {
+    return m_progression.AddExperience(GetCombatStats(), amount);
 }

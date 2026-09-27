@@ -6,12 +6,15 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Client/Loot/LootManager.h"
 #include "Client/World/MonsterAIController.h"
 #include "Client/World/MonsterSpawner.h"
 #include "Client/World/NPCCharacter.h"
+#include "Client/World/RewardSystem.h"
 #include "Engine/Combat/CombatSystem.h"
 #include "Engine/Entity/ActorRegistry.h"
 #include "Engine/Entity/CharacterController.h"
+#include "Engine/Item/ItemDatabase.h"
 #include "Engine/Map/MapTypes.h"
 
 namespace legend::map {
@@ -48,13 +51,16 @@ public:
     bool Initialize(legend::resource::ResourceManager& resources);
     void Shutdown();
 
-    void RegisterPlayer(entity::Character* player);
+    void RegisterPlayer(PlayerCharacter* player);
 
     int SpawnNPCs(const map::Map& map);
     WorldSpawnStats SpawnMonsters(const map::Map& map);
 
-    // 统一更新：事件分发 -> AI/战斗 -> 动画 -> 死亡收集 -> Despawn -> Respawn
+    // 统一更新：事件分发 -> AI/战斗 -> 奖励(Exp/Loot) -> 动画 -> 死亡收集 -> Despawn -> Respawn
     void Update(const map::Map& map, float deltaTime);
+
+    // 手动触发奖励分发（自动测试 [DeathRewardCheck] 用；Update 内部每帧同样调用）
+    int ProcessDeathRewards();
 
     void CollectRenderItems(std::vector<map::RenderSortItem>& items, float viewLeft,
                             float viewRight, float viewTop, float viewBottom) const;
@@ -63,6 +69,11 @@ public:
     const entity::ActorRegistry& GetRegistry() const { return m_registry; }
     MonsterSpawner& GetSpawner() { return m_spawner; }
     combat::CombatSystem& GetCombatSystem() { return m_combat; }
+    // ---- 阶段6：奖励 / 掉落 / 物品 ----
+    LootManager& GetLoot() { return m_loot; }
+    const LootManager& GetLoot() const { return m_loot; }
+    const item::ItemDatabase& GetItemDatabase() const { return m_itemDatabase; }
+    PlayerCharacter* GetPlayer() const { return m_player; }
 
     int GetMonsterCount() const { return static_cast<int>(m_monsterIds.size()); }
     int GetNPCCount() const { return static_cast<int>(m_npcIds.size()); }
@@ -93,6 +104,12 @@ private:
     combat::CombatSystem m_combat{m_registry}; // 依赖 m_registry 先初始化
     MonsterSpawner m_spawner;
     entity::CharacterController m_characterController;
+
+    // ---- 阶段6：物品库 / 掉落 / 奖励（World 级一次初始化，不由 GameScene 直管） ----
+    item::ItemDatabase m_itemDatabase;
+    LootManager m_loot;
+    RewardSystem m_rewards;
+    PlayerCharacter* m_player = nullptr; // 奖励归属（killer=Player 判定 + Exp/Inventory 入口）
 
     std::vector<std::unique_ptr<entity::Character>> m_ownedActors;
     std::vector<entity::EntityId> m_npcIds;

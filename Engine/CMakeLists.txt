@@ -22,6 +22,9 @@ set(LEGEND_ENGINE_SOURCES
     Animation/AnimationStateMachine.cpp
     Animation/AnimationLoader.cpp
     Animation/SpriteSheet.cpp
+    Item/ItemDatabase.cpp
+    Item/ItemDefinition.cpp
+    Item/Inventory.cpp
     Map/Map.cpp
     Map/MapLayer.cpp
     Map/MapLoader.cpp
@@ -31,6 +34,8 @@ set(LEGEND_ENGINE_SOURCES
     Map/OcclusionLayer.cpp
     Map/TileLayer.cpp
     Math/Matrix4x4.cpp
+    Progression/ExperienceTable.cpp
+    Progression/LevelSystem.cpp
     Render/Camera2D.cpp
     Render/CharacterRenderer.cpp
     Render/GLApi.cpp

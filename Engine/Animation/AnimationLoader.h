@@ -8,6 +8,7 @@
 #include "Engine/Combat/CombatStats.h"
 #include "Engine/Animation/SpriteSheet.h"
 #include "Engine/Entity/Character.h"
+#include "Engine/Progression/LevelSystem.h"
 
 namespace legend::resource {
 class ResourceManager;
@@ -32,6 +33,9 @@ struct CharacterDefinition {
     // character.json "combat" 块（阶段5）：缺省时 hasCombat=false（NPC 不参战）
     bool hasCombat = false;
     combat::CombatStats combat;
+    // character.json "growth" 块（阶段6）：每级属性成长（缺省 20/5/2；怪物不升级无影响）
+    bool hasGrowth = false;
+    legend::progression::GrowthConfig growth;
 };
 
 // character.json -> CharacterDefinition（失败返回 false + 明确日志，不崩溃）

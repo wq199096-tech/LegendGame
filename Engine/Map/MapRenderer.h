@@ -28,9 +28,9 @@ class Map;
 class MapChunk;
 struct MapObject;
 
-// 统一 Y-Sort 排序项：MapObject 与 Character（以及未来 NPC/Monster）进入同一排序队列
+// 统一 Y-Sort 排序项：MapObject / Character / GroundLoot 进入同一排序队列
 struct RenderSortItem {
-    enum class Type { MapObject, Character };
+    enum class Type { MapObject, Character, GroundLoot };
 
     int sortLayer = 0;
     float sortY = 0.0f;
@@ -38,6 +38,7 @@ struct RenderSortItem {
     Type type = Type::MapObject;
     const MapObject* mapObject = nullptr;
     const entity::Character* character = nullptr;
+    const void* groundLoot = nullptr; // Type::GroundLoot 时指向 world::GroundLoot（GameScene 解释）
 
     // 排序键：sortLayer -> sortY -> renderOrder（与 MapRenderer::YSortCompare 规则一致）
     static bool Compare(const RenderSortItem& a, const RenderSortItem& b) {

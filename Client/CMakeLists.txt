@@ -5,17 +5,22 @@ add_executable(LegendClient
     Source/Main.cpp
     Source/LegendApp.cpp
     Source/GameScene.cpp
+    Source/ProgressionChecks.cpp
     Source/FallbackScene.cpp
     Character/PlayerCharacter.cpp
     Combat/MonsterCombatController.cpp
     Combat/PlayerCombatController.cpp
     Character/PlayerController.cpp
+    Loot/LootManager.cpp
+    Loot/LootTable.cpp
+    Progression/PlayerProgression.cpp
     World/AggroTable.cpp
     World/MonsterAIController.cpp
     World/MonsterCharacter.cpp
     World/MonsterDefinition.cpp
     World/MonsterSpawner.cpp
     World/NPCCharacter.cpp
+    World/RewardSystem.cpp
     World/SpawnArea.cpp
     World/WorldActorManager.cpp
 )

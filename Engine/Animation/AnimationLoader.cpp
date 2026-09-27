@@ -73,6 +73,14 @@ bool LoadCharacterDefinition(const std::string& filePath, CharacterDefinition& o
         out.footprint.offsetX = fp.value("offsetX", 0.0f);
         out.footprint.offsetY = fp.value("offsetY", 20.0f);
     }
+    // ---- 阶段6：growth 块（可选，每级成长；缺省 20/5/2） ----
+    if (root.contains("growth") && root["growth"].is_object()) {
+        const json& g = root["growth"];
+        out.growth.maxHpPerLevel = g.value("maxHpPerLevel", 20.0f);
+        out.growth.attackPerLevel = g.value("attackPerLevel", 5.0f);
+        out.growth.defensePerLevel = g.value("defensePerLevel", 2.0f);
+        out.hasGrowth = true;
+    }
     if (root.contains("pivot")) {
         const json& pivot = root["pivot"];
         out.pivot.x = pivot.value("x", 0.5f);

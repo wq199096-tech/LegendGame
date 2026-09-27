@@ -1,0 +1,45 @@
+{
+    "version": 1,
+    "items": [
+        {
+            "id": "small_potion",
+            "name": "Small Potion",
+            "type": "Consumable",
+            "maxStack": 20,
+            "icon": "items/small_potion",
+            "description": "Restores a small amount of HP."
+        },
+        {
+            "id": "slime_gel",
+            "name": "Slime Gel",
+            "type": "Material",
+            "maxStack": 50,
+            "icon": "items/slime_gel",
+            "description": "Sticky gel dropped by slimes."
+        },
+        {
+            "id": "wolf_fang",
+            "name": "Wolf Fang",
+            "type": "Material",
+            "maxStack": 50,
+            "icon": "items/wolf_fang",
+            "description": "A sharp fang from a wolf."
+        },
+        {
+            "id": "boar_hide",
+            "name": "Boar Hide",
+            "type": "Material",
+            "maxStack": 50,
+            "icon": "items/boar_hide",
+            "description": "Tough hide from a boar."
+        },
+        {
+            "id": "iron_ore",
+            "name": "Iron Ore",
+            "type": "Material",
+            "maxStack": 99,
+            "icon": "items/iron_ore",
+            "description": "Raw iron ore, useful for smithing."
+        }
+    ]
+}

@@ -83,6 +83,22 @@ private:
     void RunMonsterCombatConfigCheck();
     void RunCharacterHitTestCheck();
     void RunCombatTargetLifecycleCheck();
+    // 阶段6 自检：经验/成长/物品库/背包堆叠/背包满/掉落Roll/拾取/部分拾取/死亡奖励
+    void RunExperienceCheck();
+    void RunLevelGrowthCheck();
+    void RunItemDatabaseCheck();
+    void RunInventoryStackCheck();
+    void RunInventoryFullCheck();
+    void RunLootRollCheck();
+    void RunGroundLootPickupCheck();
+    void RunPartialPickupCheck();
+    void RunDeathRewardCheck();
+    // LEGEND_AUTO_PROGRESSION_TEST=1：阶段6 验收时间线（击杀->Exp->Loot->拾取->升级->成长->Respawn）
+    void UpdateProgressionTest(float deltaTime);
+    // 阶段6：地上掉落 Debug 绘制（进 Y-Sort 队列后逐个绘制）
+    void DrawGroundLoot(const legend::world::GroundLoot& loot);
+    // F5：Progression/Loot Debug 覆盖层（最近掉落圈/拾取范围/距离连线）
+    void DrawProgressionDebugOverlay(legend::render::SpriteBatch& batch);
     // LEGEND_AUTO_COMBAT_TEST=1：战斗验收时间线（选怪/连击/反击/死亡/重生/玩家复活）
     void UpdateCombatTest(float deltaTime);
     // Player 死亡后 Debug 复活：回出生点满血 Normal South
@@ -164,4 +180,26 @@ private:
     int m_aiTestHop = 0;            // Leash 阶段牵引步数
     float m_aiTestHopTimer = 0.0f;
     bool m_aiTestLeashTriggered = false;
+
+    // ---- 阶段6：Progression / Loot ----
+    bool m_progressionDebug = false; // F5
+    // LEGEND_AUTO_PROGRESSION_TEST=1 时间线状态
+    bool m_progTest = false;
+    int m_progTestStage = 0;
+    double m_progTestElapsed = 0.0;
+    double m_progTestStageElapsed = 0.0;
+    bool m_progTestStageEntered = false;
+    legend::entity::EntityId m_progTestSlimeId = 0;
+    int m_progTestBaselineLevel = 0;
+    int m_progTestBaselineExp = 0;
+    long long m_progTestBaselineTotalExp = 0;
+    float m_progTestBaselineMaxHp = 0.0f;
+    float m_progTestBaselineAttack = 0.0f;
+    float m_progTestBaselineDefense = 0.0f;
+    int m_progTestBagBaseline = 0;
+    std::uint64_t m_progTestLootBaseline = 0;
+    int m_progTestKills = 0;
+    int m_progTestFailures = 0;
+    bool m_progTestSummaryDone = false;
+    int m_progTestPickupApplied = 0;
 };

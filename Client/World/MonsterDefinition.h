@@ -1,12 +1,11 @@
 #pragma once
 
 #include <string>
-
-#include "Engine/Combat/CombatStats.h"
-
-#include "Engine/Combat/CombatStats.h"
 #include <unordered_map>
 #include <vector>
+
+#include "Client/Loot/LootTable.h"
+#include "Engine/Combat/CombatStats.h"
 
 namespace legend::world {
 
@@ -28,6 +27,8 @@ struct MonsterDefinition {
     std::string characterPath; // character.json 相对 Assets 根路径
     MonsterAIDefinition ai;
     combat::CombatStats combat; // monster.json "combat" 块（阶段5数据驱动，不写死 AI）
+    int expReward = 0;          // monster.json "rewards".exp（阶段6，>=0）
+    std::vector<LootEntry> loot; // monster.json "loot"[]（阶段6，加载时校验非法 entry 剔除）
 };
 
 // Assets/Monsters/monster.json -> 模板表（version 1）。

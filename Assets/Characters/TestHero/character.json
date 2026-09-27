@@ -25,5 +25,10 @@
                    "defense":  20,
                    "attackRange":  90,
                    "attackInterval":  0.8
+               },
+    "growth":  {
+                   "maxHpPerLevel": 20,
+                   "attackPerLevel": 5,
+                   "defensePerLevel": 2
                }
 }

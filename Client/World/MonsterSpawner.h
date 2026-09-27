@@ -15,6 +15,10 @@ namespace legend::map {
 class Map;
 }
 
+namespace legend::item {
+class ItemDatabase;
+}
+
 namespace legend::resource {
 class ResourceManager;
 }
@@ -46,6 +50,9 @@ public:
         return m_templates.count(templateId) > 0;
     }
     std::size_t TemplateCount() const { return m_templates.size(); }
+
+    // 阶段6：剔除指向不存在 Item 的 loot entry（ItemDatabase 加载后统一调用，不崩游戏）
+    void ValidateLootEntries(const item::ItemDatabase& items);
 
 private:
     struct TemplateAssets {

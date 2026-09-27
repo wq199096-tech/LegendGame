@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <ctime>
 
+#include "Client/Character/PlayerCharacter.h"
 #include "Client/World/MonsterCharacter.h"
 #include "Engine/Debug/Logger.h"
 #include "Engine/Entity/EntityIdAllocator.h"
@@ -43,10 +44,24 @@ bool WorldActorManager::Initialize(legend::resource::ResourceManager& resources)
     } else {
         m_rng.seed(static_cast<unsigned long>(time(nullptr)));
     }
+    // ---- 阶段6：物品库（启动加载一次） + 掉落管理器（LEGEND_LOOT_SEED 支持可重复测试） ----
+    m_itemDatabase.LoadFromFile(m_assetsRoot + "/Items/items.json");
+    unsigned int lootSeed = 20260927u; // 固定默认：掉落结果可复现
+    if (const char* lootSeedEnv = std::getenv("LEGEND_LOOT_SEED");
+        lootSeedEnv != nullptr && lootSeedEnv[0] != '\0') {
+        lootSeed = static_cast<unsigned int>(std::strtoul(lootSeedEnv, nullptr, 10));
+    } else if (const char* aiSeedEnv = std::getenv("LEGEND_AI_SEED");
+               aiSeedEnv != nullptr && aiSeedEnv[0] != '\0') {
+        lootSeed = static_cast<unsigned int>(std::strtoul(aiSeedEnv, nullptr, 10));
+    }
+    m_loot.Initialize(lootSeed, &m_itemDatabase);
+    // 掉落表 item 存在性校验：指向不存在 Item 的 entry 剔除（不生成未知物品）
+    m_spawner.ValidateLootEntries(m_itemDatabase);
     return true;
 }
 
 void WorldActorManager::Shutdown() {
+    m_loot.Shutdown();
     m_registry.Clear();
     m_aiControllers.clear();
     m_ownedActors.clear();
@@ -57,7 +72,8 @@ void WorldActorManager::Shutdown() {
     m_spawnAreas.clear();
 }
 
-void WorldActorManager::RegisterPlayer(entity::Character* player) {
+void WorldActorManager::RegisterPlayer(PlayerCharacter* player) {
+    m_player = player;      // 奖励归属（killer=Player 判定 + Exp/Inventory 入口）
     m_registry.Register(player);
 }
 
@@ -198,6 +214,10 @@ void WorldActorManager::Update(const map::Map& map, float deltaTime) {
         }
     }
     m_combat.ClearRecentEvents();
+
+    // 2.5 阶段6：死亡奖励分发（Exp + Loot）——DeathEvent 一次消费，奖励与 Respawn 分离
+    m_rewards.ProcessDeathEvents(m_combat, m_registry, m_player, m_loot, m_spawner,
+                                 m_itemDatabase);
 
     // 3. 死亡收集：Dead + 死亡动画播完 -> Corpse 滞留 1.5s -> Despawn
     for (entity::EntityId id : m_monsterIds) {
@@ -344,6 +364,12 @@ void WorldActorManager::CollectRenderItems(std::vector<map::RenderSortItem>& ite
         items.push_back({0, feet.y, 10, legend::map::RenderSortItem::Type::Character, nullptr,
                          actor});
     }
+}
+
+int WorldActorManager::ProcessDeathRewards() {
+    // 阶段6：手动触发奖励分发（自动测试 [DeathRewardCheck] 用；Update 内每帧同样调用）
+    return m_rewards.ProcessDeathEvents(m_combat, m_registry, m_player, m_loot, m_spawner,
+                                        m_itemDatabase);
 }
 
 std::vector<MonsterCharacter*> WorldActorManager::GetMonsters() const {

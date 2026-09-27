@@ -14,13 +14,24 @@
 #include "Engine/Combat/CombatResolver.h"
 #include "Engine/Combat/CombatStats.h"
 #include "Engine/Combat/CombatSystem.h"
+#include "Client/Character/PlayerCharacter.h"
+#include "Client/Loot/GroundLoot.h"
+#include "Client/Loot/LootManager.h"
+#include "Client/Loot/LootTable.h"
+#include "Client/Progression/PlayerProgression.h"
 #include "Client/World/MonsterCharacter.h"
+#include "Client/World/MonsterDefinition.h"
 #include "Engine/Core/Engine.h"
 #include "Engine/Debug/Logger.h"
 #include "Engine/Entity/Direction8.h"
 #include "Engine/Entity/EntityIdAllocator.h"
+#include "Engine/Item/ItemDatabase.h"
+#include "Engine/Item/ItemDefinition.h"
+#include "Engine/Item/Inventory.h"
 #include "Engine/Map/Map.h"
 #include "Engine/Map/MapTypes.h"
+#include "Engine/Progression/ExperienceTable.h"
+#include "Engine/Progression/LevelSystem.h"
 #include "Engine/Render/SpriteBatch.h"
 #include "Engine/Render/Texture.h"
 
@@ -117,6 +128,15 @@ void GameScene::OnLoad() {
     RunMonsterCombatConfigCheck();
     RunCharacterHitTestCheck();
     RunCombatTargetLifecycleCheck();
+    RunExperienceCheck();
+    RunLevelGrowthCheck();
+    RunItemDatabaseCheck();
+    RunInventoryStackCheck();
+    RunInventoryFullCheck();
+    RunLootRollCheck();
+    RunGroundLootPickupCheck();
+    RunPartialPickupCheck();
+    RunDeathRewardCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -263,6 +283,21 @@ void GameScene::Update(float deltaTime) {
         m_combatDebug = !m_combatDebug;
         LOG_INFO(m_combatDebug ? "Combat debug: enabled (F4)" : "Combat debug: disabled (F4)");
     }
+    if (input.IsKeyPressed(SDL_SCANCODE_F5)) {
+        m_progressionDebug = !m_progressionDebug;
+        LOG_INFO(m_progressionDebug ? "Progression/Loot debug: enabled (F5)"
+                                    : "Progression/Loot debug: disabled (F5)");
+    }
+
+    // ---- 阶段6：E 拾取最近 GroundLoot（<=80 world units） ----
+    if (input.IsKeyPressed(SDL_SCANCODE_E) && m_player != nullptr) {
+        const int picked = m_worldActors.GetLoot().PickupNearest(
+            m_player->GetPosition(), 80.0f, m_player->GetInventory(),
+            m_worldActors.GetItemDatabase());
+        if (picked == 0) {
+            LOG_INFO("[Pickup] nothing picked (no loot in range or inventory full).");
+        }
+    }
 
     // ---- 玩家战斗：目标选择 / 攻击请求 / 状态推进（先于移动，MovementLock 生效） ----
     int combatVpW = 1280;
@@ -311,6 +346,11 @@ void GameScene::Update(float deltaTime) {
         UpdateCombatTest(deltaTime);
     }
 
+    // 阶段6：LEGEND_AUTO_PROGRESSION_TEST=1 成长/掉落验收时间线
+    if (m_progTest) {
+        UpdateProgressionTest(deltaTime);
+    }
+
     // Player 死亡 -> Debug 复活（回出生点满血）
     UpdatePlayerRespawn(deltaTime);
 
@@ -344,6 +384,11 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     m_worldActors.CollectRenderItems(items, m_mapRenderer.GetViewLeft(),
                                      m_mapRenderer.GetViewRight(), m_mapRenderer.GetViewTop(),
                                      m_mapRenderer.GetViewBottom());
+    // 阶段6：地上掉落进统一 Y-Sort 队列（sortY = position.y；视口剔除在 LootManager 内完成）
+    m_worldActors.GetLoot().CollectRenderItems(items, m_mapRenderer.GetViewLeft(),
+                                               m_mapRenderer.GetViewRight(),
+                                               m_mapRenderer.GetViewTop(),
+                                               m_mapRenderer.GetViewBottom());
     m_lastVisibleActors = 0;
     for (const auto& item : items) {
         if (item.type == legend::map::RenderSortItem::Type::Character) {
@@ -357,6 +402,10 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     for (const auto& item : items) {
         if (item.type == legend::map::RenderSortItem::Type::MapObject) {
             m_mapRenderer.DrawMapObject(*item.mapObject);
+        } else if (item.type == legend::map::RenderSortItem::Type::GroundLoot &&
+                   item.groundLoot != nullptr) {
+            m_mapRenderer.Flush(); // 冲刷排在前面的物件，保证遮挡顺序
+            DrawGroundLoot(*static_cast<const legend::world::GroundLoot*>(item.groundLoot));
         } else if (item.character != nullptr) {
             m_mapRenderer.Flush(); // 冲刷排在前面的物件，保证遮挡顺序
             m_characterRenderer.Draw(m_mapRenderer.GetBatch(), *item.character);
@@ -372,6 +421,9 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     }
     if (m_aiDebug) {
         DrawAIDebugOverlay(m_mapRenderer.GetBatch());
+    }
+    if (m_progressionDebug) {
+        DrawProgressionDebugOverlay(m_mapRenderer.GetBatch()); // F5：成长/掉落 Debug
     }
     if (m_combatDebug || m_playerCombat.GetTarget().IsEmpty() == false) {
         DrawTargetRing(m_mapRenderer.GetBatch()); // 选中目标红圈（死亡自动消失）
@@ -424,6 +476,13 @@ void GameScene::ApplyAutoTestHooks() {
         m_autoCombatTest = true;
         LOG_INFO("Auto-test: combat acceptance timeline enabled (LEGEND_AUTO_COMBAT_TEST=1), "
                  "stages: Select -> Attack -> Death -> Respawn -> PlayerRespawn.");
+    }
+    const char* progTest = SDL_getenv("LEGEND_AUTO_PROGRESSION_TEST");
+    if (progTest != nullptr && progTest[0] == '1') {
+        m_progTest = true;
+        LOG_INFO("Auto-test: progression/loot acceptance timeline enabled "
+                 "(LEGEND_AUTO_PROGRESSION_TEST=1), stages: Kill -> Exp -> Loot -> Pickup "
+                 "-> LevelUp -> Growth -> Respawn.");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {
@@ -1025,7 +1084,14 @@ void GameScene::LogMapStats(double deltaTime) {
         (m_player && m_player->IsCombatEnabled()
              ? " | HP: " + std::to_string(static_cast<int>(m_player->GetCombatStats().hp)) +
                    "/" + std::to_string(static_cast<int>(m_player->GetCombatStats().maxHp))
-             : std::string());
+             : std::string()) +
+        // 阶段6：等级 / 经验 / 背包（Debug 阶段窗口标题显示；正式 UI 后续单独做）
+        (m_player ? " | Lv: " + std::to_string(m_player->GetProgression().GetLevel()) +
+                        " | EXP: " + std::to_string(m_player->GetProgression().GetCurrentExp()) +
+                        "/" + std::to_string(m_player->GetProgression().GetRequiredExp()) +
+                        " | Bag: " + std::to_string(m_player->GetInventory().GetUsedSlots()) +
+                        "/" + std::to_string(m_player->GetInventory().GetCapacity())
+                  : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame
     if (m_characterDebug && m_player) {
@@ -2105,7 +2171,21 @@ void GameScene::UpdateCombatTest(float deltaTime) {
             }
             m_combatTestSlimeId = slime->GetId();
             m_player->SetPosition(slime->GetPosition() + legend::math::Vector2(-60.0f, 0.0f));
-            m_playerCombat.SelectNearestMonster(*m_player, m_worldActors.GetRegistry());
+            // 阶段6：舞台布置——把玩家 200 半径内其它活怪送回 home（避免围殴 HitReact
+            // 打断循环锁死玩家攻击；被测 slime 留下，Respawn 计数不受影响）
+            for (legend::world::MonsterCharacter* monster : monsters) {
+                if (monster == nullptr || monster == slime || !monster->IsCombatAlive()) {
+                    continue;
+                }
+                const float distSq =
+                    (monster->GetPosition() - m_player->GetPosition()).LengthSq();
+                if (distSq < 200.0f * 200.0f) {
+                    monster->SetPosition(monster->GetHomePosition());
+                }
+            }
+            // 直接锁定被测 slime（禁止用 SelectNearestMonster——它在传送后会选中
+            // 另一只更近的怪，导致监测对象与攻击目标不一致、时间线卡死）
+            m_playerCombat.GetTarget().SetTarget(slime->GetId());
             LOG_INFO("[CombatTest] stage 0: selected Slime#" +
                      std::to_string(m_combatTestSlimeId) + ", player teleported to attack range.");
             m_combatTestLastSlimeHp = slime->GetCombatStats().hp;
@@ -2491,4 +2571,149 @@ void GameScene::RunCombatTargetLifecycleCheck() {
     second->SetActive(true);
     m_playerCombat.GetTarget().ClearTarget();
     LOG_INFO("[CombatTargetLifecycleCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== 阶段6：Progression / Loot 自检 ====================
+
+void GameScene::RunExperienceCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[ExperienceCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    using legend::progression::LevelSystem;
+    using legend::progression::RequiredExp;
+    int level = 1;
+    int currentExp = 0;
+    long long totalExp = 0;
+    check("level1 exp0", level == 1 && currentExp == 0);
+    // 经验表统一入口：100 * 1.5^(level-1)
+    check("exp table 100/150/225", RequiredExp(1) == 100 && RequiredExp(2) == 150 &&
+                                      RequiredExp(3) == 225);
+    auto events = LevelSystem::AddExperience(level, currentExp, totalExp, 50);
+    check("add 50 stays lv1", level == 1 && currentExp == 50 && events.empty());
+    events = LevelSystem::AddExperience(level, currentExp, totalExp, 60);
+    check("level up at 100 -> lv2 remainder 10",
+          level == 2 && currentExp == 10 && events.size() == 1 && events[0].oldLevel == 1 &&
+              events[0].newLevel == 2);
+    // 一次大量经验必须连续升级（不能只升 1 级）
+    events = LevelSystem::AddExperience(level, currentExp, totalExp, 1000);
+    check("one big add multi level up", level > 2 && events.size() >= 2);
+    // 满级封顶：从 lv49 满经验加 1 -> lv50，currentExp 归 0，继续获得不再升级
+    // （RequiredExp(49) clamp 后 = INT_MAX，站在满经验处只需 +1 即触发升级）
+    level = legend::progression::kMaxLevel - 1;
+    currentExp = 2147483646;
+    events = LevelSystem::AddExperience(level, currentExp, totalExp, 1);
+    check("capped at max level 50",
+          level == legend::progression::kMaxLevel && currentExp == 0 && !events.empty());
+    events = LevelSystem::AddExperience(level, currentExp, totalExp, 500);
+    check("max level no more level ups", level == legend::progression::kMaxLevel && events.empty());
+    LOG_INFO("[ExperienceCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunLevelGrowthCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[LevelGrowthCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    legend::progression::PlayerProgression progression;
+    legend::animation::CharacterDefinition definition; // growth 缺省 20/5/2
+    progression.Initialize(definition);
+    legend::combat::CombatStats stats;
+    stats.maxHp = 500.0f;
+    stats.hp = 500.0f;
+    stats.attack = 80.0f;
+    stats.defense = 20.0f;
+    // 120 exp -> lv2（需求100，剩20），属性成长 MaxHP+20/Attack+5/Defense+2
+    progression.AddExperience(stats, 120);
+    check("lv2 after 120 exp", progression.GetLevel() == 2);
+    check("maxHp 500 -> 520", std::fabs(stats.maxHp - 520.0f) < 0.001f);
+    check("hp +20 synced (no overheal)", std::fabs(stats.hp - 520.0f) < 0.001f &&
+                                            stats.hp <= stats.maxHp);
+    check("attack 80 -> 85", std::fabs(stats.attack - 85.0f) < 0.001f);
+    check("defense 20 -> 22", std::fabs(stats.defense - 22.0f) < 0.001f);
+    LOG_INFO("[LevelGrowthCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunItemDatabaseCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[ItemDatabaseCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    legend::item::ItemDatabase database;
+    const bool loaded = database.LoadFromFile(
+        legend::Engine::Get().GetResources().GetAssetRoot() + "/Items/items.json");
+    check("items.json loaded", loaded);
+    check("at least 5 items", database.Count() >= 5);
+    const legend::item::ItemDefinition* potion = database.Get("small_potion");
+    check("small_potion correct",
+          potion != nullptr && potion->maxStack == 20 &&
+              potion->type == legend::item::ItemType::Consumable);
+    check("wolf_fang present", database.Get("wolf_fang") != nullptr);
+    check("boar_hide present", database.Get("boar_hide") != nullptr);
+    check("slime_gel present", database.Get("slime_gel") != nullptr);
+    check("iron_ore present", database.Get("iron_ore") != nullptr);
+    check("unknown id -> nullptr", database.Get("not_exist_item_xyz") == nullptr);
+    check("unknown id -> exists false", !database.Exists("not_exist_item_xyz"));
+    LOG_INFO("[ItemDatabaseCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunInventoryStackCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[InventoryStackCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    legend::item::Inventory inventory;
+    legend::item::ItemDefinition potion;
+    potion.id = "small_potion";
+    potion.name = "Small Potion";
+    potion.type = legend::item::ItemType::Consumable;
+    potion.maxStack = 20;
+    const auto first = inventory.AddItem(potion, 18);
+    check("add 18 -> 1 slot", first.added == 18 && first.remaining == 0 &&
+                                 inventory.GetUsedSlots() == 1);
+    const auto second = inventory.AddItem(potion, 5);
+    check("add 5 -> fills + new slot", second.added == 5 && inventory.GetUsedSlots() == 2);
+    const legend::item::ItemInstance* slot0 = inventory.GetSlot(0);
+    const legend::item::ItemInstance* slot1 = inventory.GetSlot(1);
+    check("slot0 topped to 20", slot0 != nullptr && slot0->quantity == 20);
+    check("slot1 = 3 new stack", slot1 != nullptr && slot1->quantity == 3);
+    check("stack keeps instanceId", slot0 != nullptr && slot1 != nullptr &&
+                                        slot0->instanceId != slot1->instanceId);
+    check("total count 23", inventory.GetItemCount("small_potion") == 23);
+    LOG_INFO("[InventoryStackCheck] completed, failures = " + std::to_string(failures));
+}
+
+void GameScene::RunInventoryFullCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LOG_INFO("[InventoryFullCheck] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+        if (!pass) {
+            ++failures;
+        }
+    };
+    legend::item::Inventory inventory;
+    legend::item::ItemDefinition unique; // maxStack=1：不可堆叠（未来 Equipment 预留语义）
+    unique.id = "unit_test_unique";
+    unique.name = "UnitTestUnique";
+    unique.maxStack = 1;
+    for (int i = 0; i < static_cast<int>(inventory.GetCapacity()); ++i) {
+        (void)inventory.AddItem(unique, 1);
+    }
+    check("20 slots filled", inventory.GetUsedSlots() == 20 && inventory.IsFull());
+    const auto rejected = inventory.AddItem(unique, 3);
+    check("full -> added 0", rejected.added == 0);
+    check("full -> remaining kept (no loss)", rejected.remaining == 3);
+    LOG_INFO("[InventoryFullCheck] completed, failures = " + std::to_string(failures));
 }

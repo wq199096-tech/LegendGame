@@ -75,6 +75,12 @@ Build\bin\Debug\LegendMapEditor.exe
 | F | 开启 / 关闭摄像机跟随玩家（跟随脚底 Feet Position） |
 | F1 | 切换碰撞 Debug 可视化（Terrain/Manual/Object 合成结果，红色半透明） |
 | F2 | 切换角色 Debug（脚底碰撞盒黄色矩形 + Feet 十字 + 标题显示 Direction/Clip/Frame） |
+| TAB | 选择最近活怪（1000 内）；鼠标左键点怪选中 / 点空地清目标 |
+| Space | 攻击当前目标（attack_hit 事件造成伤害） |
+| E | 拾取最近地上掉落（80 内；背包满时保留地上不丢失） |
+| F3 | AI Debug（Aggro/Leash 圈、Home 十字、目标连线） |
+| F4 | Combat Debug（目标/冷却/血条/攻击距离圈） |
+| F5 | Progression/Loot Debug（拾取范围圈、最近 5 件掉落连线） |
 | ESC | 退出程序 |
 
 窗口标题实时显示 `Map: TestMap | Chunks: 20 | Tiles: 5120 | DC: 56 | FPS: 60`，
@@ -170,3 +176,20 @@ Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites
 - 自动验收：LEGEND_AUTO_COMBAT_TEST=1（选怪/连击/反击/死亡/despawn/重生/玩家复活）；静态自检
   [CombatStatsCheck]/[CombatResolverCheck]/[AttackCooldownCheck]/[AttackRangeCheck]/[AnimationEventCheck]/[DeathCheck]
 - 动画资源：SpriteSheet 扩展为 15列x8行=120帧（idle2/walk4/attack4/hit1/death4 每方向行）
+
+## 阶段6：Progression + Loot + Inventory Core V0.6
+
+- 经验成长：`Engine/Progression`（ExperienceTable 统一 `100 * 1.5^(level-1)`，MAX_LEVEL=50 满级封顶
+  currentExp 归 0；LevelSystem 支持一次大量经验连续升级）；`PlayerProgression` 组件挂在 PlayerCharacter
+  （组合非继承），升级属性成长 character.json `growth` 块（MaxHP+20 且当前 HP 同步 +20 / Attack+5 / Defense+2）
+- 死亡奖励：CombatSystem 在 HP>0 -> 0 的那次伤害产生一次 `DeathEvent`（victimId/killerId/position），
+  `RewardSystem` 一次消费（exactly-once）：killer=Player 时发 `rewards.exp` 并 Roll 掉落（奖励与 Respawn 分离）
+- 物品/背包：`Engine/Item`（ItemDefinition / ItemInstance / ItemDatabase 加载 `Assets/Items/items.json` /
+  Inventory 20 格，Stack 先补未满同 id 栈再占空格，`InventoryAddResult{requested,added,remaining}` 满包不丢物）
+- 掉落：monster.json `loot[]`（chance 0~1、min/max inclusive，非法 entry 跳过）；`LootManager` 掷落 +
+  TTL 60s 过期（LEGEND_LOOT_TTL 可配）+ LEGEND_LOOT_SEED 可重复；GroundLoot 非 Character、不阻挡、
+  进统一 Y-Sort 队列（Debug 色块渲染）
+- 调试：E 拾取；F5 成长/掉落 Debug；窗口标题 `Lv / EXP / Bag`
+- 自动验收：LEGEND_AUTO_PROGRESSION_TEST=1（击杀 -> Exp -> GroundLoot -> 拾取 -> 升级 -> 成长 -> Respawn）；
+  静态自检 [ExperienceCheck]/[LevelGrowthCheck]/[ItemDatabaseCheck]/[InventoryStackCheck]/[InventoryFullCheck]/
+  [LootRollCheck]/[GroundLootPickupCheck]/[PartialPickupCheck]/[DeathRewardCheck]

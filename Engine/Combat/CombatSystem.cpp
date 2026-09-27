@@ -64,6 +64,14 @@ bool CombatSystem::ApplyDamage(const DamageEvent& event) {
     if (!target->GetCombatStats().IsAlive()) {
         // 死亡入口：进入 Dead（active 保持 true 以播放死亡动画，alive=false）
         target->EnterDead();
+        // 阶段6：Alive -> Dead 这一刻产生一次 DeathEvent（HP>0 -> 0 的那次伤害；
+        // 已死目标 TakeDamage 返回 0 提前返回，天然防止每帧重复产生）
+        DeathEvent death;
+        death.victimId = target->GetId();
+        death.killerId = event.sourceId;
+        death.position = target->GetPosition();
+        death.sequence = ++m_sequence;
+        m_recentDeaths.push_back(death);
         LOG_INFO("[Death] entity " + std::to_string(event.targetId));
     } else {
         // 受击：打断当前攻击，进入 HitReact（动画结束后由控制器恢复 Normal）

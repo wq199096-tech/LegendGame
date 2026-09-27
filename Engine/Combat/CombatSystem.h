@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "Engine/Combat/DamageEvent.h"
+#include "Engine/Combat/DeathEvent.h"
 #include "Engine/Entity/EntityId.h"
 
 namespace legend::entity {
@@ -38,10 +39,15 @@ public:
     const std::vector<DamageEvent>& GetRecentEvents() const { return m_recentEvents; }
     void ClearRecentEvents() { m_recentEvents.clear(); }
 
+    // 阶段6：本帧产生的死亡事件（Alive -> Dead 一刻各产生一次，上层一次消费）
+    const std::vector<DeathEvent>& GetRecentDeaths() const { return m_recentDeaths; }
+    void ClearRecentDeaths() { m_recentDeaths.clear(); }
+
 private:
     legend::entity::ActorRegistry& m_registry;
     uint64_t m_sequence = 0;
     std::vector<DamageEvent> m_recentEvents;
+    std::vector<DeathEvent> m_recentDeaths;
 };
 
 } // namespace legend::combat

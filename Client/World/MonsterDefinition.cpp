@@ -38,6 +38,26 @@ bool ParseAiBlock(const json& ai, MonsterAIDefinition& out) {
     return true;
 }
 
+// ---- 阶段6：rewards 块（exp 数据驱动，不按 HP 自动计算） ----
+void ParseRewardBlock(const json& rewards, MonsterDefinition& out) {
+    out.expReward = rewards.value("exp", 0);
+}
+
+// ---- 阶段6：loot 数组（数据驱动掉落表；数值非法 entry 在 Validate 中剔除） ----
+void ParseLootArray(const json& loot, MonsterDefinition& out) {
+    for (const auto& entryJson : loot) {
+        if (!entryJson.is_object() || !entryJson.contains("item")) {
+            continue;
+        }
+        LootEntry entry;
+        entry.itemId = entryJson["item"].get<std::string>();
+        entry.chance = entryJson.value("chance", 0.0f);
+        entry.min = entryJson.value("min", 1);
+        entry.max = entryJson.value("max", 1);
+        out.loot.push_back(std::move(entry));
+    }
+}
+
 } // namespace
 
 // 跨字段统一校验（导出供 [MonsterCombatConfigCheck] 构造非法配置验证）：
@@ -73,6 +93,11 @@ bool ValidateMonsterDefinition(const MonsterDefinition& definition) {
         LOG_ERROR("MonsterDefinition: '" + id + "' stopDistance (" +
                   std::to_string(definition.ai.stopDistance) + ") > attackRange (" +
                   std::to_string(definition.combat.attackRange) + "): monster would stop out of range.");
+        return false;
+    }
+    // ---- 阶段6：奖励校验（expReward>=0）。loot entry 剔除在 LoadMonsterRegistry（非 const）----
+    if (definition.expReward < 0) {
+        LOG_ERROR("MonsterDefinition: '" + id + "' expReward must be >= 0.");
         return false;
     }
     return true;
@@ -125,11 +150,31 @@ bool LoadMonsterRegistry(const std::string& filePath,
                 continue;
             }
         }
+        // ---- 阶段6：解析 rewards 与 loot（先解析，统一校验在后） ----
+        if (entry.contains("rewards") && entry["rewards"].is_object()) {
+            ParseRewardBlock(entry["rewards"], definition);
+        }
+        if (entry.contains("loot") && entry["loot"].is_array()) {
+            ParseLootArray(entry["loot"], definition);
+        }
         // ---- 再统一跨字段校验（非法模板跳过） ----
         if (!ValidateMonsterDefinition(definition)) {
             ++skipped;
             continue;
         }
+        // ---- 阶段6：loot entry 数值校验（非法 entry 跳过，模板保留；item 存在性由
+        //      MonsterSpawner::ValidateLootEntries 在 ItemDatabase 加载后统一剔除） ----
+        std::vector<LootEntry> validLoot;
+        validLoot.reserve(definition.loot.size());
+        for (LootEntry& lootEntry : definition.loot) {
+            if (lootEntry.IsValid()) {
+                validLoot.push_back(std::move(lootEntry));
+            } else {
+                LOG_WARN("MonsterDefinition: '" + definition.id + "' invalid loot entry (item '" +
+                         lootEntry.itemId + "'), entry skipped.");
+            }
+        }
+        definition.loot = std::move(validLoot);
         if (out.count(definition.id) > 0) {
             LOG_WARN("MonsterDefinition: duplicate id '" + definition.id + "', skipped.");
             ++skipped;

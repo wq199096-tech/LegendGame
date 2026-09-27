@@ -20,7 +20,14 @@
                 "defense": 5,
                 "attackRange": 65,
                 "attackInterval": 1.5
-            }
+            },
+            "rewards": {
+                "exp": 25
+            },
+            "loot": [
+                { "item": "slime_gel", "chance": 0.75, "min": 1, "max": 2 },
+                { "item": "small_potion", "chance": 0.10, "min": 1, "max": 1 }
+            ]
         },
         {
             "id": "wolf",
@@ -41,7 +48,14 @@
                 "defense": 8,
                 "attackRange": 70,
                 "attackInterval": 1.2
-            }
+            },
+            "rewards": {
+                "exp": 40
+            },
+            "loot": [
+                { "item": "wolf_fang", "chance": 0.60, "min": 1, "max": 2 },
+                { "item": "small_potion", "chance": 0.08, "min": 1, "max": 1 }
+            ]
         },
         {
             "id": "boar",
@@ -62,7 +76,15 @@
                 "defense": 15,
                 "attackRange": 75,
                 "attackInterval": 1.6
-            }
+            },
+            "rewards": {
+                "exp": 60
+            },
+            "loot": [
+                { "item": "boar_hide", "chance": 0.55, "min": 1, "max": 1 },
+                { "item": "iron_ore", "chance": 0.35, "min": 1, "max": 2 },
+                { "item": "small_potion", "chance": 0.06, "min": 1, "max": 1 }
+            ]
         }
     ]
 }
