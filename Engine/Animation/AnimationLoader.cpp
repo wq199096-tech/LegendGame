@@ -73,6 +73,12 @@ bool LoadCharacterDefinition(const std::string& filePath, CharacterDefinition& o
         out.footprint.offsetX = fp.value("offsetX", 0.0f);
         out.footprint.offsetY = fp.value("offsetY", 20.0f);
     }
+    // ---- 阶段8：skillResource 块（可选，仅 Player 使用；NPC/Monster 缺省正常加载） ----
+    if (root.contains("skillResource") && root["skillResource"].is_object()) {
+        const json& sr = root["skillResource"];
+        out.maxMana = sr.value("maxMana", 0.0f);
+        out.hasSkillResource = true;
+    }
     // ---- 阶段6：growth 块（可选，每级成长；缺省 20/5/2） ----
     if (root.contains("growth") && root["growth"].is_object()) {
         const json& g = root["growth"];

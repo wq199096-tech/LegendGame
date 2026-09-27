@@ -6,13 +6,20 @@
 namespace legend::animation {
 
 std::string AnimationStateMachine::SelectClip(const entity::Character& character) {
-    // 优先级严格：Dead > HitReact > Attacking > Walk > Idle
+    // 优先级严格：Dead > HitReact > SkillCasting > Attacking > Walk > Idle
     using entity::CharacterActionState;
     switch (character.GetActionState()) {
     case CharacterActionState::Dead:
         return "death_" + std::string(entity::Direction8Name(character.GetDirection()));
     case CharacterActionState::HitReact:
         return "hit_" + std::string(entity::Direction8Name(character.GetDirection()));
+    case CharacterActionState::SkillCasting:
+        // 阶段8：施法使用 SkillDefinition.animation 指定的技能 Clip（施法开始时
+        // 由 SkillSystem 写入 Character 的 Clip 覆盖；方向已在施法开始锁定）
+        if (!character.GetActionClipOverride().empty()) {
+            return character.GetActionClipOverride();
+        }
+        return "attack_" + std::string(entity::Direction8Name(character.GetDirection()));
     case CharacterActionState::Attacking:
         return "attack_" + std::string(entity::Direction8Name(character.GetDirection()));
     case CharacterActionState::Normal:

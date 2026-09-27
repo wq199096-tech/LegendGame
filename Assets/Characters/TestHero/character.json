@@ -30,5 +30,8 @@
                    "maxHpPerLevel": 20,
                    "attackPerLevel": 5,
                    "defensePerLevel": 2
-               }
+               },
+    "skillResource":  {
+                          "maxMana": 100
+                      }
 }

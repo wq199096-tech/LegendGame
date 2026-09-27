@@ -26,6 +26,15 @@ PlayerCharacter::PlayerCharacter(
     m_progression.Initialize(definition);
     // 阶段7：base stats 副本（character.json combat）——final 由 base + equipment 重算
     m_stats.Initialize(definition.combat);
+    // 阶段8：MP（skillResource 块；仅 Player 使用，初始满蓝）。
+    // maxMana<=0 的 Player 配置由 GameScene::LoadPlayerCharacter 拒绝（指令一百零二），
+    // 这里对非法值兜底为 100 并 LOG，避免 fallback 场景 0 蓝不可玩。
+    if (definition.hasSkillResource && definition.maxMana > 0.0f) {
+        m_skillResource.Initialize(definition.maxMana);
+    } else {
+        LOG_WARN("PlayerCharacter: missing/invalid skillResource block, fallback maxMana=100.");
+        m_skillResource.Initialize(100.0f);
+    }
 }
 
 std::vector<legend::progression::LevelUpEvent> PlayerCharacter::AddExperience(

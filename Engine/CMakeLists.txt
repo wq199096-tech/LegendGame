@@ -49,6 +49,10 @@ set(LEGEND_ENGINE_SOURCES
     Scene/GameObject.cpp
     Scene/Scene.cpp
     Scene/SceneManager.cpp
+    Skill/SkillCooldowns.cpp
+    Skill/SkillDatabase.cpp
+    Skill/SkillLoadout.cpp
+    Skill/SkillTypes.cpp
 )
 
 add_library(legend_engine STATIC ${LEGEND_ENGINE_SOURCES})

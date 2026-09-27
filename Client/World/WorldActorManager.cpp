@@ -50,6 +50,16 @@ bool WorldActorManager::Initialize(legend::resource::ResourceManager& resources)
         LOG_ERROR("WorldActorManager: item database load failed, abort initialize.");
         return false;
     }
+    // ---- 阶段8：技能库（启动加载一次，失败禁止继续——否则数字键全部无效
+    //      而游戏仍声称初始化成功；指令九十九） ----
+    if (!m_skillDatabase.LoadFromFile(m_assetsRoot + "/Skills/skills.json")) {
+        LOG_ERROR("WorldActorManager: skill database load failed, abort initialize.");
+        return false;
+    }
+    if (m_skillDatabase.Count() == 0) {
+        LOG_ERROR("WorldActorManager: skill database has no valid skill, abort initialize.");
+        return false;
+    }
     unsigned int lootSeed = 20260927u; // 固定默认：掉落结果可复现
     if (const char* lootSeedEnv = std::getenv("LEGEND_LOOT_SEED");
         lootSeedEnv != nullptr && lootSeedEnv[0] != '\0') {
@@ -62,6 +72,22 @@ bool WorldActorManager::Initialize(legend::resource::ResourceManager& resources)
     // 掉落表 item 存在性校验：指向不存在 Item 的 entry 剔除（不生成未知物品）
     m_spawner.ValidateLootEntries(m_itemDatabase);
     return true;
+}
+
+void WorldActorManager::DispatchCombatEvents() {
+    // 阶段8：伤害事件 -> 怪物仇恨（单一管线，普通攻击与技能共用，禁止二次 AddThreat）
+    for (const auto& event : m_combat.GetRecentEvents()) {
+        entity::Character* victim = m_registry.Get(event.targetId);
+        if (victim == nullptr || victim->GetActorType() != entity::ActorType::Monster) {
+            continue;
+        }
+        const auto aiIt = m_aiControllers.find(event.targetId);
+        if (aiIt != m_aiControllers.end()) {
+            aiIt->second.OnDamaged(*static_cast<MonsterCharacter*>(victim), event.sourceId,
+                                   event.finalDamage);
+        }
+    }
+    m_combat.ClearRecentEvents();
 }
 
 void WorldActorManager::Shutdown() {
@@ -205,19 +231,9 @@ void WorldActorManager::Update(const map::Map& map, float deltaTime) {
         }
     }
 
-    // 2. 伤害事件分发：受击怪物 AddThreat(sourceId, damage)（被打必反击）
-    for (const auto& event : m_combat.GetRecentEvents()) {
-        entity::Character* victim = m_registry.Get(event.targetId);
-        if (victim == nullptr || victim->GetActorType() != entity::ActorType::Monster) {
-            continue;
-        }
-        const auto aiIt = m_aiControllers.find(event.targetId);
-        if (aiIt != m_aiControllers.end()) {
-            aiIt->second.OnDamaged(*static_cast<MonsterCharacter*>(victim), event.sourceId,
-                                   event.finalDamage);
-        }
-    }
-    m_combat.ClearRecentEvents();
+    // 2. 伤害事件分发：受击怪物 AddThreat(sourceId, damage)（被打必反击）。
+    //    阶段8抽出为 DispatchCombatEvents()（技能伤害与普通攻击同一仇恨管线）
+    DispatchCombatEvents();
 
     // 2.5 阶段6：死亡奖励分发（Exp + Loot）——DeathEvent 一次消费，奖励与 Respawn 分离
     m_rewards.ProcessDeathEvents(m_combat, m_registry, m_player, m_loot, m_spawner,

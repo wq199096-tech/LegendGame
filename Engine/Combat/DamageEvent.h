@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "Engine/Entity/EntityId.h"
 
@@ -14,6 +15,8 @@ struct DamageEvent {
     float rawDamage = 0.0f;
     float finalDamage = 0.0f;
     uint64_t sequence = 0; // 全局递增序号
+    // 阶段8：伤害来源技能 id（普通攻击为空；技能 = skillId），不破坏旧代码
+    std::string abilityId;
 };
 
 } // namespace legend::combat

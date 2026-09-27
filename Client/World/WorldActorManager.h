@@ -16,6 +16,7 @@
 #include "Engine/Entity/CharacterController.h"
 #include "Engine/Item/ItemDatabase.h"
 #include "Engine/Map/MapTypes.h"
+#include "Engine/Skill/SkillDatabase.h"
 
 namespace legend::map {
 class Map;
@@ -59,6 +60,10 @@ public:
     // 统一更新：事件分发 -> AI/战斗 -> 奖励(Exp/Loot) -> 动画 -> 死亡收集 -> Despawn -> Respawn
     void Update(const map::Map& map, float deltaTime);
 
+    // 阶段8：伤害事件分发（受击怪物 AddThreat）。Update 每帧调用；
+    // SkillAggroCheck 等静态自检可单独驱动（与 Update 内完全同一管线）。
+    void DispatchCombatEvents();
+
     // 手动触发奖励分发（自动测试 [DeathRewardCheck] 用；Update 内部每帧同样调用）
     int ProcessDeathRewards();
 
@@ -73,6 +78,7 @@ public:
     LootManager& GetLoot() { return m_loot; }
     const LootManager& GetLoot() const { return m_loot; }
     const item::ItemDatabase& GetItemDatabase() const { return m_itemDatabase; }
+    const skill::SkillDatabase& GetSkillDatabase() const { return m_skillDatabase; }
     PlayerCharacter* GetPlayer() const { return m_player; }
 
     int GetMonsterCount() const { return static_cast<int>(m_monsterIds.size()); }
@@ -107,6 +113,7 @@ private:
 
     // ---- 阶段6：物品库 / 掉落 / 奖励（World 级一次初始化，不由 GameScene 直管） ----
     item::ItemDatabase m_itemDatabase;
+    skill::SkillDatabase m_skillDatabase; // 阶段8：技能定义库（启动加载一次，失败中止）
     LootManager m_loot;
     RewardSystem m_rewards;
     PlayerCharacter* m_player = nullptr; // 奖励归属（killer=Player 判定 + Exp/Inventory 入口）

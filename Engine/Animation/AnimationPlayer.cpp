@@ -12,7 +12,9 @@ void AnimationPlayer::SetClips(
 
 bool AnimationPlayer::Play(const std::string& clipName) {
     if (m_currentName == clipName && m_current != nullptr) {
-        return true; // 同一 Clip：保持进度，不重置
+        return true; // 同一 Clip：保持进度，不重置（ASM 每帧重选同一状态 Clip 时
+                     // 不得重启——否则 NonLoop 播完后 IsFinished 会被反复清掉，
+                     // 死亡/攻击结束检测永远等不到；技能重放由 BeginCast 显式 Stop）
     }
     if (!m_clips) {
         return false;

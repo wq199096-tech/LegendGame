@@ -82,8 +82,14 @@ Build\bin\Debug\LegendMapEditor.exe
 | F4 | Combat Debug（目标/冷却/血条/攻击距离圈） |
 | F5 | Progression/Loot Debug（拾取范围圈、最近 5 件掉落连线） |
 | F6 | Equipment Debug（6 槽状态方块 + Base/Final ATK 差值条；开启时输出槽位清单） |
-| Z | 装备背包中第一件 Equipment |
-| X | 卸下 Weapon（背包满时失败、装备留槽不丢失） |
+| 1 | Power Slash（单体 180% Attack，MP15，CD4s，射程95） |
+| 2 | Whirlwind（自身 AOE 120% Attack 半径120，MP25，CD6s，无需目标） |
+| 3 | Piercing Strike（单体中距 150% Attack，MP20，CD5s，射程160） |
+| 4 | Heavy Strike（单体近战 220% Attack，MP30，CD8s，射程90） |
+| M | Debug：Mana 恢复满（日志 `[Skill] mana restored to 100/100`） |
+| F7 | Skill Debug（蓝色 Mana 条 + 4 技能槽 CD 比例方块；标题显示 MP/各槽 CD/当前施法） |
+| Z | 装备背包中第一件 Equipment（SkillCasting 中拒绝） |
+| X | 卸下 Weapon（背包满时失败、装备留槽不丢失；SkillCasting 中拒绝） |
 | ESC | 退出程序 |
 
 窗口标题实时显示 `Map: TestMap | Chunks: 20 | Tiles: 5120 | DC: 56 | FPS: 60`，

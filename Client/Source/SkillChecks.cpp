@@ -1,0 +1,2228 @@
+// 阶段8：Skill Core System 自检实现（26 个 Check + LEGEND_AUTO_SKILL_TEST 时间线 + F7 Debug）。
+// 从 GameScene 拆出独立文件（与 ProgressionChecks/EquipmentChecks 同模式）。
+// 全部 Check 结果写日志 [XxxCheck] ... -> PASS/FAIL + completed, failures = N。
+// 施法链路一律走真实入口：PlayerSkillController::RequestSkill -> SkillSystem::BeginCast ->
+// Skill Animation -> Animation Event -> SkillSystem HandleAnimationEvent -> CombatSystem
+// （禁止直接 ApplyDamage 冒充技能命中；ApplyDamage 仅用于制造 HitReact/Player 死亡前置）。
+#include "Client/Source/GameScene.h"
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#include "Client/Character/PlayerCharacter.h"
+#include "Client/Skill/PlayerSkillController.h"
+#include "Client/Skill/SkillSystem.h"
+#include "Client/World/MonsterCharacter.h"
+#include "Client/World/MonsterDefinition.h"
+#include "Client/World/MonsterSpawner.h"
+#include "Client/World/WorldActorManager.h"
+#include "Engine/Animation/AnimationPlayer.h"
+#include "Engine/Combat/CombatSystem.h"
+#include "Engine/Combat/CombatTarget.h"
+#include "Engine/Core/Engine.h"
+#include "Engine/Debug/Logger.h"
+#include "Engine/Entity/ActorRegistry.h"
+#include "Engine/Entity/Character.h"
+#include "Engine/Input/InputManager.h"
+#include "Engine/Item/ItemDatabase.h"
+#include "Engine/Item/ItemDefinition.h"
+#include "Engine/Item/ItemInstance.h"
+#include "Engine/Item/Inventory.h"
+#include "Engine/Render/Texture.h"
+#include "Engine/Skill/SkillCooldowns.h"
+#include "Engine/Skill/SkillDatabase.h"
+#include "Engine/Skill/SkillDefinition.h"
+#include "Engine/Skill/SkillLoadout.h"
+#include "Engine/Skill/SkillResource.h"
+#include "Engine/Skill/SkillTypes.h"
+
+using legend::Engine;
+
+namespace {
+
+// 统一 Check 输出：PASS/FAIL + 失败计数
+void LogSkillCheck(const char* tag, const std::string& name, bool pass, int& failures) {
+    LOG_INFO(std::string("[") + tag + "] " + name + " -> " + (pass ? "PASS" : "FAIL"));
+    if (!pass) {
+        ++failures;
+    }
+}
+
+} // namespace
+
+// ==================== [SkillDatabaseCheck] ====================
+// 指令五十五：skills.json 加载成功、4 技能存在、关键字段精确匹配。
+
+void GameScene::RunSkillDatabaseCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillDatabaseCheck", name, pass, failures);
+    };
+    const std::string path =
+        Engine::Get().GetResources().GetAssetRoot() + "/Skills/skills.json";
+    legend::skill::SkillDatabase database;
+    check("official skills.json loads", database.LoadFromFile(path));
+    check("4 skills present", database.Count() == 4);
+    const legend::skill::SkillDefinition* powerSlash = database.Get("power_slash");
+    check("power_slash exists", powerSlash != nullptr);
+    if (powerSlash != nullptr) {
+        check("power_slash SingleTarget",
+              powerSlash->targetType == legend::skill::SkillTargetType::SingleTarget);
+        check("power_slash multiplier 1.8",
+              std::fabs(powerSlash->damageMultiplier - 1.8f) < 0.0001f);
+        check("power_slash mana 15", std::fabs(powerSlash->manaCost - 15.0f) < 0.0001f);
+        check("power_slash cooldown 4", std::fabs(powerSlash->cooldown - 4.0f) < 0.0001f);
+        check("power_slash range 95", std::fabs(powerSlash->castRange - 95.0f) < 0.0001f);
+        check("power_slash animation",
+              powerSlash->animation == "skill_power_slash" &&
+                  powerSlash->animationEvent == "skill_hit");
+    }
+    const legend::skill::SkillDefinition* whirlwind = database.Get("whirlwind");
+    check("whirlwind exists", whirlwind != nullptr);
+    if (whirlwind != nullptr) {
+        check("whirlwind SelfArea",
+              whirlwind->targetType == legend::skill::SkillTargetType::SelfArea);
+        check("whirlwind multiplier 1.2",
+              std::fabs(whirlwind->damageMultiplier - 1.2f) < 0.0001f);
+        check("whirlwind mana 25", std::fabs(whirlwind->manaCost - 25.0f) < 0.0001f);
+        check("whirlwind cooldown 6", std::fabs(whirlwind->cooldown - 6.0f) < 0.0001f);
+        check("whirlwind radius 120", std::fabs(whirlwind->aoeRadius - 120.0f) < 0.0001f);
+    }
+    check("piercing_strike exists", database.Exists("piercing_strike"));
+    check("heavy_strike exists", database.Exists("heavy_strike"));
+    LOG_INFO("[SkillDatabaseCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillDatabaseFailureCheck] ====================
+// 指令一百：不存在路径 -> false；非法 JSON -> false；正式 skills.json -> true 且 >=4 技能。
+
+void GameScene::RunSkillDatabaseFailureCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillDatabaseFailureCheck", name, pass, failures);
+    };
+    legend::skill::SkillDatabase missing;
+    check("missing file -> load false",
+          !missing.LoadFromFile("Assets/Skills/skills_missing_for_check.json"));
+
+    // 非法 JSON：临时构造（与 ItemDatabaseFailureCheck 同模式）
+    const std::string badPath = "Build/skills_malformed_check.json";
+    {
+        std::ofstream bad(badPath, std::ios::trunc);
+        bad << "{ this is not valid json !!!";
+    }
+    legend::skill::SkillDatabase malformed;
+    const bool malformedRejected = !malformed.LoadFromFile(badPath);
+    check("malformed json -> load false", malformedRejected);
+    std::error_code ec;
+    std::filesystem::remove(badPath, ec);
+
+    // World 级正式库（WorldActorManager::Initialize 已加载成功，否则场景已回退）
+    check("world skill database loaded", m_worldActors.GetSkillDatabase().Count() >= 4);
+    LOG_INFO("[SkillDatabaseFailureCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillDefinitionValidationCheck] ====================
+// 指令五十六：非法 Definition 一律 IsValid()==false；未知字符串解析拒绝。
+
+void GameScene::RunSkillDefinitionValidationCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillDefinitionValidationCheck", name, pass, failures);
+    };
+    auto makeBase = []() {
+        legend::skill::SkillDefinition def;
+        def.id = "check_skill";
+        def.name = "Check Skill";
+        def.targetType = legend::skill::SkillTargetType::SingleTarget;
+        def.effect = legend::skill::SkillEffectType::Damage;
+        def.damageMultiplier = 1.0f;
+        def.manaCost = 10.0f;
+        def.cooldown = 1.0f;
+        def.castRange = 100.0f;
+        def.aoeRadius = 0.0f;
+        def.animation = "skill_check";
+        def.animationEvent = "skill_hit";
+        def.requiresTarget = true;
+        return def;
+    };
+    { auto def = makeBase(); def.damageMultiplier = 0.0f;
+      check("multiplier 0 -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.damageMultiplier = -1.0f;
+      check("negative multiplier -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.manaCost = -5.0f;
+      check("negative manaCost -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.cooldown = -1.0f;
+      check("negative cooldown -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.castRange = 0.0f;
+      check("SingleTarget range 0 -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.aoeRadius = -1.0f;
+      check("negative aoeRadius -> invalid", !def.IsValid()); }
+    { auto def = makeBase();
+      def.targetType = legend::skill::SkillTargetType::SelfArea; def.aoeRadius = 0.0f;
+      check("SelfArea radius 0 -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.id.clear();
+      check("empty id -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.name.clear();
+      check("empty name -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.animation.clear();
+      check("empty animation -> invalid", !def.IsValid()); }
+    { auto def = makeBase(); def.animationEvent.clear();
+      check("empty animationEvent -> invalid", !def.IsValid()); }
+    // 未知 targetType / effect 字符串：解析层拒绝（不默认值）
+    legend::skill::SkillTargetType parsedTarget = legend::skill::SkillTargetType::SingleTarget;
+    check("unknown targetType rejected",
+          !legend::skill::ParseSkillTargetType("BossAoE", parsedTarget));
+    legend::skill::SkillEffectType parsedEffect = legend::skill::SkillEffectType::Damage;
+    check("unknown effect rejected",
+          !legend::skill::ParseSkillEffectType("Heal", parsedEffect));
+    // 合法基线通过
+    check("valid base definition passes", makeBase().IsValid());
+    LOG_INFO("[SkillDefinitionValidationCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillLoadoutCheck] ====================
+// 指令五十七：4 槽默认绑定正确；非法 skillId SetSlot 拒绝；同技能允许多槽。
+
+void GameScene::RunSkillLoadoutCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillLoadoutCheck", name, pass, failures);
+    };
+    const std::string path =
+        Engine::Get().GetResources().GetAssetRoot() + "/Skills/skills.json";
+    legend::skill::SkillDatabase database;
+    if (!database.LoadFromFile(path)) {
+        check("skills.json loads for loadout check", false);
+        LOG_INFO("[SkillLoadoutCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::skill::SkillLoadout loadout;
+    loadout.InitializeDefaults(database);
+    check("slot count 4", loadout.GetSlotCount() == 4);
+    check("slot1 power_slash", loadout.GetSkillId(0) == "power_slash");
+    check("slot2 whirlwind", loadout.GetSkillId(1) == "whirlwind");
+    check("slot3 piercing_strike", loadout.GetSkillId(2) == "piercing_strike");
+    check("slot4 heavy_strike", loadout.GetSkillId(3) == "heavy_strike");
+    check("unknown skillId SetSlot rejected",
+          !loadout.SetSlot(0, "nonexistent_skill", database));
+    check("rejected SetSlot keeps old value", loadout.GetSkillId(0) == "power_slash");
+    check("same skill in two slots allowed",
+          loadout.SetSlot(2, "power_slash", database) &&
+              loadout.GetSkillId(2) == "power_slash");
+    loadout.ClearSlot(3);
+    check("ClearSlot empties slot", loadout.GetSkillId(3).empty());
+    // 玩家实际 Loadout 与默认一致（OnLoad 已 InitializeDefaults）
+    check("player loadout slot1 power_slash",
+          m_player != nullptr && m_player->GetLoadout().GetSkillId(0) == "power_slash");
+    check("player loadout slot4 heavy_strike",
+          m_player != nullptr && m_player->GetLoadout().GetSkillId(3) == "heavy_strike");
+    LOG_INFO("[SkillLoadoutCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillManaCheck] ====================
+// 指令五十八：初始 100/100；Spend 30 -> 70；Spend 80 失败仍 70；Restore 20 -> 90；
+// Restore 100 clamp 100。
+
+void GameScene::RunSkillManaCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillManaCheck", name, pass, failures);
+    };
+    legend::skill::SkillResource mana;
+    mana.Initialize(100.0f);
+    check("initial 100/100",
+          std::fabs(mana.GetMana() - 100.0f) < 0.0001f &&
+              std::fabs(mana.GetMaxMana() - 100.0f) < 0.0001f);
+    check("percent 1.0", std::fabs(mana.GetManaPercent() - 1.0f) < 0.0001f);
+    check("spend 30 ok", mana.Spend(30.0f));
+    check("mana 70 after spend", std::fabs(mana.GetMana() - 70.0f) < 0.0001f);
+    check("spend 80 fails", !mana.Spend(80.0f));
+    check("mana still 70 after failed spend", std::fabs(mana.GetMana() - 70.0f) < 0.0001f);
+    mana.Restore(20.0f);
+    check("restore 20 -> 90", std::fabs(mana.GetMana() - 90.0f) < 0.0001f);
+    mana.Restore(100.0f);
+    check("restore 100 clamps to 100", std::fabs(mana.GetMana() - 100.0f) < 0.0001f);
+    check("canSpend consistent", mana.CanSpend(100.0f) && !mana.CanSpend(100.1f));
+    LOG_INFO("[SkillManaCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillCooldownCheck] ====================
+// 指令五十九：Start 4s -> 立即 not ready；Update 1.5 -> remaining≈2.5；
+// 再 Update 3 -> 0 且 Ready；无负值。
+
+void GameScene::RunSkillCooldownCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillCooldownCheck", name, pass, failures);
+    };
+    legend::skill::SkillCooldowns cooldowns;
+    cooldowns.StartCooldown("power_slash", 4.0f);
+    check("not ready immediately", !cooldowns.IsReady("power_slash"));
+    check("remaining 4 now", std::fabs(cooldowns.GetRemaining("power_slash") - 4.0f) < 0.0001f);
+    cooldowns.Update(1.5f);
+    check("remaining ~2.5 after 1.5s",
+          std::fabs(cooldowns.GetRemaining("power_slash") - 2.5f) < 0.0001f);
+    cooldowns.Update(3.0f);
+    check("ready after total 4.5s", cooldowns.IsReady("power_slash"));
+    check("remaining 0 when ready", cooldowns.GetRemaining("power_slash") == 0.0f);
+    // 无负值：过量 Update 不会产生负 remaining
+    cooldowns.StartCooldown("whirlwind", 1.0f);
+    cooldowns.Update(10.0f);
+    check("no negative remaining after over-update", cooldowns.IsReady("whirlwind"));
+    // Reset / ResetAll
+    cooldowns.StartCooldown("heavy_strike", 8.0f);
+    cooldowns.Reset("heavy_strike");
+    check("Reset(skill) clears single", cooldowns.IsReady("heavy_strike"));
+    cooldowns.StartCooldown("a", 1.0f);
+    cooldowns.StartCooldown("b", 2.0f);
+    cooldowns.ResetAll();
+    check("ResetAll clears all", cooldowns.IsReady("a") && cooldowns.IsReady("b"));
+    // 未记录技能默认 Ready
+    check("unknown skill ready by default", cooldowns.IsReady("never_started"));
+    LOG_INFO("[SkillCooldownCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== 施法驱动辅助（各 Check 共用模式） ====================
+// 每帧：UpdateAnimation（推进/发事件）-> PlayerSkillController::Update（消费/推进）。
+// 结束条件：Context 消失（完成或取消）。返回施法是否正常走完（非取消）。
+
+namespace {
+constexpr int kMaxCastDriveFrames = 240;
+}
+
+// ==================== [SkillCastValidationCheck] ====================
+// 指令六十：无目标/距离过远/Mana不足/CD中/Dead/HitReact 全部失败且不扣MP不启动CD；合法成功。
+
+void GameScene::RunSkillCastValidationCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillCastValidationCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    auto& cooldowns = m_playerSkill.GetSkillSystem(); // 仅用于可读性命名（实际 CD 在控制器内）
+    (void)cooldowns;
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillCastValidationCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    // 找一只活怪作为距离/目标用
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillCastValidationCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    auto& target = m_playerCombat.GetTarget();
+    auto& mana = m_player->GetSkillResource();
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerSkill.ResetForRespawn(*m_player); // 满蓝 + 无 CD + 无施法（测试前置）
+    float manaBefore = mana.GetMana();
+
+    // 1. 无目标 -> SingleTarget 失败，不扣 MP 不 CD
+    target.ClearTarget();
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("no target -> fail", !result.success);
+    check("no target: mana unchanged", std::fabs(mana.GetMana() - manaBefore) < 0.0001f);
+    check("no target: no cooldown", m_playerSkill.GetCooldowns().IsReady("power_slash"));
+
+    // 2. 距离过远 -> 失败（boar 移到 300 外，power_slash range 95）
+    target.SetTarget(boar->GetId());
+    const legend::math::Vector2 boarHome = boar->GetPosition();
+    boar->SetPosition(boarHome + legend::math::Vector2(300.0f, 0.0f));
+    result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("out of range -> fail", !result.success);
+    check("out of range: mana unchanged", std::fabs(mana.GetMana() - manaBefore) < 0.0001f);
+    check("out of range: no cooldown", m_playerSkill.GetCooldowns().IsReady("power_slash"));
+    boar->SetPosition(boarHome);
+
+    // 3. Mana 不足 -> 失败
+    mana.SetMana(5.0f);
+    result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("low mana -> fail", !result.success);
+    check("low mana: mana unchanged", std::fabs(mana.GetMana() - 5.0f) < 0.0001f);
+    check("low mana: no cooldown", m_playerSkill.GetCooldowns().IsReady("power_slash"));
+    mana.FillMana();
+
+    // 4. CD 中 -> 失败：先真实施法一次（成功后 power_slash 进 CD 4s），立即再请求
+    result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("legit cast (setup for cd) succeeds", result.success);
+    if (result.success) {
+        const float manaAfterCast = mana.GetMana();
+        auto again = m_playerSkill.RequestSkill(*m_player, 0, target);
+        check("on cooldown -> fail", !again.success);
+        check("on cooldown: mana unchanged",
+              std::fabs(mana.GetMana() - manaAfterCast) < 0.0001f);
+    }
+    m_playerSkill.ResetForRespawn(*m_player); // 清 CD/蓝/施法
+
+    // 5. Dead -> 失败
+    m_player->GetCombatStats().SetHp(0.0f);
+    m_player->EnterDead();
+    result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("dead -> fail", !result.success);
+    m_player->GetCombatStats().SetHp(m_player->GetCombatStats().maxHp);
+    m_player->ReturnToNormal();
+
+    // 6. HitReact -> 失败
+    m_player->EnterHitReact();
+    result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("hitreact -> fail", !result.success);
+    check("hitreact: mana unchanged", std::fabs(mana.GetMana() - mana.GetMaxMana()) < 0.0001f);
+    m_player->ReturnToNormal();
+
+    // 7. 合法 -> 成功（随后清理：取消 + 回 Normal）
+    result = m_playerSkill.RequestSkill(*m_player, 0, target);
+    check("legit cast succeeds", result.success);
+    check("legit cast entered SkillCasting",
+          m_player->GetActionState() ==
+              legend::entity::CharacterActionState::SkillCasting);
+    m_playerSkill.GetSkillSystem().CancelCast("validation check cleanup");
+    m_player->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillCastValidationCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillManaCooldownCheck] ====================
+// 指令六十一：合法 Power Slash -> Mana 100->85、CD 0->4；立即重复释放失败且 Mana 仍 85。
+
+void GameScene::RunSkillManaCooldownCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillManaCooldownCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillManaCooldownCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillManaCooldownCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("power_slash cast succeeds", result.success);
+    check("mana 100 -> 85",
+          std::fabs(m_player->GetSkillResource().GetMana() - 85.0f) < 0.0001f);
+    const float remaining = m_playerSkill.GetCooldowns().GetRemaining("power_slash");
+    check("cooldown 0 -> ~4", remaining > 3.5f && remaining <= 4.0f);
+    auto again = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("immediate re-cast fails (cooldown)", !again.success);
+    check("mana still 85 after rejected re-cast",
+          std::fabs(m_player->GetSkillResource().GetMana() - 85.0f) < 0.0001f);
+    // 清理：取消未完成施法 + 状态复位
+    m_playerSkill.GetSkillSystem().CancelCast("mana cooldown check cleanup");
+    m_player->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillManaCooldownCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillAnimationEventCheck] ====================
+// 指令六十二：技能 Clip 的 skill_hit 只消费一次；停留/继续推进不再触发。
+
+void GameScene::RunSkillAnimationEventCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAnimationEventCheck", name, pass, failures);
+    };
+    if (m_playerClips == nullptr) {
+        check("player clips loaded", false);
+        LOG_INFO("[SkillAnimationEventCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    legend::animation::AnimationPlayer player;
+    player.SetClips(m_playerClips);
+    check("skill clip exists", player.Play("skill_power_slash"));
+    int eventCount = 0;
+    for (int i = 0; i < 120 && eventCount == 0; ++i) {
+        player.Update(0.05f);
+        auto events = player.ConsumeEvents();
+        for (const auto& eventName : events) {
+            if (eventName == "skill_hit") {
+                ++eventCount;
+            }
+        }
+    }
+    check("skill_hit fired exactly once in first pass", eventCount == 1);
+    // 动画继续推进/循环播放完毕：不再产生第二个 skill_hit（NonLoop 已结束）
+    for (int i = 0; i < 60; ++i) {
+        player.Update(0.05f);
+        auto events = player.ConsumeEvents();
+        for (const auto& eventName : events) {
+            if (eventName == "skill_hit") {
+                ++eventCount;
+            }
+        }
+    }
+    check("no second skill_hit afterwards", eventCount == 1);
+    check("nonloop finished", player.IsFinished());
+    LOG_INFO("[SkillAnimationEventCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillInterruptCheck] ====================
+// 指令六十三：Power Slash 开始（扣蓝/CD 开始）-> skill_hit 前进入 HitReact ->
+// 动画继续推进：目标 HP 不降、Context 清除、CD 继续、Mana 不返还。
+
+void GameScene::RunSkillInterruptCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillInterruptCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillInterruptCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillInterruptCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float boarHpBefore = boar->GetCombatStats().hp;
+
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("power_slash started", result.success);
+    const float manaAfterBegin = m_player->GetSkillResource().GetMana();
+    const float cdAfterBegin = m_playerSkill.GetCooldowns().GetRemaining("power_slash");
+    check("mana deducted at begin",
+          manaAfterBegin < m_player->GetSkillResource().GetMaxMana() - 0.5f);
+    check("cooldown started at begin", cdAfterBegin > 0.0f);
+
+    // skill_hit 之前打断：立即进入 HitReact（模拟受击）。
+    // Context 取消由 PlayerSkillController 下一拍 Update 执行（与真实帧循环一致），
+    // 因此先推一拍控制器再断言。
+    m_player->EnterHitReact();
+    m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+    check("context canceled on HitReact", !m_playerSkill.GetSkillSystem().HasActiveCast());
+
+    // 动画继续推进到结束：目标 HP 不得下降（事件被丢弃，不产生伤害）。
+    // HitReact -> Normal 的推进属于 PlayerCombatController（真实帧循环），此处复刻同一规则。
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::HitReact &&
+            m_player->GetAnimationPlayer().IsFinished()) {
+            m_player->ReturnToNormal(); // 与 PlayerCombatController::Update HitReact 分支一致
+        }
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Normal) {
+            break;
+        }
+    }
+    check("player back to normal", m_player->GetActionState() ==
+                                       legend::entity::CharacterActionState::Normal);
+    check("target HP unchanged (skill canceled)",
+          std::fabs(boar->GetCombatStats().hp - boarHpBefore) < 0.0001f);
+    check("cooldown continues (not reset)",
+          m_playerSkill.GetCooldowns().GetRemaining("power_slash") > 0.0f);
+    check("mana not refunded",
+          std::fabs(m_player->GetSkillResource().GetMana() - manaAfterBegin) < 0.0001f);
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillInterruptCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillSingleTargetDamageCheck] ====================
+// 指令六十四：Attack80 x1.8 = raw144；Defense5 -> Final139（走真实链路验证 HP 变化）。
+
+void GameScene::RunSkillSingleTargetDamageCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillSingleTargetDamageCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillSingleTargetDamageCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillSingleTargetDamageCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float boarHpBefore = boar->GetCombatStats().hp;
+
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast() &&
+            boar->GetCombatStats().hp < boarHpBefore) {
+            break;
+        }
+    }
+    const float drop = boarHpBefore - boar->GetCombatStats().hp;
+    check("boar HP dropped", drop > 0.0f);
+    // CombatResolver 统一公式：final = max(1, raw - defense)；raw = 80*1.8 = 144
+    const float expectedFinal =
+        std::max(1.0f, m_player->GetBaseCombatStats().attack * 1.8f - boar->GetCombatStats().defense);
+    check("final damage matches resolver formula (raw=attack*multiplier)",
+          std::fabs(drop - expectedFinal) < 0.5f);
+    check("last hit abilityId is power_slash",
+          m_playerSkill.GetSkillSystem().GetLastHit().valid &&
+              m_playerSkill.GetSkillSystem().GetLastHit().abilityId == "power_slash");
+    // 还原
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    boar->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillSingleTargetDamageCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillDefenseCheck] ====================
+// 指令六十五：同 Attack 同技能，Defense5 目标比 Defense30 目标受到更高 Final Damage。
+
+void GameScene::RunSkillDefenseCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillDefenseCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillDefenseCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr; // def 15（高防，掉血 129 不死）
+    legend::world::MonsterCharacter* wolf = nullptr; // def 8（低防，掉血 136 不死；
+    // 注意：不能用 Slime——120HP 会被 139 伤害直接击杀，观察到的掉血截断为 120，
+    // 反而小于高防目标，破坏"低防受伤更多"的断言）
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster == nullptr || !monster->IsCombatAlive()) {
+            continue;
+        }
+        if (monster->GetName() == "Boar" && boar == nullptr) {
+            boar = monster;
+        } else if (monster->GetName() == "Wolf" && wolf == nullptr) {
+            wolf = monster;
+        }
+    }
+    check("boar and wolf present", boar != nullptr && wolf != nullptr);
+    if (boar == nullptr || wolf == nullptr) {
+        LOG_INFO("[SkillDefenseCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float boarHpBefore = boar->GetCombatStats().hp;
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    (void)m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    const float dropHighDef = boarHpBefore - boar->GetCombatStats().hp;
+
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float wolfHpBefore = wolf->GetCombatStats().hp;
+    m_player->SetPosition(wolf->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(wolf->GetId());
+    (void)m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    const float dropLowDef = wolfHpBefore - wolf->GetCombatStats().hp;
+
+    check("both targets damaged", dropHighDef > 0.0f && dropLowDef > 0.0f);
+    check("low defense target took more damage (defense still applies)",
+          dropLowDef > dropHighDef);
+    // 还原
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    boar->ReturnToNormal();
+    if (wolf->GetCombatStats().hp > 0.0f) {
+        wolf->GetCombatStats().SetHp(wolf->GetCombatStats().maxHp);
+        wolf->ReturnToNormal();
+    }
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillDefenseCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillRangeCheck] ====================
+// 指令六十六：Target 距离 94（range95 内）允许；96 拒绝。Feet Position + DistanceSquared。
+
+void GameScene::RunSkillRangeCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillRangeCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillRangeCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillRangeCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_playerSkill.ResetForRespawn(*m_player);
+    const legend::math::Vector2 boarHome = boar->GetPosition();
+    const legend::math::Vector2 playerHome = m_player->GetPosition();
+
+    // 94：允许
+    m_player->SetPosition(boarHome + legend::math::Vector2(94.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("distance 94 within range 95 -> allowed", result.success);
+    m_playerSkill.GetSkillSystem().CancelCast("range check cleanup");
+    m_player->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+
+    // 96：拒绝
+    m_player->SetPosition(boarHome + legend::math::Vector2(96.0f, 0.0f));
+    result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("distance 96 beyond range 95 -> rejected", !result.success);
+    check("rejected cast: no cooldown started",
+          m_playerSkill.GetCooldowns().IsReady("power_slash"));
+
+    // 还原
+    m_player->SetPosition(playerHome);
+    boar->SetPosition(boarHome);
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillRangeCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillAOECheck] ====================
+// 指令六十七：Whirlwind radius120 -> A(50) B(110) 受伤、C(130) 不受伤、NPC 不受伤。
+
+void GameScene::RunSkillAOECheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAOECheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillAOECheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    // 收集 3 只活怪 + 1 个 NPC
+    std::vector<legend::world::MonsterCharacter*> monsters;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive()) {
+            monsters.push_back(monster);
+        }
+    }
+    const auto npcs = m_worldActors.GetRegistry().GetByType(legend::entity::ActorType::NPC);
+    check("3+ monsters present", monsters.size() >= 3);
+    check("npc present", !npcs.empty());
+    if (monsters.size() < 3 || npcs.empty()) {
+        LOG_INFO("[SkillAOECheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    auto* monsterA = monsters[0];
+    auto* monsterB = monsters[1];
+    auto* monsterC = monsters[2];
+    legend::entity::Character* npc = npcs.front();
+    const legend::math::Vector2 center = m_player->GetPosition();
+    // 隔离其它活怪：出生点附近可能有多只怪在 120 半径内，hitCount 必须恰为 2（A/B）
+    {
+        const legend::math::Vector2 farAway = center + legend::math::Vector2(2500.0f, 2500.0f);
+        for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+            if (monster == nullptr || !monster->IsCombatAlive() || monster == monsterA ||
+                monster == monsterB || monster == monsterC) {
+                continue;
+            }
+            monster->SetPosition(farAway);
+        }
+    }
+    // 布置：Player 为中心，A@50 B@110 C@400 NPC@60（半径 120）
+    const std::vector<std::pair<legend::entity::Character*, legend::math::Vector2>> placement = {
+        {monsterA, center + legend::math::Vector2(50.0f, 0.0f)},
+        {monsterB, center + legend::math::Vector2(0.0f, 110.0f)},
+        {monsterC, center + legend::math::Vector2(400.0f, 0.0f)},
+        {npc, center + legend::math::Vector2(0.0f, 60.0f)},
+    };
+    std::vector<float> hpBefore;
+    for (const auto& [actor, pos] : placement) {
+        hpBefore.push_back(actor->GetCombatStats().hp);
+        actor->SetPosition(pos);
+    }
+    m_playerCombat.GetTarget().ClearTarget(); // SelfArea 无需目标
+    auto result = m_playerSkill.RequestSkill(*m_player, 1, m_playerCombat.GetTarget());
+    check("whirlwind cast succeeds without target", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    const float dropA = hpBefore[0] - monsterA->GetCombatStats().hp;
+    const float dropB = hpBefore[1] - monsterB->GetCombatStats().hp;
+    const float dropC = hpBefore[2] - monsterC->GetCombatStats().hp;
+    const float dropNpc = hpBefore[3] - npc->GetCombatStats().hp;
+    check("monster A (50) damaged", dropA > 0.0f);
+    check("monster B (110) damaged", dropB > 0.0f);
+    check("monster C (400) NOT damaged", std::fabs(dropC) < 0.0001f);
+    check("NPC NOT damaged", std::fabs(dropNpc) < 0.0001f);
+    check("hitCount recorded 2",
+          m_playerSkill.GetSkillSystem().GetLastHit().hitCount == 2);
+    // 还原 HP 与位置
+    monsterA->GetCombatStats().SetHp(monsterA->GetCombatStats().maxHp);
+    monsterA->ReturnToNormal();
+    if (monsterB->GetCombatStats().hp > 0.0f) {
+        monsterB->GetCombatStats().SetHp(monsterB->GetCombatStats().maxHp);
+        monsterB->ReturnToNormal();
+    }
+    monsterA->SetPosition(center + legend::math::Vector2(150.0f, 150.0f));
+    monsterB->SetPosition(center + legend::math::Vector2(-150.0f, 150.0f));
+    monsterC->SetPosition(center + legend::math::Vector2(400.0f, 0.0f));
+    npc->SetPosition(center + legend::math::Vector2(0.0f, 60.0f));
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillAOECheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillAOEDeathCheck] ====================
+// 指令六十八：两只低 HP 怪在 Whirlwind 范围内一次 skill_hit 同时死亡 ->
+// 恰好 2 个 DeathEvent（不是 1 个也不是 4 个）；奖励由原 RewardSystem 处理。
+
+void GameScene::RunSkillAOEDeathCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAOEDeathCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillAOEDeathCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    std::vector<legend::world::MonsterCharacter*> monsters;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive()) {
+            monsters.push_back(monster);
+        }
+    }
+    check("2+ monsters present", monsters.size() >= 2);
+    if (monsters.size() < 2) {
+        LOG_INFO("[SkillAOEDeathCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    auto* monsterA = monsters[0];
+    auto* monsterB = monsters[1];
+    const legend::math::Vector2 center = m_player->GetPosition();
+    // 隔离其它活怪：前面 whirlwind 类 Check 可能已削弱出生点附近的怪，
+    // 它们若在半径内被补刀会产生第 3 个 DeathEvent
+    {
+        const legend::math::Vector2 farAway = center + legend::math::Vector2(2500.0f, 2500.0f);
+        for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+            if (monster == nullptr || !monster->IsCombatAlive() || monster == monsterA ||
+                monster == monsterB) {
+                continue;
+            }
+            monster->SetPosition(farAway);
+        }
+    }
+    monsterA->SetPosition(center + legend::math::Vector2(40.0f, 0.0f));
+    monsterB->SetPosition(center + legend::math::Vector2(0.0f, 40.0f));
+    monsterA->GetCombatStats().SetHp(1.0f);
+    monsterB->GetCombatStats().SetHp(1.0f);
+    m_worldActors.GetCombatSystem().ClearRecentDeaths(); // 只统计本次施法的死亡
+    m_playerCombat.GetTarget().ClearTarget();
+    auto result = m_playerSkill.RequestSkill(*m_player, 1, m_playerCombat.GetTarget());
+    check("whirlwind cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    const std::size_t deathCount = m_worldActors.GetCombatSystem().GetRecentDeaths().size();
+    check("exactly 2 DeathEvents from one whirlwind", deathCount == 2);
+    check("both monsters dead", !monsterA->IsCombatAlive() && !monsterB->IsCombatAlive());
+    // 不让本 Check 产生真实奖励（奖励链路由 SkillDeathReward/SkillAOERewardCheck 验证）：
+    // 消费并清空死亡事件，然后复活两只怪还原世界状态
+    m_worldActors.GetCombatSystem().ClearRecentDeaths();
+    monsterA->GetCombatStats().SetHp(monsterA->GetCombatStats().maxHp);
+    monsterA->ReturnToNormal();
+    monsterB->GetCombatStats().SetHp(monsterB->GetCombatStats().maxHp);
+    monsterB->ReturnToNormal();
+    monsterA->SetPosition(center + legend::math::Vector2(150.0f, 150.0f));
+    monsterB->SetPosition(center + legend::math::Vector2(-150.0f, 150.0f));
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillAOEDeathCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillTargetDeathBeforeEventCheck] ====================
+// 指令六十九：skill_hit 之前目标被其他流程杀死 -> 事件触发时安全失败，不产生伤害。
+
+void GameScene::RunSkillTargetDeathBeforeEventCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillTargetDeathBeforeEventCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillTargetDeathBeforeEventCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillTargetDeathBeforeEventCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast started", result.success);
+    // 目标在 skill_hit 之前被其他流程杀死（测试辅助：直接 SetHp+EnterDead）
+    boar->GetCombatStats().SetHp(0.0f);
+    boar->EnterDead();
+    const float hpAtDeath = boar->GetCombatStats().hp;
+    // 动画继续推进到事件与结束：不允许崩溃、不允许对尸体再次结算
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    check("cast ended safely after target death",
+          m_player->GetActionState() == legend::entity::CharacterActionState::Normal);
+    check("dead target HP still 0 (no posthumous heal/damage math)",
+          std::fabs(boar->GetCombatStats().hp - hpAtDeath) < 0.0001f);
+    check("hit recorded as miss (no valid damage)",
+          !m_playerSkill.GetSkillSystem().GetLastHit().valid ||
+              m_playerSkill.GetSkillSystem().GetLastHit().abilityId != "power_slash" ||
+              m_playerSkill.GetSkillSystem().GetLastHit().hitCount == 0);
+    // 还原目标
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    boar->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillTargetDeathBeforeEventCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillTargetDespawnCheck] ====================
+// 指令七十：Cast 开始后目标 Unregister/Despawn -> 事件时安全失败，不崩溃。
+
+void GameScene::RunSkillTargetDespawnCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillTargetDespawnCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillTargetDespawnCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillTargetDespawnCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast started", result.success);
+    // 模拟 Despawn 前的 inactive（Registry 引用仍在，与 CombatTargetLifecycleCheck 同模式）
+    boar->SetActive(false);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    check("cast ended safely after target inactive",
+          m_player->GetActionState() == legend::entity::CharacterActionState::Normal);
+    check("hit was a miss (inactive target)",
+          m_playerSkill.GetSkillSystem().GetLastHit().hitCount == 0 ||
+              !m_playerSkill.GetSkillSystem().GetLastHit().valid);
+    boar->SetActive(true); // 还原
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillTargetDespawnCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillCastStateCheck] ====================
+// 指令七十一：施法开始 SkillCasting；事件后仍 SkillCasting；动画结束才回 Normal。
+
+void GameScene::RunSkillCastStateCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillCastStateCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillCastStateCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillCastStateCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float boarHpBefore = boar->GetCombatStats().hp;
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast started", result.success);
+    check("state SkillCasting after BeginCast",
+          m_player->GetActionState() ==
+              legend::entity::CharacterActionState::SkillCasting);
+    check("clip override set to skill animation",
+          m_player->GetActionClipOverride() == "skill_power_slash");
+    bool sawEvent = false;
+    bool stateStillCastingAfterEvent = false;
+    bool endedNormal = false;
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!sawEvent && m_playerSkill.GetSkillSystem().GetLastHit().valid &&
+            m_playerSkill.GetSkillSystem().GetLastHit().hitCount > 0) {
+            sawEvent = true;
+            // 事件结算后（当帧）仍保持 SkillCasting，不提前回 Normal
+            stateStillCastingAfterEvent =
+                m_player->GetActionState() ==
+                legend::entity::CharacterActionState::SkillCasting;
+        }
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            endedNormal = m_player->GetActionState() ==
+                          legend::entity::CharacterActionState::Normal;
+            break;
+        }
+    }
+    check("skill event fired", sawEvent);
+    check("state still SkillCasting right after event", stateStillCastingAfterEvent);
+    check("state Normal after animation finished", endedNormal);
+    check("context cleared after finish", !m_playerSkill.GetSkillSystem().HasActiveCast());
+    // 还原
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    boar->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillCastStateCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillMovementLockCheck] ====================
+// 指令七十二：SkillCasting 期间 CharacterController 不移动 Player（位置保持）。
+
+void GameScene::RunSkillMovementLockCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillMovementLockCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillMovementLockCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillMovementLockCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    const legend::math::Vector2 playerHome = m_player->GetPosition();
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast started", result.success);
+    const legend::math::Vector2 posAtCast = m_player->GetPosition();
+    // 施法期间推进移动控制器（虚拟输入向右）——位置必须保持。
+    // 顺序关键：先判施法中再驱动移动——若先 UpdateAnimation 使施法结束（回 Normal），
+    // 同一迭代的移动就是合法移动，会误报"施法中移动了"。
+    m_playerController.SetVirtualInput({1.0f, 0.0f});
+    for (int i = 0; i < 20; ++i) {
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break; // 施法已结束：停止驱动移动
+        }
+        m_playerController.Update(input, m_characterController, *m_player, *m_map, 0.016f);
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+    }
+    check("player did not move while SkillCasting",
+          (m_player->GetPosition() - posAtCast).LengthSq() < 0.0001f);
+    // 施法结束（Normal）后同样的虚拟输入应当可以移动（对照组）
+    m_playerController.SetVirtualInput({0.0f, 0.0f});
+    m_playerSkill.ResetForRespawn(*m_player);
+    m_player->SetPosition(playerHome);
+    LOG_INFO("[SkillMovementLockCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillBasicAttackInteractionCheck] ====================
+// 指令七十三：SkillCasting 时 Space 普攻请求失败；Attacking 时技能请求失败。
+
+void GameScene::RunSkillBasicAttackInteractionCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillBasicAttackInteractionCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillBasicAttackInteractionCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillBasicAttackInteractionCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float boarHpBefore = boar->GetCombatStats().hp;
+
+    // 1. SkillCasting 时普通攻击请求失败
+    auto cast = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast started", cast.success);
+    const bool attackRejectedWhileCasting = !m_playerCombat.RequestAttack(
+        *m_player, m_worldActors.GetRegistry(), m_worldActors.GetCombatSystem());
+    check("basic attack rejected while SkillCasting", attackRejectedWhileCasting);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+
+    // 2. Attacking 时技能请求失败
+    m_playerSkill.ResetForRespawn(*m_player);
+    const bool attackStarted = m_playerCombat.RequestAttack(
+        *m_player, m_worldActors.GetRegistry(), m_worldActors.GetCombatSystem());
+    check("basic attack started (setup)", attackStarted);
+    auto castDuringAttack =
+        m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("skill rejected while Attacking", !castDuringAttack.success);
+    // 攻击动画播完 -> 回 Normal（与 PlayerCombatController 相同规则）
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        if (m_player->GetAnimationPlayer().IsFinished()) {
+            m_player->ReturnToNormal();
+            break;
+        }
+    }
+    check("player back to normal after attack", m_player->GetActionState() ==
+                                                    legend::entity::CharacterActionState::Normal);
+    m_playerSkill.ResetForRespawn(*m_player);
+    (void)boarHpBefore;
+    LOG_INFO("[SkillBasicAttackInteractionCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [EquipmentSkillDamageCheck] ====================
+// 指令七十四：技能 Raw 必须用 Final Attack（base80 + wooden_sword12 = 92 -> raw 165.6）。
+
+void GameScene::RunEquipmentSkillDamageCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("EquipmentSkillDamageCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[EquipmentSkillDamageCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[EquipmentSkillDamageCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    const float baseAttack = m_player->GetBaseCombatStats().attack;
+    const float boarHpFull = boar->GetCombatStats().maxHp;
+
+    // 注入 wooden_sword 实例并装备（与 EquipmentChecks 相同注入模式）
+    const legend::item::ItemDefinition* swordDef =
+        m_worldActors.GetItemDatabase().Get("wooden_sword");
+    check("wooden_sword definition present", swordDef != nullptr);
+    if (swordDef == nullptr) {
+        LOG_INFO("[EquipmentSkillDamageCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    legend::item::ItemInstance instance;
+    instance.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+    instance.definitionId = "wooden_sword";
+    instance.quantity = 1;
+    check("instance added to inventory",
+          m_player->GetInventory().AddInstance(instance, swordDef));
+    const auto equipResult = m_player->EquipInstance(instance.instanceId);
+    check("wooden_sword equipped", equipResult.success);
+    const float finalAttack = m_player->GetCombatStats().attack;
+    check("final attack = base + 12",
+          std::fabs(finalAttack - (baseAttack + 12.0f)) < 0.001f);
+
+    boar->GetCombatStats().SetHp(boarHpFull); // 满血起点（保证可观测差值）
+    const float boarHpBefore = boar->GetCombatStats().hp;
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast succeeds with equipment", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    const float drop = boarHpBefore - boar->GetCombatStats().hp;
+    const float expectedFinal =
+        std::max(1.0f, finalAttack * 1.8f - boar->GetCombatStats().defense);
+    check("skill damage uses Final Attack (not base)",
+          std::fabs(drop - expectedFinal) < 0.5f && drop > 0.0f);
+
+    // 清理：卸装 + 移除测试实例 + 还原 HP/蓝/CD
+    (void)m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
+    (void)m_player->GetInventory().TakeInstance(instance.instanceId);
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    boar->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[EquipmentSkillDamageCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillAttackSnapshotCheck] ====================
+// 指令七十八：施法开始锁定 attackSnapshot；开始后 Final Attack 变化不影响本次技能伤害。
+
+void GameScene::RunSkillAttackSnapshotCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAttackSnapshotCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillAttackSnapshotCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillAttackSnapshotCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    const float attackBefore = m_player->GetCombatStats().attack; // 80
+    const float boarHpBefore = boar->GetCombatStats().hp;
+
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast started", result.success);
+    check("context snapshot == attack at begin",
+          std::fabs(m_playerSkill.GetSkillSystem().GetContext().attackSnapshot -
+                    attackBefore) < 0.001f);
+    // 施法中模拟 Final Attack 变化（80 -> 100）
+    m_player->GetCombatStats().attack = 100.0f;
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    const float drop = boarHpBefore - boar->GetCombatStats().hp;
+    const float expectedWithSnapshot =
+        std::max(1.0f, attackBefore * 1.8f - boar->GetCombatStats().defense); // 144 - 15 = 129
+    const float expectedIfMutated =
+        std::max(1.0f, 100.0f * 1.8f - boar->GetCombatStats().defense); // 180 - 15 = 165
+    check("damage uses snapshot (not mutated attack)",
+          std::fabs(drop - expectedWithSnapshot) < 0.5f);
+    check("damage is NOT based on mutated attack",
+          std::fabs(drop - expectedIfMutated) > 1.0f);
+    // 还原：Recalculate 从 base+equipment 恢复 Final Attack；HP/蓝/CD 复位
+    m_player->RecalculateCombatStats();
+    boar->GetCombatStats().SetHp(boar->GetCombatStats().maxHp);
+    boar->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillAttackSnapshotCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillRespawnResetCheck] ====================
+// 指令八十一：死亡前 Mana20 + Skill CD + 施法中 -> Respawn 后 Mana=max、全 CD=0、
+// 无施法、ActionState Normal。
+
+void GameScene::RunSkillRespawnResetCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillRespawnResetCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillRespawnResetCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* boar = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Boar") {
+            boar = monster;
+            break;
+        }
+    }
+    check("boar present", boar != nullptr);
+    if (boar == nullptr) {
+        LOG_INFO("[SkillRespawnResetCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(boar->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(boar->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    // 制造"死亡前"状态：正在 Cast（whirlwind，Mana 100->75 + CD 6）+ Mana 进一步降到 20。
+    // 顺序关键：先施法再扣蓝——whirlwind 耗蓝 25，若先 SetMana(20) 施法会被"蓝不足"拒绝。
+    (void)m_playerSkill.RequestSkill(*m_player, 1, m_playerCombat.GetTarget()); // whirlwind
+    check("whirlwind casting (setup)",
+          m_player->GetActionState() ==
+              legend::entity::CharacterActionState::SkillCasting);
+    check("whirlwind on cooldown (setup)",
+          !m_playerSkill.GetCooldowns().IsReady("whirlwind"));
+    m_player->GetSkillResource().SetMana(20.0f);
+    check("mana at 20 (setup)",
+          std::fabs(m_player->GetSkillResource().GetMana() - 20.0f) < 0.0001f);
+    // 模拟 Respawn 重置（GameScene::UpdatePlayerRespawn 调用的同一函数）
+    m_playerSkill.ResetForRespawn(*m_player);
+    m_player->ReturnToNormal();
+    check("mana refilled to max",
+          std::fabs(m_player->GetSkillResource().GetMana() -
+                    m_player->GetSkillResource().GetMaxMana()) < 0.0001f);
+    check("all skill cooldowns cleared",
+          m_playerSkill.GetCooldowns().IsReady("whirlwind") &&
+              m_playerSkill.GetCooldowns().IsReady("power_slash") &&
+              m_playerSkill.GetCooldowns().IsReady("piercing_strike") &&
+              m_playerSkill.GetCooldowns().IsReady("heavy_strike"));
+    check("no current cast", !m_playerSkill.GetSkillSystem().HasActiveCast());
+    check("action state Normal",
+          m_player->GetActionState() == legend::entity::CharacterActionState::Normal);
+    (void)input;
+    LOG_INFO("[SkillRespawnResetCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillAggroCheck] ====================
+// 指令一百零七：合法技能命中 -> Monster AggroTable 中 Player Threat 增加；
+// 技能释放失败（距离/Mana/CD/无目标）-> Aggro 不变化。
+
+void GameScene::RunSkillAggroCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAggroCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillAggroCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* wolf = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Wolf") {
+            wolf = monster;
+            break;
+        }
+    }
+    check("wolf present", wolf != nullptr);
+    if (wolf == nullptr) {
+        LOG_INFO("[SkillAggroCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(wolf->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(wolf->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    // 满血 wolf：前面 whirlwind 类 Check 可能已削弱它——若被本 Check 一击打死，
+    // 死亡目标不再累积仇恨（OnDamaged 跳过尸体），threat 断言会失败
+    wolf->GetCombatStats().SetHp(wolf->GetCombatStats().maxHp);
+    const auto* ai = m_worldActors.GetAIController(wolf->GetId());
+    check("wolf AI controller present", ai != nullptr);
+    if (ai == nullptr) {
+        LOG_INFO("[SkillAggroCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    // 先分发前面 Check 遗留的 pending 伤害事件（如 RespawnReset 的 whirlwind），
+    // 否则旧事件会在施法后的同一次 Dispatch 里混入 wolf 威胁，破坏"威胁==本次伤害"断言
+    m_worldActors.DispatchCombatEvents();
+    const float threatBefore = ai->GetAggroTable().GetThreat(m_player->GetId());
+    const float wolfHpBefore = wolf->GetCombatStats().hp;
+
+    // 合法命中：真实施法 -> ApplySkillDamage -> DispatchCombatEvents（同一管线）
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    m_worldActors.DispatchCombatEvents();
+    const float threatAfterHit = ai->GetAggroTable().GetThreat(m_player->GetId());
+    check("threat increased after skill hit", threatAfterHit > threatBefore);
+    check("threat equals damage applied (single pipeline, no double add)",
+          threatAfterHit - threatBefore <= wolfHpBefore - wolf->GetCombatStats().hp + 0.5f);
+
+    // 失败释放：目标移出射程 -> 请求失败 -> Aggro 不变化
+    m_playerSkill.ResetForRespawn(*m_player);
+    const legend::math::Vector2 wolfHome = wolf->GetPosition();
+    const float threatBeforeFail = ai->GetAggroTable().GetThreat(m_player->GetId());
+    wolf->SetPosition(wolfHome + legend::math::Vector2(300.0f, 0.0f));
+    auto failed = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("out-of-range cast fails", !failed.success);
+    check("threat unchanged after failed cast",
+          std::fabs(ai->GetAggroTable().GetThreat(m_player->GetId()) - threatBeforeFail) <
+              0.0001f);
+    // 还原
+    wolf->SetPosition(wolfHome);
+    wolf->GetCombatStats().SetHp(wolf->GetCombatStats().maxHp);
+    wolf->ReturnToNormal();
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillAggroCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillDeathRewardCheck] ====================
+// 指令一百零八：Power Slash 真实流程杀死 Monster -> DeathEvent 一次、Exp 一次、
+// Loot Roll 一次；连续 Update 不重复；SkillSystem 不自己加经验。
+
+void GameScene::RunSkillDeathRewardCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillDeathRewardCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillDeathRewardCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    legend::world::MonsterCharacter* slime = nullptr;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == "Slime") {
+            slime = monster;
+            break;
+        }
+    }
+    check("slime present", slime != nullptr);
+    if (slime == nullptr) {
+        LOG_INFO("[SkillDeathRewardCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    m_player->SetPosition(slime->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+    m_playerCombat.GetTarget().SetTarget(slime->GetId());
+    m_playerSkill.ResetForRespawn(*m_player);
+    slime->GetCombatStats().SetHp(1.0f); // 一击必杀（真实技能链路）
+    // 清空前面 Check 遗留的 pending 死亡（如 RespawnReset 的 whirlwind 误伤），
+    // 否则 "exactly 1 DeathEvent" 会把旧死亡也算进来
+    m_worldActors.GetCombatSystem().ClearRecentDeaths();
+    const auto expBefore = m_player->GetProgression().GetTotalExp();
+    const std::size_t lootBefore = m_worldActors.GetLoot().GetAll().size();
+
+    auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+    check("cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    check("slime killed by skill", !slime->IsCombatAlive());
+    const int deaths = m_worldActors.GetCombatSystem().GetRecentDeaths().size();
+    check("exactly 1 DeathEvent", deaths == 1);
+    // 奖励走原 RewardSystem（WorldActorManager::ProcessDeathRewards = Update 内同一入口）
+    const int rewarded1 = m_worldActors.ProcessDeathRewards();
+    const auto expAfter1 = m_player->GetProgression().GetTotalExp();
+    const std::size_t lootAfter1 = m_worldActors.GetLoot().GetAll().size();
+    check("reward processed once", rewarded1 == 1);
+    check("exp increased exactly once", expAfter1 > expBefore);
+    check("loot rolled (ground loot spawned)", lootAfter1 > lootBefore);
+    const int rewarded2 = m_worldActors.ProcessDeathRewards();
+    check("second reward pass is no-op (exactly-once)",
+          rewarded2 == 0 &&
+              m_player->GetProgression().GetTotalExp() == expAfter1 &&
+              m_worldActors.GetLoot().GetAll().size() == lootAfter1);
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillDeathRewardCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== [SkillAOERewardCheck] ====================
+// 指令一百零九：Whirlwind 一次事件同时杀死两只低 HP Monster -> 2 个 DeathEvent、
+// RewardSystem 处理 2 份 Exp、各自 Loot Roll、不重复不遗漏。
+
+void GameScene::RunSkillAOERewardCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillAOERewardCheck", name, pass, failures);
+    };
+    auto& input = Engine::Get().GetInput();
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillAOERewardCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    std::vector<legend::world::MonsterCharacter*> monsters;
+    for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
+        if (monster != nullptr && monster->IsCombatAlive()) {
+            monsters.push_back(monster);
+        }
+    }
+    check("2+ monsters present", monsters.size() >= 2);
+    if (monsters.size() < 2) {
+        LOG_INFO("[SkillAOERewardCheck] completed, failures = " + std::to_string(failures));
+        return;
+    }
+    auto* monsterA = monsters[0];
+    auto* monsterB = monsters[1];
+    const legend::math::Vector2 center = m_player->GetPosition();
+    monsterA->SetPosition(center + legend::math::Vector2(40.0f, 0.0f));
+    monsterB->SetPosition(center + legend::math::Vector2(0.0f, 40.0f));
+    monsterA->GetCombatStats().SetHp(1.0f);
+    monsterB->GetCombatStats().SetHp(1.0f);
+    m_worldActors.GetCombatSystem().ClearRecentDeaths();
+    const auto expBefore = m_player->GetProgression().GetTotalExp();
+    const std::size_t lootBefore = m_worldActors.GetLoot().GetAll().size();
+
+    m_playerCombat.GetTarget().ClearTarget();
+    auto result = m_playerSkill.RequestSkill(*m_player, 1, m_playerCombat.GetTarget());
+    check("whirlwind cast succeeds", result.success);
+    for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+        m_player->UpdateAnimation(0.05f);
+        m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+        if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+            break;
+        }
+    }
+    check("both monsters killed by one event",
+          !monsterA->IsCombatAlive() && !monsterB->IsCombatAlive());
+    const int deaths = m_worldActors.GetCombatSystem().GetRecentDeaths().size();
+    check("exactly 2 DeathEvents", deaths == 2);
+    const int rewarded = m_worldActors.ProcessDeathRewards();
+    check("both deaths rewarded", rewarded == 2);
+    check("exp increased", m_player->GetProgression().GetTotalExp() > expBefore);
+    check("ground loot spawned", m_worldActors.GetLoot().GetAll().size() > lootBefore);
+    const auto expAfter = m_player->GetProgression().GetTotalExp();
+    const std::size_t lootAfter = m_worldActors.GetLoot().GetAll().size();
+    const int rewarded2 = m_worldActors.ProcessDeathRewards();
+    check("no duplicate rewards",
+          rewarded2 == 0 && m_player->GetProgression().GetTotalExp() == expAfter &&
+              m_worldActors.GetLoot().GetAll().size() == lootAfter);
+    m_playerSkill.ResetForRespawn(*m_player);
+    LOG_INFO("[SkillAOERewardCheck] completed, failures = " + std::to_string(failures));
+}
+
+// ==================== LEGEND_AUTO_SKILL_TEST=1 时间线 ====================
+// 真实运行的技能验收时间线（指令一百一十四/一百一十五）：
+// 所有伤害环节走 RequestSkill -> SkillSystem -> Skill Animation -> Animation Event ->
+// SkillSystem HandleEvent -> CombatSystem；ApplyDamage 仅用于制造 HitReact / Player 死亡前置。
+// Stage: 0 初始化 1 选怪就位 2 施法(MP/CD/状态) 3 事件命中 4 CD拒绝 5 射程拒绝
+//        6 Whirlwind AOE 7 装备+技能 8 HitReact 打断 9 技能击杀奖励 10 玩家死亡重生
+//        11 怪物重生 90 汇总
+
+namespace {
+// 便捷：按名字找第一只活怪
+legend::world::MonsterCharacter* FindAliveMonsterByName(GameScene& /*scene*/,
+                                                        const std::vector<legend::world::MonsterCharacter*>& monsters,
+                                                        const char* name) {
+    for (legend::world::MonsterCharacter* monster : monsters) {
+        if (monster != nullptr && monster->IsCombatAlive() && monster->GetName() == name) {
+            return monster;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+void GameScene::UpdateSkillTest(float deltaTime) {
+    auto& registry = m_worldActors.GetRegistry();
+    auto& input = Engine::Get().GetInput();
+    auto fail = [this](const std::string& name) {
+        LOG_INFO("[SkillTest] " + name + " -> FAIL");
+        ++m_skillTestFailures;
+    };
+    auto pass = [this](const std::string& name) {
+        LOG_INFO("[SkillTest] " + name + " -> PASS");
+    };
+    auto check = [&pass, &fail](const std::string& name, bool ok) {
+        if (ok) {
+            pass(name);
+        } else {
+            fail(name);
+        }
+    };
+    auto monsters = [this]() { return m_worldActors.GetMonsters(); };
+    // 便捷：把玩家放到目标旁（施法范围内）并锁定目标
+    auto engageTarget = [this](legend::world::MonsterCharacter* target) {
+        m_skillTestTargetId = target->GetId();
+        m_player->SetPosition(target->GetPosition() + legend::math::Vector2(55.0f, 0.0f));
+        m_playerCombat.GetTarget().SetTarget(target->GetId());
+    };
+
+    m_skillTestElapsed += deltaTime;
+    // 阶段切换检测：进入新阶段时重置 stageEntered / stageElapsed
+    // （否则 stageElapsed 是全程累计值，各阶段的 per-stage timeout 会误触发）
+    if (m_skillTestStage != m_skillTestLastStage) {
+        m_skillTestLastStage = m_skillTestStage;
+        m_skillTestStageEntered = false;
+        m_skillTestStageElapsed = 0.0;
+    }
+    if (!m_skillTestStageEntered) {
+        m_skillTestStageEntered = true;
+        m_skillTestStageElapsed = 0.0;
+        LOG_INFO("[SkillTest] stage " + std::to_string(m_skillTestStage) + " entered.");
+    }
+    m_skillTestStageElapsed += deltaTime;
+    // timeout 只触发一次（避免 stage90 后每帧刷 FAIL）
+    if (m_skillTestElapsed > 180.0 && m_skillTestStage != 90) {
+        fail("timeline timeout 180s");
+        m_skillTestStage = 90;
+    }
+
+    switch (m_skillTestStage) {
+    case 0: { // 初始化：Player/Mana/Loadout
+        if (m_player == nullptr) {
+            fail("player missing");
+            m_skillTestStage = 90;
+            break;
+        }
+        check("mana full at start",
+              std::fabs(m_player->GetSkillResource().GetMana() -
+                        m_player->GetSkillResource().GetMaxMana()) < 0.0001f &&
+                  std::fabs(m_player->GetSkillResource().GetMaxMana() - 100.0f) < 0.0001f);
+        check("4 skill slots bound",
+              m_player->GetLoadout().GetSkillId(0) == "power_slash" &&
+                  m_player->GetLoadout().GetSkillId(1) == "whirlwind" &&
+                  m_player->GetLoadout().GetSkillId(2) == "piercing_strike" &&
+                  m_player->GetLoadout().GetSkillId(3) == "heavy_strike");
+        m_playerSkill.ResetForRespawn(*m_player);
+        pass("stage 0 complete");
+        m_skillTestStage = 1;
+        break;
+    }
+    case 1: { // 选怪（Boar：耐打，不会被一击秒杀）+ 就位；其它怪隔离到远处
+        auto all = monsters();
+        auto* boar = FindAliveMonsterByName(*this, all, "Boar");
+        if (boar == nullptr) {
+            if (m_skillTestStageElapsed > 10.0) {
+                fail("no alive boar within 10s");
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        for (legend::world::MonsterCharacter* monster : all) {
+            if (monster != nullptr && monster != boar && monster->IsCombatAlive()) {
+                monster->SetPosition(m_player->GetPosition() +
+                                     legend::math::Vector2(2500.0f, 2500.0f));
+            }
+        }
+        engageTarget(boar);
+        pass("target acquired and in range");
+        m_skillTestStage = 2;
+        break;
+    }
+    case 2: { // 真实施法 power_slash：Mana 100->85、CD 开始、SkillCasting
+        if (m_skillTestCastRequested) {
+            break; // 等待下方断言通过后进入下一阶段
+        }
+        m_skillTestManaBaseline = m_player->GetSkillResource().GetMana();
+        m_skillTestTargetHpBefore = 0.0f;
+        auto* target = static_cast<legend::world::MonsterCharacter*>(registry.Get(m_skillTestTargetId));
+        if (target == nullptr || !target->IsCombatAlive()) {
+            fail("target missing before cast");
+            m_skillTestStage = 90;
+            break;
+        }
+        m_skillTestTargetHpBefore = target->GetCombatStats().hp;
+        auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+        if (!result.success) {
+            if (m_skillTestStageElapsed > 10.0) {
+                fail("power_slash cast rejected within 10s: " + result.reason);
+                m_skillTestStage = 90;
+            }
+            break; // 怪物 AI 可能先打了玩家（HitReact）：下帧重试
+        }
+        m_skillTestCastRequested = true;
+        check("mana 100 -> 85",
+              std::fabs(m_player->GetSkillResource().GetMana() -
+                        (m_skillTestManaBaseline - 15.0f)) < 0.0001f);
+        check("cooldown started", !m_playerSkill.GetCooldowns().IsReady("power_slash"));
+        check("state SkillCasting",
+              m_player->GetActionState() ==
+                  legend::entity::CharacterActionState::SkillCasting);
+        m_skillTestStage = 3;
+        break;
+    }
+    case 3: { // 等待真实 skill_power_slash 动画触发 skill_hit -> 目标 HP 下降
+        auto* target = static_cast<legend::world::MonsterCharacter*>(registry.Get(m_skillTestTargetId));
+        if (target == nullptr) {
+            fail("target despawned during cast");
+            m_skillTestStage = 90;
+            break;
+        }
+        const float hpNow = target->GetCombatStats().hp;
+        if (hpNow < m_skillTestTargetHpBefore) {
+            const float drop = m_skillTestTargetHpBefore - hpNow;
+            m_skillTestDropBaseline = drop;
+            check("damage event abilityId == power_slash",
+                  m_playerSkill.GetSkillSystem().GetLastHit().abilityId == "power_slash");
+            pass("skill hit landed, HP drop = " + std::to_string(drop));
+            m_skillTestCastRequested = false;
+            m_skillTestStage = 4;
+        } else if (m_skillTestStageElapsed > 10.0) {
+            fail("no skill damage within 10s");
+            m_skillTestStage = 90;
+        }
+        break;
+    }
+    case 4: { // 立即再次请求：必须因 CD 失败，Mana 不再减少
+        const float manaBefore = m_player->GetSkillResource().GetMana();
+        auto again = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+        check("re-cast rejected by cooldown", !again.success);
+        check("mana unchanged after rejected re-cast",
+              std::fabs(m_player->GetSkillResource().GetMana() - manaBefore) < 0.0001f);
+        m_skillTestStage = 5;
+        break;
+    }
+    case 5: { // 等 CD 结束 -> 目标移出射程 -> 请求失败、不扣蓝、不启动 CD
+        if (!m_playerSkill.GetCooldowns().IsReady("power_slash")) {
+            break; // 等 CD（4s）
+        }
+        auto* target = static_cast<legend::world::MonsterCharacter*>(registry.Get(m_skillTestTargetId));
+        if (target == nullptr || !target->IsCombatAlive()) {
+            fail("target missing for range test");
+            m_skillTestStage = 90;
+            break;
+        }
+        const legend::math::Vector2 targetHome = target->GetPosition();
+        target->SetPosition(targetHome + legend::math::Vector2(300.0f, 0.0f));
+        const float manaBefore = m_player->GetSkillResource().GetMana();
+        auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+        check("out-of-range cast rejected", !result.success);
+        check("mana unchanged after range rejection",
+              std::fabs(m_player->GetSkillResource().GetMana() - manaBefore) < 0.0001f);
+        check("no cooldown started on rejection",
+              m_playerSkill.GetCooldowns().IsReady("power_slash"));
+        target->SetPosition(targetHome);
+        m_playerSkill.ResetForRespawn(*m_player); // 满蓝进入 AOE 阶段
+        m_skillTestStage = 6;
+        break;
+    }
+    case 6: { // Whirlwind：范围内 2 怪受伤、范围外 1 怪不受伤、NPC 不受伤
+        auto all = monsters();
+        const auto npcs = registry.GetByType(legend::entity::ActorType::NPC);
+        if (all.size() < 3 || npcs.empty()) {
+            if (m_skillTestStageElapsed > 15.0) {
+                fail("not enough monsters/npc for AOE stage");
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        // 取 3 只与当前目标不同的活怪（隔离期的怪按名字/指针取回即可）
+        std::vector<legend::world::MonsterCharacter*> picked;
+        for (legend::world::MonsterCharacter* monster : all) {
+            if (monster != nullptr && monster->IsCombatAlive() &&
+                monster->GetId() != m_skillTestTargetId) {
+                picked.push_back(monster);
+                if (picked.size() == 3) {
+                    break;
+                }
+            }
+        }
+        if (picked.size() < 3) {
+            if (m_skillTestStageElapsed > 15.0) {
+                fail("only " + std::to_string(picked.size()) + " extra monsters for AOE");
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        const legend::math::Vector2 center = m_player->GetPosition();
+        picked[0]->SetPosition(center + legend::math::Vector2(50.0f, 0.0f)); // 范围内 A
+        picked[1]->SetPosition(center + legend::math::Vector2(0.0f, 110.0f)); // 范围内 B
+        picked[2]->SetPosition(center + legend::math::Vector2(400.0f, 0.0f)); // 范围外 C
+        npcs.front()->SetPosition(center + legend::math::Vector2(0.0f, 60.0f)); // 范围内 NPC
+        const float hpA = picked[0]->GetCombatStats().hp;
+        const float hpB = picked[1]->GetCombatStats().hp;
+        const float hpC = picked[2]->GetCombatStats().hp;
+        const float hpNpc = npcs.front()->GetCombatStats().hp;
+        m_skillTestCastRequested = false;
+        auto result = m_playerSkill.RequestSkill(*m_player, 1, m_playerCombat.GetTarget());
+        if (!result.success) {
+            if (m_skillTestStageElapsed > 15.0) {
+                fail("whirlwind cast rejected: " + result.reason);
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        // 等 whirlwind 事件结算（hitCount 落定）
+        for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+            m_player->UpdateAnimation(0.05f);
+            m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+            if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+                break;
+            }
+        }
+        check("AOE monster A (50) damaged", picked[0]->GetCombatStats().hp < hpA);
+        check("AOE monster B (110) damaged", picked[1]->GetCombatStats().hp < hpB);
+        check("AOE monster C (400) NOT damaged",
+              std::fabs(picked[2]->GetCombatStats().hp - hpC) < 0.0001f);
+        check("AOE NPC NOT damaged",
+              std::fabs(npcs.front()->GetCombatStats().hp - hpNpc) < 0.0001f);
+        pass("whirlwind hitCount = " +
+             std::to_string(m_playerSkill.GetSkillSystem().GetLastHit().hitCount));
+        m_skillTestStage = 7;
+        break;
+    }
+    case 7: { // Equipment + Skill：wooden_sword Final Attack 参与技能 Raw
+        // 注入 wooden_sword -> 装备 -> 等 CD -> 施法 -> 伤害 > Stage3 基线
+        const legend::item::ItemDefinition* swordDef =
+            m_worldActors.GetItemDatabase().Get("wooden_sword");
+        if (swordDef == nullptr) {
+            fail("wooden_sword definition missing");
+            m_skillTestStage = 90;
+            break;
+        }
+        if (!m_playerSkill.GetCooldowns().IsReady("power_slash")) {
+            break; // 等 CD
+        }
+        legend::item::ItemInstance instance;
+        instance.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+        instance.definitionId = "wooden_sword";
+        instance.quantity = 1;
+        if (!m_player->GetInventory().AddInstance(instance, swordDef)) {
+            fail("failed to add wooden_sword instance");
+            m_skillTestStage = 90;
+            break;
+        }
+        m_skillTestSwordId = instance.instanceId;
+        auto equip = m_player->EquipInstance(instance.instanceId);
+        if (!equip.success) {
+            fail("equip wooden_sword failed: " + equip.reason);
+            m_skillTestStage = 90;
+            break;
+        }
+        auto* target = static_cast<legend::world::MonsterCharacter*>(registry.Get(m_skillTestTargetId));
+        if (target == nullptr || !target->IsCombatAlive()) {
+            fail("target missing for equipment stage");
+            m_skillTestStage = 90;
+            break;
+        }
+        engageTarget(target);
+        m_playerSkill.ResetForRespawn(*m_player); // 满蓝清 CD（保留装备）
+        // 满血目标：stage3 的 power_slash 与 stage6 whirlwind 的余波（boar 在 55 距离
+        // 也被 whirlwind 波及）已削血——不补满会被装备强化后的一击直接打死，
+        // 掉血被截断导致 "drop > baseline" 失败，且 stage8 会因目标死亡而中断
+        target->GetCombatStats().SetHp(target->GetCombatStats().maxHp);
+        target->ReturnToNormal();
+        m_skillTestTargetHpBefore = target->GetCombatStats().hp;
+        m_skillTestCastRequested = false;
+        auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+        if (!result.success) {
+            if (m_skillTestStageElapsed > 15.0) {
+                fail("equipped power_slash rejected: " + result.reason);
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+            m_player->UpdateAnimation(0.05f);
+            m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+            if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+                break;
+            }
+        }
+        const float drop = m_skillTestTargetHpBefore - target->GetCombatStats().hp;
+        check("equipped skill drop > unequipped baseline",
+              drop > m_skillTestDropBaseline + 1.0f);
+        // 卸装 + 清理测试实例 + 还原目标（即使被打死也复活，保证 stage8 有活目标）
+        (void)m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
+        (void)m_player->GetInventory().TakeInstance(m_skillTestSwordId);
+        m_skillTestSwordId = 0;
+        target->GetCombatStats().SetHp(target->GetCombatStats().maxHp);
+        target->ReturnToNormal();
+        pass("equipment skill damage verified");
+        m_skillTestStage = 8;
+        break;
+    }
+    case 8: { // Hit Interrupt：heavy_strike 施法中被 HitReact 打断
+        auto* target = static_cast<legend::world::MonsterCharacter*>(registry.Get(m_skillTestTargetId));
+        if (target == nullptr || !target->IsCombatAlive()) {
+            fail("target missing for interrupt stage");
+            m_skillTestStage = 90;
+            break;
+        }
+        engageTarget(target);
+        if (!m_skillTestCastRequested) {
+            // CD 门只 gate 首次请求：RequestSkill 后 heavy_strike 进入 8s CD，
+            // 若此门在每帧最前面，helper/完成分支永远走不到（施法会正常播完）
+            if (!m_playerSkill.GetCooldowns().IsReady("heavy_strike")) {
+                break;
+            }
+            m_playerSkill.ResetForRespawn(*m_player); // 满蓝
+            m_skillTestManaBaseline = m_player->GetSkillResource().GetMana();
+            m_skillTestTargetHpBefore = target->GetCombatStats().hp;
+            auto result = m_playerSkill.RequestSkill(*m_player, 3, m_playerCombat.GetTarget());
+            if (!result.success) {
+                if (m_skillTestStageElapsed > 15.0) {
+                    fail("heavy_strike rejected: " + result.reason);
+                    m_skillTestStage = 90;
+                }
+                break;
+            }
+            m_skillTestCastRequested = true;
+            m_skillTestInterrupted = false;
+            break;
+        }
+        // 施法中：用测试辅助 ApplyDamage 让 Player 进入 HitReact（指令一百一十五允许）
+        if (!m_skillTestInterrupted &&
+            m_player->GetActionState() ==
+                legend::entity::CharacterActionState::SkillCasting) {
+            legend::combat::DamageEvent helper;
+            helper.sourceId = m_skillTestTargetId;
+            helper.targetId = m_player->GetId();
+            helper.rawDamage = 10.0f;
+            helper.finalDamage = 10.0f;
+            (void)m_worldActors.GetCombatSystem().ApplyDamage(helper);
+            m_skillTestInterrupted = true;
+            break; // Context 取消发生在下一帧的控制器 Update（断言在回 Normal 后做）
+        }
+        if (m_skillTestInterrupted &&
+            m_player->GetActionState() == legend::entity::CharacterActionState::Normal) {
+            check("context canceled by HitReact",
+                  !m_playerSkill.GetSkillSystem().HasActiveCast());
+            check("target HP unchanged (interrupted before skill_hit)",
+                  std::fabs(target->GetCombatStats().hp - m_skillTestTargetHpBefore) < 0.0001f);
+            check("mana not refunded",
+                  std::fabs(m_player->GetSkillResource().GetMana() -
+                            (m_skillTestManaBaseline - 30.0f)) < 0.0001f);
+            check("heavy_strike cooldown continues",
+                  !m_playerSkill.GetCooldowns().IsReady("heavy_strike"));
+            pass("hit interrupt verified");
+            m_skillTestCastRequested = false;
+            m_skillTestStage = 9;
+        } else if (m_skillTestStageElapsed > 20.0) {
+            fail("interrupt stage timeout");
+            m_skillTestStage = 90;
+        }
+        break;
+    }
+    case 9: { // Skill Death Reward：技能真实击杀 -> DeathEvent/Exp/Loot exactly-once
+        auto all = monsters();
+        auto* slime = FindAliveMonsterByName(*this, all, "Slime");
+        if (slime == nullptr) {
+            if (m_skillTestStageElapsed > 15.0) {
+                fail("no alive slime for death reward stage");
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        if (!m_playerSkill.GetCooldowns().IsReady("power_slash")) {
+            break; // 等 CD
+        }
+        engageTarget(slime);
+        m_playerSkill.ResetForRespawn(*m_player);
+        m_skillTestTargetHpBefore = 0.0f;
+        slime->GetCombatStats().SetHp(1.0f);
+        const auto expBefore = m_player->GetProgression().GetTotalExp();
+        const std::size_t lootBefore = m_worldActors.GetLoot().GetAll().size();
+        auto result = m_playerSkill.RequestSkill(*m_player, 0, m_playerCombat.GetTarget());
+        if (!result.success) {
+            if (m_skillTestStageElapsed > 15.0) {
+                fail("kill cast rejected: " + result.reason);
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        for (int i = 0; i < kMaxCastDriveFrames; ++i) {
+            m_player->UpdateAnimation(0.05f);
+            m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, 0.016f);
+            if (!m_playerSkill.GetSkillSystem().HasActiveCast()) {
+                break;
+            }
+        }
+        if (slime->IsCombatAlive()) {
+            if (m_skillTestStageElapsed > 20.0) {
+                fail("slime survived kill cast");
+                m_skillTestStage = 90;
+            }
+            break;
+        }
+        (void)m_worldActors.ProcessDeathRewards();
+        check("exp gained from skill kill",
+              m_player->GetProgression().GetTotalExp() > expBefore);
+        check("loot rolled from skill kill",
+              m_worldActors.GetLoot().GetAll().size() > lootBefore);
+        const auto expAfter = m_player->GetProgression().GetTotalExp();
+        const std::size_t lootAfter = m_worldActors.GetLoot().GetAll().size();
+        (void)m_worldActors.ProcessDeathRewards();
+        check("no duplicate reward",
+              m_player->GetProgression().GetTotalExp() == expAfter &&
+                  m_worldActors.GetLoot().GetAll().size() == lootAfter);
+        pass("skill death reward verified");
+        m_skillTestStage = 10;
+        break;
+    }
+    case 10: { // Player Death -> Debug Respawn -> Mana Fill / CD 清 0 / 无施法 / Normal
+        if (!m_skillTestCastRequested) {
+            m_playerSkill.ResetForRespawn(*m_player);
+            legend::combat::DamageEvent lethal;
+            lethal.sourceId = m_skillTestTargetId != 0 ? m_skillTestTargetId : m_player->GetId();
+            lethal.targetId = m_player->GetId();
+            lethal.rawDamage = 99999.0f;
+            lethal.finalDamage = 99999.0f;
+            // 测试辅助（指令一百一十五）：制造 Player 死亡前置
+            (void)m_worldActors.GetCombatSystem().ApplyDamage(lethal);
+            m_skillTestCastRequested = true;
+            break;
+        }
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::Normal &&
+            m_player->IsCombatAlive()) {
+            check("mana refilled after respawn",
+                  std::fabs(m_player->GetSkillResource().GetMana() -
+                            m_player->GetSkillResource().GetMaxMana()) < 0.0001f);
+            check("all cooldowns cleared after respawn",
+                  m_playerSkill.GetCooldowns().IsReady("power_slash") &&
+                      m_playerSkill.GetCooldowns().IsReady("whirlwind") &&
+                      m_playerSkill.GetCooldowns().IsReady("piercing_strike") &&
+                      m_playerSkill.GetCooldowns().IsReady("heavy_strike"));
+            check("no current cast after respawn",
+                  !m_playerSkill.GetSkillSystem().HasActiveCast());
+            check("state Normal after respawn",
+                  m_player->GetActionState() ==
+                      legend::entity::CharacterActionState::Normal);
+            pass("player respawn skill reset verified");
+            m_skillTestCastRequested = false;
+            m_skillTestStage = 11;
+        } else if (m_skillTestStageElapsed > 30.0) {
+            fail("player respawn not completed within 30s");
+            m_skillTestStage = 90;
+        }
+        break;
+    }
+    case 11: { // Monster Respawn 仍正常
+        if (m_skillTestStageElapsed < 10.0) {
+            break; // 给 corpse/respawn 流程时间
+        }
+        const int aliveNow = m_worldActors.GetAliveMonsterCount();
+        if (aliveNow > 0) {
+            pass("monster respawn still working (alive " + std::to_string(aliveNow) + ")");
+        } else if (m_skillTestStageElapsed < 40.0) {
+            break;
+        } else {
+            fail("no monster respawned within 40s");
+        }
+        m_skillTestStage = 90;
+        break;
+    }
+    case 90: { // 汇总（所有退出路径统一入口）
+        if (!m_skillTestSummaryDone) {
+            m_skillTestSummaryDone = true;
+            m_playerSkill.ResetForRespawn(*m_player);
+            LOG_INFO("[SkillTest] completed, failures = " +
+                     std::to_string(m_skillTestFailures) + ", elapsed = " +
+                     std::to_string(m_skillTestElapsed) + "s");
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// ==================== F7：Skill Debug 覆盖层 ====================
+// 无文字系统：蓝色 Mana 条（mana/maxMana 比例）+ 4 个技能槽方块
+//（Ready 全亮 / CD 按 remaining/total 比例变暗）。仅开发 Debug，不做正式 HUD。
+
+void GameScene::DrawSkillDebugOverlay(legend::render::SpriteBatch& batch) {
+    if (!m_player || !m_whiteTexture) {
+        return;
+    }
+    const auto& visual = m_player->GetVisual();
+    const legend::math::Vector2& feet = m_player->GetPosition();
+    const float barW = 64.0f;
+    const float barH = 6.0f;
+    const legend::math::Vector2 barCenter(feet.x, feet.y - visual.height * visual.pivot.y - 24.0f);
+    // 黑底 + 蓝色 Mana
+    batch.DrawQuad(*m_whiteTexture, barCenter, {barW / 64.0f, barH / 64.0f}, 0.0f,
+                   legend::math::Color(0.0f, 0.0f, 0.0f, 0.7f));
+    const float ratio = m_player->GetSkillResource().GetManaPercent();
+    if (ratio > 0.0f) {
+        const float fillW = barW * ratio;
+        const legend::math::Vector2 fillCenter(barCenter.x - (barW - fillW) * 0.5f, barCenter.y);
+        batch.DrawQuad(*m_whiteTexture, fillCenter, {fillW / 64.0f, barH / 64.0f}, 0.0f,
+                       legend::math::Color(0.2f, 0.4f, 1.0f, 0.95f));
+    }
+    // 4 个技能槽方块：Ready 亮绿；CD 按剩余比例降亮度
+    const auto& database = m_worldActors.GetSkillDatabase();
+    const float slotSize = 10.0f;
+    const float slotGap = 3.0f;
+    const float totalW = 4 * slotSize + 3 * slotGap;
+    const legend::math::Vector2 rowCenter(feet.x, barCenter.y - 14.0f);
+    for (int slot = 0; slot < m_player->GetLoadout().GetSlotCount(); ++slot) {
+        const std::string& skillId = m_player->GetLoadout().GetSkillId(slot);
+        float brightness = 1.0f; // Ready
+        float totalCd = 0.0f;
+        if (!skillId.empty()) {
+            const auto* def = database.Get(skillId);
+            totalCd = def != nullptr ? def->cooldown : 0.0f;
+            const float remaining = m_playerSkill.GetCooldowns().GetRemaining(skillId);
+            if (remaining > 0.0f && totalCd > 0.0f) {
+                brightness = 0.25f + 0.75f * (remaining / totalCd); // CD 比例
+                brightness = std::min(brightness, 1.0f);
+            }
+        } else {
+            brightness = 0.15f; // 空槽
+        }
+        const float slotX = rowCenter.x - totalW * 0.5f + slot * (slotSize + slotGap) +
+                            slotSize * 0.5f;
+        batch.DrawQuad(*m_whiteTexture, {slotX, rowCenter.y},
+                       {slotSize / 64.0f, slotSize / 64.0f}, 0.0f,
+                       legend::math::Color(0.2f * brightness, 1.0f * brightness,
+                                           0.2f * brightness, 0.9f));
+    }
+}
+
+// ==================== 窗口标题 Skill 段 ====================
+// LogMapStats（2s 节流）调用；不额外刷日志。
+// 形如： | MP: 85/100 | S1 power_slash:2.4s | S2 whirlwind:READY | ...
+
+std::string GameScene::GetSkillStatusText() const {
+    if (m_player == nullptr) {
+        return std::string();
+    }
+    std::string status =
+        " | MP: " + std::to_string(static_cast<int>(m_player->GetSkillResource().GetMana())) +
+        "/" + std::to_string(static_cast<int>(m_player->GetSkillResource().GetMaxMana()));
+    const auto& database = m_worldActors.GetSkillDatabase();
+    for (int slot = 0; slot < m_player->GetLoadout().GetSlotCount(); ++slot) {
+        const std::string& skillId = m_player->GetLoadout().GetSkillId(slot);
+        status += " | S" + std::to_string(slot + 1) + " ";
+        if (skillId.empty()) {
+            status += "empty";
+            continue;
+        }
+        status += skillId;
+        const float remaining = m_playerSkill.GetCooldowns().GetRemaining(skillId);
+        if (remaining > 0.0f) {
+            status += ":CD" + std::to_string(remaining).substr(0, 4) + "s";
+        } else {
+            status += ":READY";
+        }
+    }
+    if (m_playerSkill.GetSkillSystem().HasActiveCast()) {
+        status += " | Cast: " + m_playerSkill.GetSkillSystem().GetContext().skillId;
+    }
+    (void)database;
+    return status;
+}

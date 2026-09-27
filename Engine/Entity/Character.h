@@ -35,11 +35,13 @@ struct CharacterVisual {
 };
 
 // 角色动作状态：阶段5战斗扩展。不要用零散 bool 到处堆。
+// 阶段8优先级：Dead > HitReact > SkillCasting > Attacking > Walk > Idle。
 enum class CharacterActionState : uint8_t {
     Normal = 0,   // 可移动可攻击
     Attacking = 1, // 攻击动画播放中（禁移动，方向锁定）
-    HitReact = 2,  // 受击硬直（禁移动，打断攻击）
+    HitReact = 2,  // 受击硬直（禁移动，打断攻击/技能）
     Dead = 3,      // 死亡（禁移动/攻击/被锁定；active 保持以播放死亡动画）
+    SkillCasting = 4, // 阶段8：技能施法中（禁移动/普通攻击；可被 HitReact/Dead 打断）
 };
 
 // 角色基类：移动状态 / 朝向 / 动画状态 / 战斗组件 / 数据。
@@ -66,7 +68,16 @@ public:
     // 受击入口：打断当前攻击（攻击事件若未触发不再产生伤害）
     void EnterHitReact();
     void EnterAttacking() { m_actionState = CharacterActionState::Attacking; }
-    void ReturnToNormal() { m_actionState = CharacterActionState::Normal; }
+    // 阶段8：施法入口（方向锁定 + Clip 覆盖由 SkillSystem 设置）
+    void EnterSkillCasting() { m_actionState = CharacterActionState::SkillCasting; }
+    void ReturnToNormal() {
+        m_actionState = CharacterActionState::Normal;
+        m_actionClipOverride.clear(); // 施法/攻击 Clip 覆盖随状态退出清除
+    }
+
+    // ---- 阶段8：技能施法 Clip 覆盖（SkillCasting 时 ASM 直接使用该 Clip 名） ----
+    const std::string& GetActionClipOverride() const { return m_actionClipOverride; }
+    void SetActionClipOverride(std::string clipName) { m_actionClipOverride = std::move(clipName); }
 
     Direction8 GetDirection() const { return m_direction; }
     void SetDirection(Direction8 direction) { m_direction = direction; }
@@ -127,6 +138,8 @@ private:
     bool m_combatEnabled = false;
     combat::CombatStats m_combatStats;
     float m_attackCooldown = 0.0f;
+    // 阶段8：SkillCasting 期间覆盖 ASM 选 Clip（空 = 不覆盖）
+    std::string m_actionClipOverride;
 };
 
 } // namespace legend::entity

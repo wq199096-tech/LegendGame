@@ -30,6 +30,14 @@ public:
     bool ResolveAttack(legend::entity::Character& attacker,
                        legend::entity::Character& target, DamageEvent& outEvent);
 
+    // 阶段8：技能伤害入口。SkillSystem 只算 Raw（attackSnapshot * multiplier），
+    // 防御折减仍由 CombatResolver 统一负责（final = max(1, raw - defense)），
+    // 技能不建立第二套伤害公式。射程校验在施法开始时由 SkillSystem 完成（castRange），
+    // 此处只校验双方 active + 战斗存活。abilityId 记录来源技能 id。
+    bool ApplySkillDamage(legend::entity::Character& attacker,
+                          legend::entity::Character& target, float rawDamage,
+                          const std::string& abilityId, DamageEvent& outEvent);
+
     // 应用既有事件（自动测试可直接驱动）：TakeDamage + 死亡/受击状态切换
     bool ApplyDamage(const DamageEvent& event);
 

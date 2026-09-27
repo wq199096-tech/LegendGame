@@ -47,6 +47,28 @@ bool CombatSystem::ResolveAttack(legend::entity::Character& attacker,
     return ApplyDamage(event);
 }
 
+bool CombatSystem::ApplySkillDamage(legend::entity::Character& attacker,
+                                    legend::entity::Character& target, float rawDamage,
+                                    const std::string& abilityId, DamageEvent& outEvent) {
+    // 阶段5.1 同源防线：inactive Actor 绝不能攻击 / 被攻击
+    if (!attacker.IsActive() || !target.IsActive()) {
+        return false;
+    }
+    if (!attacker.IsCombatAlive() || !target.IsCombatAlive()) {
+        return false; // 施法者死亡 / 目标已死：技能落空
+    }
+    DamageEvent event;
+    event.sourceId = attacker.GetId();
+    event.targetId = target.GetId();
+    event.rawDamage = rawDamage;
+    event.finalDamage = CombatResolver::ComputeFinalDamage(rawDamage,
+                                                           target.GetCombatStats().defense);
+    event.abilityId = abilityId;
+    event.sequence = ++m_sequence;
+    outEvent = event;
+    return ApplyDamage(event);
+}
+
 bool CombatSystem::ApplyDamage(const DamageEvent& event) {
     legend::entity::Character* target = m_registry.Get(event.targetId);
     // 阶段5.1：inactive Actor 绝不能被攻击（即使绕过 ValidateAttack 直接调用）

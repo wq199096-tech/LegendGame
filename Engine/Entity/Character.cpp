@@ -27,6 +27,7 @@ void Character::EnterDead() {
     m_actionState = CharacterActionState::Dead;
     m_moving = false;
     m_velocity = math::Vector2{0.0f, 0.0f};
+    m_actionClipOverride.clear(); // 死亡打断施法：技能 Clip 覆盖清除
     // active/visible 保持：死亡动画仍需渲染；Despawn 由 WorldActorManager 处理
 }
 
@@ -34,9 +35,10 @@ void Character::EnterHitReact() {
     if (m_actionState == CharacterActionState::Dead) {
         return; // 死亡不可被打断
     }
-    m_actionState = CharacterActionState::HitReact; // 覆盖 Attacking：攻击取消，事件不再产生伤害
+    m_actionState = CharacterActionState::HitReact; // 覆盖 Attacking/SkillCasting：事件不再产生伤害
     m_moving = false;
     m_velocity = math::Vector2{0.0f, 0.0f};
+    m_actionClipOverride.clear(); // 受击打断施法：技能 Clip 覆盖清除
 }
 
 } // namespace legend::entity

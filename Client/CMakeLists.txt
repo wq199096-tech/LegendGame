@@ -7,6 +7,7 @@ add_executable(LegendClient
     Source/GameScene.cpp
     Source/ProgressionChecks.cpp
     Source/EquipmentChecks.cpp
+    Source/SkillChecks.cpp
     Source/FallbackScene.cpp
     Character/PlayerCharacter.cpp
     Character/PlayerStatsComponent.cpp
@@ -16,6 +17,8 @@ add_executable(LegendClient
     Loot/LootManager.cpp
     Loot/LootTable.cpp
     Progression/PlayerProgression.cpp
+    Skill/PlayerSkillController.cpp
+    Skill/SkillSystem.cpp
     World/AggroTable.cpp
     World/MonsterAIController.cpp
     World/MonsterCharacter.cpp

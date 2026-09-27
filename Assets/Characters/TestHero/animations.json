@@ -668,6 +668,94 @@
                                                        }
                                                    ]
                                     },
+                  "skill_power_slash":  {
+                                            "loop":  false,
+                                            "frames":  [
+                                                           {
+                                                               "index":  96,
+                                                               "duration":  0.1
+                                                           },
+                                                           {
+                                                               "index":  97,
+                                                               "duration":  0.1
+                                                           },
+                                                           {
+                                                               "index":  98,
+                                                               "duration":  0.1,
+                                                               "event":  "skill_hit"
+                                                           },
+                                                           {
+                                                               "index":  99,
+                                                               "duration":  0.12
+                                                           }
+                                                       ]
+                                        },
+                  "skill_whirlwind":  {
+                                          "loop":  false,
+                                          "frames":  [
+                                                         {
+                                                             "index":  96,
+                                                             "duration":  0.08
+                                                         },
+                                                         {
+                                                             "index":  97,
+                                                             "duration":  0.08
+                                                         },
+                                                         {
+                                                             "index":  98,
+                                                             "duration":  0.08,
+                                                             "event":  "skill_hit"
+                                                         },
+                                                         {
+                                                             "index":  99,
+                                                             "duration":  0.1
+                                                         }
+                                                     ]
+                                      },
+                  "skill_piercing_strike":  {
+                                                "loop":  false,
+                                                "frames":  [
+                                                               {
+                                                                   "index":  96,
+                                                                   "duration":  0.1
+                                                               },
+                                                               {
+                                                                   "index":  97,
+                                                                   "duration":  0.12
+                                                               },
+                                                               {
+                                                                   "index":  98,
+                                                                   "duration":  0.1,
+                                                                   "event":  "skill_hit"
+                                                               },
+                                                               {
+                                                                   "index":  99,
+                                                                   "duration":  0.12
+                                                               }
+                                                           ]
+                                            },
+                  "skill_heavy_strike":  {
+                                             "loop":  false,
+                                             "frames":  [
+                                                            {
+                                                                "index":  96,
+                                                                "duration":  0.15
+                                                            },
+                                                            {
+                                                                "index":  97,
+                                                                "duration":  0.15
+                                                            },
+                                                            {
+                                                                "index":  98,
+                                                                "duration":  0.15,
+                                                                "event":  "skill_hit"
+                                                            },
+                                                            {
+                                                                "index":  99,
+                                                                "duration":  0.2
+                                                            }
+                                                        ]
+                                         },
                   "death_southeast":  {
                                           "loop":  false,
                                           "frames":  [

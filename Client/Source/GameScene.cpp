@@ -95,6 +95,10 @@ void GameScene::OnLoad() {
     }
     m_worldActors.RegisterPlayer(m_player.get());
     m_player->SetItemDatabase(&m_worldActors.GetItemDatabase()); // 阶段7：装备系统注入
+    // 阶段8：默认技能栏绑定（SkillDatabase 已随 World 初始化成功加载）+ 技能控制器初始化
+    m_player->GetLoadout().InitializeDefaults(m_worldActors.GetSkillDatabase());
+    m_playerSkill.Initialize(&m_worldActors.GetSkillDatabase(), &m_worldActors.GetRegistry(),
+                             &m_worldActors.GetCombatSystem());
     const int npcSpawned = m_worldActors.SpawnNPCs(*m_map);
     const legend::world::WorldSpawnStats monsterStats = m_worldActors.SpawnMonsters(*m_map);
 
@@ -160,6 +164,33 @@ void GameScene::OnLoad() {
     RunSlotOverwriteGuardCheck();
     RunOfficialEquipmentLootCheck();
     RunEquipmentTestRestoreCheck();
+    // 阶段8：Skill Core 自检（26 Check，实现在 SkillChecks.cpp）
+    RunSkillDatabaseCheck();
+    RunSkillDatabaseFailureCheck();
+    RunSkillDefinitionValidationCheck();
+    RunSkillLoadoutCheck();
+    RunSkillManaCheck();
+    RunSkillCooldownCheck();
+    RunSkillCastValidationCheck();
+    RunSkillManaCooldownCheck();
+    RunSkillAnimationEventCheck();
+    RunSkillInterruptCheck();
+    RunSkillSingleTargetDamageCheck();
+    RunSkillDefenseCheck();
+    RunSkillRangeCheck();
+    RunSkillAOECheck();
+    RunSkillAOEDeathCheck();
+    RunSkillTargetDeathBeforeEventCheck();
+    RunSkillTargetDespawnCheck();
+    RunSkillCastStateCheck();
+    RunSkillMovementLockCheck();
+    RunSkillBasicAttackInteractionCheck();
+    RunEquipmentSkillDamageCheck();
+    RunSkillAttackSnapshotCheck();
+    RunSkillRespawnResetCheck();
+    RunSkillAggroCheck();
+    RunSkillDeathRewardCheck();
+    RunSkillAOERewardCheck();
 
     LOG_INFO("GameScene ready. Map: '" + m_map->GetName() + "', player spawn tile: (" +
              std::to_string(spawnTileX) + "," + std::to_string(spawnTileY) + "), NPCs: " +
@@ -190,6 +221,13 @@ bool GameScene::LoadPlayerCharacter() {
         assetsRoot + "/Characters/TestHero/character.json", definition);
 
     if (loaded) {
+        // 阶段8指令一百零二：Player 必须有合法 skillResource.maxMana > 0，否则初始化失败
+        if (definition.hasCombat &&
+            (!definition.hasSkillResource || definition.maxMana <= 0.0f)) {
+            LOG_ERROR("GameScene: player character.json skillResource.maxMana invalid "
+                      "(must be > 0). Player load aborted.");
+            return false;
+        }
         // animations 路径相对 Assets 根，与 spriteSheet 纹理同规则
         auto clipsMap = legend::animation::LoadAnimationClips(assetsRoot + "/" + definition.animationsPath);
         LOG_INFO("Player clips loaded: " + std::to_string(clipsMap.size()) + " from " +
@@ -347,33 +385,62 @@ void GameScene::Update(float deltaTime) {
                      std::to_string(m_player->GetCombatStats().attack));
         }
     }
-
-    // ---- 阶段7：Z = 装备背包中第一件 Equipment / X = 卸下 Weapon（Debug 键） ----
-    if (input.IsKeyPressed(SDL_SCANCODE_Z) && m_player != nullptr) {
-        legend::item::ItemInstanceId firstEquipment = 0;
-        auto& bag = m_player->GetInventory();
-        for (std::size_t i = 0; i < bag.GetCapacity() && firstEquipment == 0; ++i) {
-            const legend::item::ItemInstance* slot = bag.GetSlot(i);
-            if (slot != nullptr) {
-                const auto* def = m_worldActors.GetItemDatabase().Get(slot->definitionId);
-                if (def != nullptr && def->type == legend::item::ItemType::Equipment) {
-                    firstEquipment = slot->instanceId;
-                }
+    if (input.IsKeyPressed(SDL_SCANCODE_F7)) {
+        m_skillDebug = !m_skillDebug;
+        LOG_INFO(m_skillDebug ? "Skill debug: enabled (F7)" : "Skill debug: disabled (F7)");
+        if (m_skillDebug && m_player != nullptr) {
+            // F7 开启时输出一次技能栏状态（节流，不每帧刷）
+            const auto& resource = m_player->GetSkillResource();
+            LOG_INFO("[SkillDebug] MP " +
+                     std::to_string(static_cast<int>(resource.GetMana())) + "/" +
+                     std::to_string(static_cast<int>(resource.GetMaxMana())));
+            for (int slot = 0; slot < m_player->GetLoadout().GetSlotCount(); ++slot) {
+                const std::string& skillId = m_player->GetLoadout().GetSkillId(slot);
+                LOG_INFO("[SkillDebug] slot " + std::to_string(slot + 1) + ": " +
+                         (skillId.empty() ? std::string("empty")
+                                          : skillId + " cd=" +
+                                                std::to_string(
+                                                    m_playerSkill.GetCooldowns().GetRemaining(
+                                                        skillId))));
             }
         }
-        if (firstEquipment != 0) {
-            const auto result = m_player->EquipInstance(firstEquipment);
-            if (!result.success) {
-                LOG_WARN("[Equip] Z key failed: " + result.reason);
-            }
+    }
+
+    // ---- 阶段7：Z = 装备背包中第一件 Equipment / X = 卸下 Weapon（Debug 键） ----
+    // ---- 阶段8指令七十七：SkillCasting 期间 Z/X 换装拒绝（装备入口检查 ActionState） ----
+    if (input.IsKeyPressed(SDL_SCANCODE_Z) && m_player != nullptr) {
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::SkillCasting) {
+            LOG_INFO("[Skill] cannot equip while SkillCasting (Z rejected).");
         } else {
-            LOG_INFO("[Equip] Z: no equipment in inventory.");
+            legend::item::ItemInstanceId firstEquipment = 0;
+            auto& bag = m_player->GetInventory();
+            for (std::size_t i = 0; i < bag.GetCapacity() && firstEquipment == 0; ++i) {
+                const legend::item::ItemInstance* slot = bag.GetSlot(i);
+                if (slot != nullptr) {
+                    const auto* def = m_worldActors.GetItemDatabase().Get(slot->definitionId);
+                    if (def != nullptr && def->type == legend::item::ItemType::Equipment) {
+                        firstEquipment = slot->instanceId;
+                    }
+                }
+            }
+            if (firstEquipment != 0) {
+                const auto result = m_player->EquipInstance(firstEquipment);
+                if (!result.success) {
+                    LOG_WARN("[Equip] Z key failed: " + result.reason);
+                }
+            } else {
+                LOG_INFO("[Equip] Z: no equipment in inventory.");
+            }
         }
     }
     if (input.IsKeyPressed(SDL_SCANCODE_X) && m_player != nullptr) {
-        const auto result = m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
-        if (!result.success) {
-            LOG_INFO("[Unequip] X: " + result.reason);
+        if (m_player->GetActionState() == legend::entity::CharacterActionState::SkillCasting) {
+            LOG_INFO("[Skill] cannot unequip while SkillCasting (X rejected).");
+        } else {
+            const auto result = m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
+            if (!result.success) {
+                LOG_INFO("[Unequip] X: " + result.reason);
+            }
         }
     }
 
@@ -387,6 +454,9 @@ void GameScene::Update(float deltaTime) {
         }
     }
 
+    // ---- 阶段8：技能控制器（先于战斗：CD 递减/施法流程/1~4/M 按键/事件路由） ----
+    m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, deltaTime);
+
     // ---- 玩家战斗：目标选择 / 攻击请求 / 状态推进（先于移动，MovementLock 生效） ----
     int combatVpW = 1280;
     int combatVpH = 720;
@@ -395,9 +465,9 @@ void GameScene::Update(float deltaTime) {
                           input, static_cast<float>(combatVpW), static_cast<float>(combatVpH),
                           deltaTime);
 
-    // ---- Movement Lock：Attacking / HitReact / Dead 禁止移动 ----
+    // ---- Movement Lock：Attacking / HitReact / Dead / SkillCasting 禁止移动 ----
     if (m_player->GetActionState() != legend::entity::CharacterActionState::Normal) {
-        // 攻击/受击/死亡动画期间不执行移动（保持站立，动画由 UpdateAnimation 驱动）
+        // 攻击/受击/施法/死亡动画期间不执行移动（保持站立，动画由 UpdateAnimation 驱动）
     } else if (m_autoDirCycle) {
         UpdateDirectionCycle();
         m_playerController.Update(input, m_characterController, *m_player, *m_map, deltaTime);
@@ -442,6 +512,11 @@ void GameScene::Update(float deltaTime) {
     // 阶段7：LEGEND_AUTO_EQUIPMENT_TEST=1 装备验收时间线
     if (m_equipTest) {
         UpdateEquipmentTest(deltaTime);
+    }
+
+    // 阶段8：LEGEND_AUTO_SKILL_TEST=1 技能验收时间线
+    if (m_skillTest) {
+        UpdateSkillTest(deltaTime);
     }
 
     // Player 死亡 -> Debug 复活（回出生点满血）
@@ -521,6 +596,9 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     if (m_equipmentDebug) {
         DrawEquipmentDebugOverlay(m_mapRenderer.GetBatch()); // F6：装备 Debug
     }
+    if (m_skillDebug) {
+        DrawSkillDebugOverlay(m_mapRenderer.GetBatch()); // F7：技能 Debug
+    }
     if (m_combatDebug || m_playerCombat.GetTarget().IsEmpty() == false) {
         DrawTargetRing(m_mapRenderer.GetBatch()); // 选中目标红圈（死亡自动消失）
     }
@@ -586,6 +664,13 @@ void GameScene::ApplyAutoTestHooks() {
         LOG_INFO("Auto-test: equipment acceptance timeline enabled "
                  "(LEGEND_AUTO_EQUIPMENT_TEST=1), stages: Kill -> Loot -> Pickup -> Equip "
                  "-> Stats -> Swap -> Unequip -> Respawn.");
+    }
+    const char* skillTest = SDL_getenv("LEGEND_AUTO_SKILL_TEST");
+    if (skillTest != nullptr && skillTest[0] == '1') {
+        m_skillTest = true;
+        LOG_INFO("Auto-test: skill acceptance timeline enabled (LEGEND_AUTO_SKILL_TEST=1), "
+                 "stages: Init -> Target -> Cast -> Event -> CD -> Range -> AOE -> Equip "
+                 "-> Interrupt -> DeathReward -> PlayerRespawn -> MonsterRespawn.");
     }
     const char* collisionDebug = SDL_getenv("LEGEND_AUTO_COLLISION");
     if (collisionDebug != nullptr && collisionDebug[0] == '1') {
@@ -1196,7 +1281,9 @@ void GameScene::LogMapStats(double deltaTime) {
                         "/" + std::to_string(m_player->GetInventory().GetCapacity())
                   : std::string()) +
         // 阶段7：装备槽数（Debug 阶段窗口标题显示）
-        GetEquipmentStatusText();
+        GetEquipmentStatusText() +
+        // 阶段8：MP / 技能栏 CD（Debug 阶段窗口标题显示）
+        GetSkillStatusText();
 
     // F2：Entity / Direction / State / Clip / Frame
     if (m_characterDebug && m_player) {
@@ -2133,6 +2220,8 @@ void GameScene::UpdatePlayerRespawn(float deltaTime) {
             m_player->ReturnToNormal();
             m_player->SetDirection(legend::entity::Direction8::South);
             m_player->GetAnimationPlayer().Stop();
+            // 阶段8指令八十：Respawn 时 Mana Fill + 全部技能 CD 清 0 + 施法清空
+            m_playerSkill.ResetForRespawn(*m_player);
             m_playerRespawnTimer = 0.0f;
             LOG_INFO("[PlayerRespawn] player respawned at spawn point with full HP.");
         }

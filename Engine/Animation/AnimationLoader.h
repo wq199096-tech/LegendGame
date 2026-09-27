@@ -36,6 +36,9 @@ struct CharacterDefinition {
     // character.json "growth" 块（阶段6）：每级属性成长（缺省 20/5/2；怪物不升级无影响）
     bool hasGrowth = false;
     legend::progression::GrowthConfig growth;
+    // character.json "skillResource" 块（阶段8）：仅 Player 使用；NPC/Monster 无此块正常加载
+    bool hasSkillResource = false;
+    float maxMana = 0.0f;
 };
 
 // character.json -> CharacterDefinition（失败返回 false + 明确日志，不崩溃）

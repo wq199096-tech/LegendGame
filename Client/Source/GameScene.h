@@ -6,6 +6,7 @@
 #include "Client/Character/PlayerCharacter.h"
 #include "Client/Character/PlayerController.h"
 #include "Client/Combat/PlayerCombatController.h"
+#include "Client/Skill/PlayerSkillController.h"
 #include "Client/World/WorldActorManager.h"
 #include "Engine/Entity/CharacterController.h"
 #include "Engine/Entity/EntityId.h"
@@ -124,6 +125,39 @@ private:
     void RestoreEquipmentTestLootOverride();
     // 阶段7.2 自检：Override 后按正式表逐项恢复（itemId/chance/min/max 全一致）
     void RunEquipmentTestRestoreCheck();
+    // ---- 阶段8：Skill Core System 自检（26 个 Check，实现在 SkillChecks.cpp） ----
+    void RunSkillDatabaseCheck();
+    void RunSkillDatabaseFailureCheck();
+    void RunSkillDefinitionValidationCheck();
+    void RunSkillLoadoutCheck();
+    void RunSkillManaCheck();
+    void RunSkillCooldownCheck();
+    void RunSkillCastValidationCheck();
+    void RunSkillManaCooldownCheck();
+    void RunSkillAnimationEventCheck();
+    void RunSkillInterruptCheck();
+    void RunSkillSingleTargetDamageCheck();
+    void RunSkillDefenseCheck();
+    void RunSkillRangeCheck();
+    void RunSkillAOECheck();
+    void RunSkillAOEDeathCheck();
+    void RunSkillTargetDeathBeforeEventCheck();
+    void RunSkillTargetDespawnCheck();
+    void RunSkillCastStateCheck();
+    void RunSkillMovementLockCheck();
+    void RunSkillBasicAttackInteractionCheck();
+    void RunEquipmentSkillDamageCheck();
+    void RunSkillAttackSnapshotCheck();
+    void RunSkillRespawnResetCheck();
+    void RunSkillAggroCheck();
+    void RunSkillDeathRewardCheck();
+    void RunSkillAOERewardCheck();
+    // LEGEND_AUTO_SKILL_TEST=1：阶段8 验收时间线（真实施法链路 0~11 阶段）
+    void UpdateSkillTest(float deltaTime);
+    // F7：Skill Debug 覆盖层（蓝色 Mana 条 + 4 技能槽 CD 比例方块）
+    void DrawSkillDebugOverlay(legend::render::SpriteBatch& batch);
+    // 窗口标题 Skill 段（" | MP: 85/100 | S1 ..."，LogMapStats 调用）
+    std::string GetSkillStatusText() const;
     // F6：Equipment Debug 覆盖层（6 槽状态 + Base/Equipment/Final ATK/DEF/HP 几何显示）
     void DrawEquipmentDebugOverlay(legend::render::SpriteBatch& batch);
     // 窗口标题 Equipment 段（" | Equip: n/6"，LogMapStats 调用）
@@ -256,4 +290,24 @@ private:
     // 阶段7.2：正式 slime 掉落表保存（Stage0 首次进入时保存一次，Stage90 统一恢复）
     std::vector<legend::world::LootEntry> m_equipTestOriginalSlimeLoot;
     bool m_equipTestLootSaved = false;
+
+    // ---- 阶段8：Skill Core ----
+    legend::skill::PlayerSkillController m_playerSkill; // 1~4 按键 / 施法流程 / 事件路由
+    bool m_skillDebug = false; // F7
+    // LEGEND_AUTO_SKILL_TEST=1 时间线状态
+    bool m_skillTest = false;
+    int m_skillTestStage = 0;
+    double m_skillTestElapsed = 0.0;
+    double m_skillTestStageElapsed = 0.0;
+    bool m_skillTestStageEntered = false;
+    legend::entity::EntityId m_skillTestTargetId = 0;     // 单体阶段目标
+    float m_skillTestTargetHpBefore = 0.0f;               // 施法前目标 HP（伤害断言）
+    float m_skillTestDropBaseline = 0.0f;                 // Stage3 首次技能伤害（装备对照）
+    float m_skillTestManaBaseline = 0.0f;                 // MP 断言基线
+    int m_skillTestFailures = 0;
+    bool m_skillTestSummaryDone = false;
+    bool m_skillTestCastRequested = false;                // 当前阶段施法已请求（防重复）
+    legend::item::ItemInstanceId m_skillTestSwordId = 0;  // Stage7 装备测试实例
+    bool m_skillTestInterrupted = false;                  // Stage8 打断已施加
+    int m_skillTestLastStage = -1;                        // 阶段切换检测（重置 stageElapsed）
 };

@@ -12,6 +12,8 @@
 #include "Engine/Item/EquipmentComponent.h"
 #include "Engine/Item/EquipmentSystem.h"
 #include "Engine/Item/Inventory.h"
+#include "Engine/Skill/SkillLoadout.h"
+#include "Engine/Skill/SkillResource.h"
 
 // 玩家角色：类型标识 + Character Definition。
 // 组合（非继承）：Character 基础 + PlayerProgression（成长）+ Inventory（背包）+
@@ -45,6 +47,12 @@ public:
         return m_stats.GetBaseStats();
     }
 
+    // ---- 阶段8：技能资源 / 技能栏 ----
+    legend::skill::SkillResource& GetSkillResource() { return m_skillResource; }
+    const legend::skill::SkillResource& GetSkillResource() const { return m_skillResource; }
+    legend::skill::SkillLoadout& GetLoadout() { return m_loadout; }
+    const legend::skill::SkillLoadout& GetLoadout() const { return m_loadout; }
+
     // 装备背包实例（事务安全：失败时背包/装备栏状态不变）；成功后 Recalculate
     legend::item::EquipmentOpResult EquipInstance(legend::item::ItemInstanceId instanceId);
     // 卸下槽位装备回背包（背包满时失败、装备留槽）；成功后 Recalculate
@@ -59,4 +67,6 @@ private:
     legend::item::EquipmentComponent m_equipment; // 阶段7：6 装备槽
     PlayerStatsComponent m_stats;                 // 阶段7：base stats + Recalculate
     const legend::item::ItemDatabase* m_itemDatabase = nullptr;
+    legend::skill::SkillResource m_skillResource; // 阶段8：MP（独立组件，不进 CombatStats）
+    legend::skill::SkillLoadout m_loadout;        // 阶段8：4 技能槽
 };
