@@ -339,4 +339,6 @@ private:
     // 阶段8.3：临时装备清理验收
     void RunSkillTemporaryEquipmentCleanupCheck();
     void RunSkillEquipmentFailureCleanupCheck();
+    // 阶段8.4：临时装备 Final Stats 重算验收（单次 + 100 次防漂移循环）
+    void RunSkillTemporaryEquipmentStatsCheck();
 };

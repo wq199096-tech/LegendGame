@@ -213,6 +213,8 @@ void GameScene::OnLoad() {
         // 阶段8.3：临时装备统一清理验收（场景A/B/C + 模拟 FAIL/timeout 路径）
         RunSkillTemporaryEquipmentCleanupCheck();
         RunSkillEquipmentFailureCleanupCheck();
+        // 阶段8.4：临时装备 Final Stats 重算验收（单次 + 100 次防漂移循环）
+        RunSkillTemporaryEquipmentStatsCheck();
     } else {
         LOG_INFO("[SkillChecks] pure checks only; world integration checks disabled.");
     }

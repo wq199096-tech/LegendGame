@@ -1996,6 +1996,8 @@ void GameScene::UpdateSkillTest(float deltaTime) {
             break;
         }
         m_skillTestSwordId = instance.instanceId;
+        // 阶段8.4指令五：装备前记录 Final Attack baseline（Cleanup 后立即断言恢复）
+        const float attackBeforeSword = m_player->GetCombatStats().attack;
         auto equip = m_player->EquipInstance(instance.instanceId);
         if (!equip.success) {
             fail("equip wooden_sword failed: " + equip.reason);
@@ -2037,6 +2039,14 @@ void GameScene::UpdateSkillTest(float deltaTime) {
               drop > m_skillTestDropBaseline + 1.0f);
         // 阶段8.3指令九：成功路径同样统一 Cleanup（不再手写 Unequip/TakeInstance/id=0）
         CleanupSkillTestTemporaryEquipment();
+        // 阶段8.4指令五/六：Cleanup 内部已重算——立即断言 Final Attack 恢复 baseline
+        //（不等 Stage90；后续 Stage8/9 还要用 Final Attack，禁止"Stage90 再恢复"）
+        if (std::fabs(m_player->GetCombatStats().attack - attackBeforeSword) > 0.001f) {
+            fail("final attack not restored after cleanup");
+            m_skillTestStage = 90;
+            break;
+        }
+        LOG_INFO("[SkillTest] temporary equipment stats restored.");
         target->GetCombatStats().SetHp(target->GetCombatStats().maxHp);
         target->ReturnToNormal();
         pass("equipment skill damage verified");
@@ -2772,22 +2782,29 @@ void GameScene::CleanupSkillTestTemporaryEquipment() {
     }
     auto& equipment = m_player->GetEquipment();
     auto& bag = m_player->GetInventory();
+    bool equipmentChanged = false; // 阶段8.4指令二：装备槽变化才重算 Final Stats
     // 1) 若测试剑还装备在 Weapon 槽：直接取出销毁（不等背包空间，指令五）
     if (const auto* equipped = equipment.GetEquipped(legend::item::EquipmentSlotType::Weapon);
         equipped != nullptr && equipped->instanceId == m_skillTestSwordId) {
         auto taken = equipment.TakeEquipped(legend::item::EquipmentSlotType::Weapon);
         if (taken.has_value()) {
+            equipmentChanged = true; // 阶段8.4指令二：Weapon 槽变化 → Final 重算
             LOG_INFO("[SkillTest] temporary equipment removed from Weapon slot (instance " +
                      std::to_string(m_skillTestSwordId) + ").");
         }
     }
-    // 2) 若测试剑仍在背包：按 instanceId 精确移除
+    // 2) 若测试剑仍在背包：按 instanceId 精确移除（背包实例不影响 Final，无需重算）
     if (bag.FindByInstanceId(m_skillTestSwordId) != nullptr) {
         (void)bag.TakeInstance(m_skillTestSwordId);
         LOG_INFO("[SkillTest] temporary equipment removed from inventory (instance " +
                  std::to_string(m_skillTestSwordId) + ").");
     }
     m_skillTestSwordId = 0;
+    // 阶段8.4指令一/三：装备槽变化 → 立即走正式重算 API（Final = Base + Equipment，
+    // HP clamp 到新 maxHp 由 RecalculateCombatStats 内部正式逻辑处理——不硬编码 -12）
+    if (equipmentChanged) {
+        m_player->RecalculateCombatStats();
+    }
     LOG_INFO("[SkillTest] temporary equipment cleaned.");
 }
 
@@ -3009,6 +3026,13 @@ void GameScene::RunSkillFullStateRestoreCheck() {
     fail("player final stats restored (no equipment => final == base)",
          std::fabs(m_player->GetCombatStats().attack -
                    snapshotCopy.playerBaseStats.attack) < 0.001f);
+    // 阶段8.4指令十六：Final Defense/MaxHP 同样与 baseline 一致（不只 attack）
+    fail("player final defense restored (no equipment)",
+         std::fabs(m_player->GetCombatStats().defense -
+                   snapshotCopy.playerBaseStats.defense) < 0.001f);
+    fail("player final maxHp restored (no equipment)",
+         std::fabs(m_player->GetCombatStats().maxHp -
+                   snapshotCopy.playerBaseStats.maxHp) < 0.001f);
     fail("pending level-ups cleared",
          m_player->GetProgression().GetPendingLevelUps().empty());
     bool worldMatch = true;
@@ -3135,6 +3159,7 @@ void GameScene::RunSkillTemporaryEquipmentCleanupCheck() {
     // ---- 场景B：B AddInstance + Equip -> Cleanup -> 槽与背包均无 B ----
     legend::item::ItemInstance swordB = makeInstance(*swordDef);
     check("scenario B: instance added", bag.AddInstance(swordB, swordDef));
+    const float attackBeforeB = m_player->GetCombatStats().attack; // 阶段8.4：装备前 baseline
     const auto equipB = m_player->EquipInstance(swordB.instanceId);
     check("scenario B: equipped", equipB.success);
     if (equipB.success) {
@@ -3146,6 +3171,9 @@ void GameScene::RunSkillTemporaryEquipmentCleanupCheck() {
               equipped == nullptr || equipped->instanceId != swordB.instanceId);
         check("scenario B: inventory free of B",
               bag.FindByInstanceId(swordB.instanceId) == nullptr);
+        // 阶段8.4指令十一：Final Attack 立即恢复 baseline（Cleanup 内部已重算）
+        check("scenario B: final attack restored to baseline",
+              std::fabs(m_player->GetCombatStats().attack - attackBeforeB) < 0.001f);
     }
     // 场景C收尾：B 清理后 C 必须仍在（只按 instanceId 删除，不按 definitionId）
     check("scenario C: kept after B cleanup",
@@ -3209,6 +3237,7 @@ void GameScene::RunSkillEquipmentFailureCleanupCheck() {
     instanceB.definitionId = "wooden_sword";
     instanceB.quantity = 1;
     check("fail path B: instance added", bag.AddInstance(instanceB, swordDef));
+    const float attackBeforeB = m_player->GetCombatStats().attack; // 阶段8.4：装备前 baseline
     const auto equipB = m_player->EquipInstance(instanceB.instanceId);
     check("fail path B: equipped (precondition)", equipB.success);
     if (equipB.success) {
@@ -3220,7 +3249,93 @@ void GameScene::RunSkillEquipmentFailureCleanupCheck() {
         check("fail path B: no inventory residue",
               bag.FindByInstanceId(instanceB.instanceId) == nullptr);
         check("fail path B: id reset", m_skillTestSwordId == 0);
+        // 阶段8.4指令十四：FAIL 路径 Final Attack 同样立即恢复 baseline
+        check("fail path B: final attack restored to baseline",
+              std::fabs(m_player->GetCombatStats().attack - attackBeforeB) < 0.001f);
     }
     LOG_INFO("[SkillEquipmentFailureCleanupCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillTemporaryEquipmentStatsCheck] ====================
+// 阶段8.4指令七/八/九：临时装备 Final Stats 重算验收——
+// 1) 单次：wooden_sword 装备后 Final Attack == base + attackBonus(12)，Cleanup 后
+//    立即恢复 baseline（走正式 RecalculateCombatStats，绝不硬编码差值）
+// 2) 防漂移：100 次循环（创建 -> 装备 -> Cleanup），每轮结束 Final Attack == baseline，
+//    最终无任何漂移；HP clamp 语义由 RecalculateCombatStats 内部正式逻辑保证
+//   （卸下超限降、穿上不补满）——未来任何带 maxHpBonus 的装备同样自动正确
+void GameScene::RunSkillTemporaryEquipmentStatsCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillTemporaryEquipmentStatsCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillTemporaryEquipmentStatsCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    const legend::item::ItemDefinition* swordDef =
+        m_worldActors.GetItemDatabase().Get("wooden_sword");
+    check("wooden_sword definition present", swordDef != nullptr);
+    if (swordDef == nullptr) {
+        LOG_INFO("[SkillTemporaryEquipmentStatsCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    auto& bag = m_player->GetInventory();
+    auto& equipment = m_player->GetEquipment();
+
+    // ---- 单次：装备 -> Final == base + bonus -> Cleanup -> 立即恢复 baseline ----
+    const float baseAttack = m_player->GetBaseCombatStats().attack;
+    const float finalBefore = m_player->GetCombatStats().attack; // 无装备 => final == base
+    legend::item::ItemInstance sword;
+    sword.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+    sword.definitionId = "wooden_sword";
+    sword.quantity = 1;
+    check("single: instance added", bag.AddInstance(sword, swordDef));
+    const auto equipped = m_player->EquipInstance(sword.instanceId);
+    check("single: equipped", equipped.success);
+    if (equipped.success) {
+        const float finalEquipped = m_player->GetCombatStats().attack;
+        check("single: final attack == base + attackBonus",
+              std::fabs(finalEquipped - (baseAttack + swordDef->equipment.attackBonus)) <
+                  0.001f);
+        m_skillTestSwordId = sword.instanceId;
+        CleanupSkillTestTemporaryEquipment();
+        check("single: cleanup reset id", m_skillTestSwordId == 0);
+        check("single: final attack restored immediately",
+              std::fabs(m_player->GetCombatStats().attack - finalBefore) < 0.001f);
+    }
+
+    // ---- 防漂移：100 次循环（每轮创建 -> 装备 -> Cleanup -> Final == baseline）----
+    int drift = 0;
+    for (int round = 0; round < 100; ++round) {
+        legend::item::ItemInstance loopSword;
+        loopSword.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+        loopSword.definitionId = "wooden_sword";
+        loopSword.quantity = 1;
+        if (!bag.AddInstance(loopSword, swordDef)) {
+            ++drift; // 满包等异常计为漂移
+            break;
+        }
+        const auto loopEquip = m_player->EquipInstance(loopSword.instanceId);
+        if (!loopEquip.success) {
+            ++drift;
+            break;
+        }
+        m_skillTestSwordId = loopSword.instanceId;
+        CleanupSkillTestTemporaryEquipment(); // 内部重算 Final Stats
+        if (std::fabs(m_player->GetCombatStats().attack - finalBefore) > 0.001f) {
+            ++drift;
+            break;
+        }
+    }
+    check("100 rounds: no attack drift", drift == 0);
+    check("100 rounds: final attack == baseline",
+          std::fabs(m_player->GetCombatStats().attack - finalBefore) < 0.001f);
+    check("100 rounds: weapon slot empty",
+          equipment.GetEquipped(legend::item::EquipmentSlotType::Weapon) == nullptr);
+    LOG_INFO("[SkillTemporaryEquipmentStatsCheck] completed, failures = " +
              std::to_string(failures));
 }
