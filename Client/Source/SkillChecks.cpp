@@ -2035,10 +2035,8 @@ void GameScene::UpdateSkillTest(float deltaTime) {
         const float drop = m_skillTestTargetHpBefore - target->GetCombatStats().hp;
         check("equipped skill drop > unequipped baseline",
               drop > m_skillTestDropBaseline + 1.0f);
-        // 卸装 + 清理测试实例 + 还原目标（即使被打死也复活，保证 stage8 有活目标）
-        (void)m_player->UnequipSlot(legend::item::EquipmentSlotType::Weapon);
-        (void)m_player->GetInventory().TakeInstance(m_skillTestSwordId);
-        m_skillTestSwordId = 0;
+        // 阶段8.3指令九：成功路径同样统一 Cleanup（不再手写 Unequip/TakeInstance/id=0）
+        CleanupSkillTestTemporaryEquipment();
         target->GetCombatStats().SetHp(target->GetCombatStats().maxHp);
         target->ReturnToNormal();
         pass("equipment skill damage verified");
@@ -2227,6 +2225,9 @@ void GameScene::UpdateSkillTest(float deltaTime) {
     case 90: { // 汇总 + 世界恢复（所有退出路径统一入口：正常/FAIL/timeout 均到达此处）
         if (!m_skillTestSummaryDone) {
             m_skillTestSummaryDone = true;
+            // 阶段8.3指令十：统一清理顺序——1) 临时装备 2) 正式掉落表 3) 世界快照 4) Skill/Target
+            // （FAIL/timeout/各步骤失败 Stage7 失败分支直接 stage=90，无单独清理分支，指令十一）
+            CleanupSkillTestTemporaryEquipment(); // [SkillTest] temporary equipment cleaned.
             // 阶段8.1指令十三：恢复正式 slime 掉落表（禁止空表冒充，阶段7.2 同原则）
             RestoreSkillTestLootOverride(); // [SkillTest] official loot restored.
             // 阶段8.2指令二十：RestoreSkillWorldSnapshot 内部按序恢复——
@@ -2758,6 +2759,38 @@ void GameScene::RestoreSkillTestLootOverride() {
     LOG_INFO("[SkillTest] official loot restored.");
 }
 
+// ==================== 阶段8.3：临时装备统一清理 ====================
+// Auto Skill Test Stage7 创建的 wooden_sword 测试实例（m_skillTestSwordId）：
+// - 幂等：id==0 直接返回，可重复调用
+// - Equip 中：直接 TakeEquipped 取出（不要求背包空位——目标是移除测试物品，不是还给玩家）
+// - 在背包中：按 instanceId TakeInstance 移除
+// - 只按 instanceId 删除（绝不按 definitionId=wooden_sword——玩家可能真实拥有同名装备）
+void GameScene::CleanupSkillTestTemporaryEquipment() {
+    if (m_skillTestSwordId == 0 || m_player == nullptr) {
+        m_skillTestSwordId = 0; // 幂等：无测试实例（或无玩家）即复位
+        return;
+    }
+    auto& equipment = m_player->GetEquipment();
+    auto& bag = m_player->GetInventory();
+    // 1) 若测试剑还装备在 Weapon 槽：直接取出销毁（不等背包空间，指令五）
+    if (const auto* equipped = equipment.GetEquipped(legend::item::EquipmentSlotType::Weapon);
+        equipped != nullptr && equipped->instanceId == m_skillTestSwordId) {
+        auto taken = equipment.TakeEquipped(legend::item::EquipmentSlotType::Weapon);
+        if (taken.has_value()) {
+            LOG_INFO("[SkillTest] temporary equipment removed from Weapon slot (instance " +
+                     std::to_string(m_skillTestSwordId) + ").");
+        }
+    }
+    // 2) 若测试剑仍在背包：按 instanceId 精确移除
+    if (bag.FindByInstanceId(m_skillTestSwordId) != nullptr) {
+        (void)bag.TakeInstance(m_skillTestSwordId);
+        LOG_INFO("[SkillTest] temporary equipment removed from inventory (instance " +
+                 std::to_string(m_skillTestSwordId) + ").");
+    }
+    m_skillTestSwordId = 0;
+    LOG_INFO("[SkillTest] temporary equipment cleaned.");
+}
+
 // ==================== [SkillProgressionRestoreCheck] ====================
 // 阶段8.2指令九/十/十一：真实升级（≥2级）→ Restore → Level/currentExp/totalExp/
 // Base Stats（maxHp/attack/defense）/Final Stats/pendingLevelUps 全部回滚。
@@ -2902,6 +2935,18 @@ void GameScene::RunSkillFullStateRestoreCheck() {
     }
     CaptureSkillWorldSnapshot();
     const auto snapshotCopy = m_skillWorldSnapshot; // 比对基线（Restore 不清 captured）
+    // 阶段8.3指令五：Inventory + Equipment instanceId 集合基线（Restore 后按集合对比）
+    std::vector<legend::item::ItemInstanceId> bagBefore;
+    for (std::size_t i = 0; i < m_player->GetInventory().GetCapacity(); ++i) {
+        if (const auto* item = m_player->GetInventory().GetSlot(i); item != nullptr) {
+            bagBefore.push_back(item->instanceId);
+        }
+    }
+    std::vector<legend::item::ItemInstanceId> equippedBefore;
+    m_player->GetEquipment().ForEachEquipped(
+        [&equippedBefore](const legend::item::ItemInstance& item) {
+            equippedBefore.push_back(item.instanceId);
+        });
     RestoreGuard skillRestoreGuard{this};
     legend::world::MonsterCharacter* boar = nullptr;
     for (legend::world::MonsterCharacter* monster : m_worldActors.GetMonsters()) {
@@ -2994,7 +3039,188 @@ void GameScene::RunSkillFullStateRestoreCheck() {
     fail("combat recent events empty",
          m_worldActors.GetCombatSystem().GetRecentEvents().empty() &&
              m_worldActors.GetCombatSystem().GetRecentDeaths().empty());
+    // 阶段8.3指令五：Inventory + Equipment instanceId 集合与基线一致
+    // （至少无测试实例残留——临时装备由 CleanupSkillTestTemporaryEquipment 统一保证）
+    std::vector<legend::item::ItemInstanceId> bagAfter;
+    for (std::size_t i = 0; i < m_player->GetInventory().GetCapacity(); ++i) {
+        if (const auto* item = m_player->GetInventory().GetSlot(i); item != nullptr) {
+            bagAfter.push_back(item->instanceId);
+        }
+    }
+    std::vector<legend::item::ItemInstanceId> equippedAfter;
+    m_player->GetEquipment().ForEachEquipped(
+        [&equippedAfter](const legend::item::ItemInstance& item) {
+            equippedAfter.push_back(item.instanceId);
+        });
+    auto sameSet = [](const std::vector<legend::item::ItemInstanceId>& left,
+                      const std::vector<legend::item::ItemInstanceId>& right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (const auto id : left) {
+            bool found = false;
+            for (const auto other : right) {
+                if (other == id) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return false;
+            }
+        }
+        return true;
+    };
+    fail("inventory instanceId set matches baseline", sameSet(bagAfter, bagBefore));
+    fail("equipment instanceId set matches baseline",
+         sameSet(equippedAfter, equippedBefore));
+    fail("no test sword residue (cleanup resets id to 0)",
+         m_skillTestSwordId == 0 &&
+             m_player->GetInventory().FindByInstanceId(m_skillTestSwordId) == nullptr);
     (void)allMatch;
     LOG_INFO("[SkillFullStateRestoreCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillTemporaryEquipmentCleanupCheck] ====================
+// 阶段8.3指令十二：临时装备统一清理验收——
+// 场景A：实例A AddInstance（不装备）-> Cleanup -> 背包无A
+// 场景B：实例B AddInstance + Equip -> Cleanup -> Weapon 槽与背包均无 B
+// 场景C：预先放置"玩家真实"同定义实例C -> Cleanup 后 C 必须仍在（按 instanceId 精确删）
+void GameScene::RunSkillTemporaryEquipmentCleanupCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillTemporaryEquipmentCleanupCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillTemporaryEquipmentCleanupCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    const legend::item::ItemDefinition* swordDef =
+        m_worldActors.GetItemDatabase().Get("wooden_sword");
+    check("wooden_sword definition present", swordDef != nullptr);
+    if (swordDef == nullptr) {
+        LOG_INFO("[SkillTemporaryEquipmentCleanupCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    auto makeInstance = [](const legend::item::ItemDefinition& def) {
+        legend::item::ItemInstance instance;
+        instance.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+        instance.definitionId = def.id;
+        instance.quantity = 1;
+        return instance;
+    };
+    auto& bag = m_player->GetInventory();
+    auto& equipment = m_player->GetEquipment();
+
+    // ---- 场景C：预置"玩家真实"实例C（不注册为测试实例）----
+    legend::item::ItemInstance playerSword = makeInstance(*swordDef);
+    check("scenario C: player wooden_sword added", bag.AddInstance(playerSword, swordDef));
+    const legend::item::ItemInstanceId playerSwordId = playerSword.instanceId;
+
+    // ---- 场景A：A 入背包（不装备）-> Cleanup -> 背包无 A ----
+    legend::item::ItemInstance swordA = makeInstance(*swordDef);
+    check("scenario A: instance added", bag.AddInstance(swordA, swordDef));
+    m_skillTestSwordId = swordA.instanceId;
+    CleanupSkillTestTemporaryEquipment();
+    check("scenario A: cleanup cleared test id", m_skillTestSwordId == 0);
+    check("scenario A: inventory free of A",
+          bag.FindByInstanceId(swordA.instanceId) == nullptr);
+    check("scenario C: player wooden_sword kept",
+          bag.FindByInstanceId(playerSwordId) != nullptr);
+
+    // ---- 场景B：B AddInstance + Equip -> Cleanup -> 槽与背包均无 B ----
+    legend::item::ItemInstance swordB = makeInstance(*swordDef);
+    check("scenario B: instance added", bag.AddInstance(swordB, swordDef));
+    const auto equipB = m_player->EquipInstance(swordB.instanceId);
+    check("scenario B: equipped", equipB.success);
+    if (equipB.success) {
+        m_skillTestSwordId = swordB.instanceId;
+        CleanupSkillTestTemporaryEquipment();
+        check("scenario B: cleanup cleared test id", m_skillTestSwordId == 0);
+        const auto* equipped = equipment.GetEquipped(legend::item::EquipmentSlotType::Weapon);
+        check("scenario B: weapon slot free of B",
+              equipped == nullptr || equipped->instanceId != swordB.instanceId);
+        check("scenario B: inventory free of B",
+              bag.FindByInstanceId(swordB.instanceId) == nullptr);
+    }
+    // 场景C收尾：B 清理后 C 必须仍在（只按 instanceId 删除，不按 definitionId）
+    check("scenario C: kept after B cleanup",
+          bag.FindByInstanceId(playerSwordId) != nullptr);
+
+    // 幂等：id=0 再调 Cleanup 无副作用
+    m_skillTestSwordId = 0;
+    CleanupSkillTestTemporaryEquipment();
+    check("idempotent: second cleanup safe", m_skillTestSwordId == 0);
+
+    // 测试自清：移除预置的 C（Check 本身不留污染）
+    const auto removedC = bag.TakeInstance(playerSwordId);
+    check("scenario C: removed (test hygiene)", removedC.has_value());
+    LOG_INFO("[SkillTemporaryEquipmentCleanupCheck] completed, failures = " +
+             std::to_string(failures));
+}
+
+// ==================== [SkillEquipmentFailureCleanupCheck] ====================
+// 阶段8.3指令十三：模拟 Stage7 FAIL/timeout 路径——失败出口跳 stage90 后由
+// Stage90 统一 Cleanup（等价于直接调 CleanupSkillTestTemporaryEquipment），无残留。
+// 场景A：Add 成功 + Equip 失败（中途失败）-> Cleanup -> 背包无残留
+// 场景B：已装备后 timeout -> Cleanup -> Weapon 槽 + 背包无残留
+void GameScene::RunSkillEquipmentFailureCleanupCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogSkillCheck("SkillEquipmentFailureCleanupCheck", name, pass, failures);
+    };
+    if (m_player == nullptr) {
+        check("player present", false);
+        LOG_INFO("[SkillEquipmentFailureCleanupCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    const legend::item::ItemDefinition* swordDef =
+        m_worldActors.GetItemDatabase().Get("wooden_sword");
+    check("wooden_sword definition present", swordDef != nullptr);
+    if (swordDef == nullptr) {
+        LOG_INFO("[SkillEquipmentFailureCleanupCheck] completed, failures = " +
+                 std::to_string(failures));
+        return;
+    }
+    auto& bag = m_player->GetInventory();
+    auto& equipment = m_player->GetEquipment();
+
+    // ---- 场景A：Add 成功 + Equip 失败（Stage7 中途失败，等价 stage=90）----
+    legend::item::ItemInstance instanceA;
+    instanceA.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+    instanceA.definitionId = "wooden_sword";
+    instanceA.quantity = 1;
+    check("fail path A: instance added", bag.AddInstance(instanceA, swordDef));
+    m_skillTestSwordId = instanceA.instanceId;
+    // 故意不调用 EquipInstance（等价 Equip 失败）；Stage90 等价清理：
+    CleanupSkillTestTemporaryEquipment();
+    check("fail path A: no inventory residue",
+          bag.FindByInstanceId(instanceA.instanceId) == nullptr);
+    check("fail path A: id reset", m_skillTestSwordId == 0);
+
+    // ---- 场景B：已装备后 timeout（等价 stage=90）----
+    legend::item::ItemInstance instanceB;
+    instanceB.instanceId = legend::item::ItemInstanceIdAllocator::Next();
+    instanceB.definitionId = "wooden_sword";
+    instanceB.quantity = 1;
+    check("fail path B: instance added", bag.AddInstance(instanceB, swordDef));
+    const auto equipB = m_player->EquipInstance(instanceB.instanceId);
+    check("fail path B: equipped (precondition)", equipB.success);
+    if (equipB.success) {
+        m_skillTestSwordId = instanceB.instanceId;
+        CleanupSkillTestTemporaryEquipment();
+        const auto* equipped = equipment.GetEquipped(legend::item::EquipmentSlotType::Weapon);
+        check("fail path B: weapon slot free of B",
+              equipped == nullptr || equipped->instanceId != instanceB.instanceId);
+        check("fail path B: no inventory residue",
+              bag.FindByInstanceId(instanceB.instanceId) == nullptr);
+        check("fail path B: id reset", m_skillTestSwordId == 0);
+    }
+    LOG_INFO("[SkillEquipmentFailureCleanupCheck] completed, failures = " +
              std::to_string(failures));
 }

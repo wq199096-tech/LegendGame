@@ -210,6 +210,9 @@ void GameScene::OnLoad() {
         RunSkillProgressionRestoreCheck();
         RunSkillAggroRestoreCheck();
         RunSkillFullStateRestoreCheck();
+        // 阶段8.3：临时装备统一清理验收（场景A/B/C + 模拟 FAIL/timeout 路径）
+        RunSkillTemporaryEquipmentCleanupCheck();
+        RunSkillEquipmentFailureCleanupCheck();
     } else {
         LOG_INFO("[SkillChecks] pure checks only; world integration checks disabled.");
     }

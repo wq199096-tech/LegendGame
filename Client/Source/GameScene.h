@@ -333,4 +333,10 @@ private:
     void RunSkillFullStateRestoreCheck();
     // 阶段8.1：Auto Skill Test 掉落恢复（Stage90 统一，禁止空表冒充）
     void RestoreSkillTestLootOverride();
+    // 阶段8.3：Auto Skill Test 临时装备统一清理（幂等；只按 m_skillTestSwordId
+    // 的 instanceId 删除，绝不按 definitionId；Equip 中直接 TakeEquipped 不要求背包空位）
+    void CleanupSkillTestTemporaryEquipment();
+    // 阶段8.3：临时装备清理验收
+    void RunSkillTemporaryEquipmentCleanupCheck();
+    void RunSkillEquipmentFailureCleanupCheck();
 };
