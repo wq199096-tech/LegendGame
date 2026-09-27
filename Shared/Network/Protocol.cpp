@@ -22,8 +22,13 @@ template <typename Fn>
 bool DecodePayload(const std::uint8_t* data, std::size_t size, std::string& error, Fn&& fill) {
     ByteReader reader(data, size);
     fill(reader);
+    // 阶段9.1指令十七：payload 必须完整消费——多余垃圾字节 = malformed
     if (!reader.IsValid()) {
         error = "malformed payload";
+        return false;
+    }
+    if (reader.Remaining() != 0) {
+        error = "malformed payload (trailing bytes)";
         return false;
     }
     return true;

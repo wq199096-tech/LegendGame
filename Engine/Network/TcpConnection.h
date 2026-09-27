@@ -24,13 +24,19 @@ class TcpConnection : public std::enable_shared_from_this<TcpConnection> {
 public:
     using PacketHandler = std::function<void(const legend::network::Packet&)>;
     using CloseHandler = std::function<void(std::uint64_t, const std::error_code&)>;
+    // 阶段9.1指令三：内部关闭观察者（TcpServer 连接表清理用，与业务 CloseHandler 分离）
+    using InternalCloseHandler = std::function<void(std::uint64_t)>;
 
     TcpConnection(asio::ip::tcp::socket socket, std::uint64_t connectionId);
 
+    // 阶段9.1指令一/四：只能 Start 一次（防双 async_read 链）；重复调用 LOG_ERROR 拒绝
     void Start(PacketHandler onPacket, CloseHandler onClose);
+    void SetInternalCloseHandler(InternalCloseHandler handler);
     void Send(const legend::network::Packet& packet);
     void SendRaw(std::vector<std::uint8_t> bytes); // 已编码完整帧
     void Close();
+    // 阶段9.1：写队列清空后再关（ServerHello 等 pending 写先落盘——拒绝握手场景）
+    void CloseAfterFlush();
 
     bool IsConnected() const { return m_connected.load(); }
     std::uint64_t Id() const { return m_id; }
@@ -58,6 +64,9 @@ private:
 
     PacketHandler m_onPacket;
     CloseHandler m_onClose;
+    InternalCloseHandler m_internalClose; // TcpServer 连接表清理（Fail exactly-once 内调用）
+    bool m_started = false;               // 阶段9.1指令四：Start 防重入
+    bool m_closeAfterFlush = false;       // 写队列清空后关闭
     std::uint32_t m_sendSequence = 0;      // 指令二十：1,2,3...
     std::uint32_t m_lastReceivedSequence = 0; // 指令七十三
 };

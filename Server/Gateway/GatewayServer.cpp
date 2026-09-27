@@ -3,6 +3,7 @@
 #include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/ByteWriter.h"
+#include "Shared/Network/Protocol.h"
 
 #include <chrono>
 
@@ -65,8 +66,8 @@ void GatewayServer::OnClientAccepted(net::TcpConnectionPtr connection) {
 }
 
 void GatewayServer::OnClientPacket(std::uint64_t connectionId, const Packet& packet) {
-    LOG_INFO("[Gateway] Client #" + std::to_string(connectionId) + " packet id=" +
-             std::to_string(packet.header.messageId));
+    // 阶段9.1指令三十九：每包日志删除（心跳会刷屏）；INFO 只保留
+    // connect/handshake/login/disconnect/timeout
     auto it = m_sessions.find(connectionId);
     if (it == m_sessions.end()) {
         return;
@@ -74,6 +75,7 @@ void GatewayServer::OnClientPacket(std::uint64_t connectionId, const Packet& pac
     auto session = it->second;
     std::string error;
     if (!session->OnPacket(packet, error)) {
+        LOG_INFO("[Gateway] Client #" + std::to_string(connectionId) + " rejected: " + error);
         // 指令六十九/七十：协议错误 -> WARN + 断开（Gateway 进程保持运行，指令一百一十三）
         if (m_hooks.onClientClosed) {
             m_hooks.onClientClosed(connectionId, error);

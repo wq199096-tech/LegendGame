@@ -7,8 +7,18 @@
 
 namespace legend::network {
 
+// 阶段9.1指令十五：登录错误码（uint16 wire，不只靠 message 字符串）。
+enum class LoginErrorCode : std::uint16_t {
+    None = 0,
+    InvalidCredentials = 1,
+    ServiceUnavailable = 2,
+    Timeout = 3,
+    AlreadyPending = 4,
+    AlreadyAuthenticated = 5,
+};
+
 // 阶段9 指令四十三~五十六：业务 payload 编解码（全部经 ByteWriter/Reader，
-// 大端 + 长度校验；失败返回 false 不产生半包）。
+// 大端 + 长度校验 + 完整消费（阶段9.1指令十七：剩余字节非0即 malformed）；失败返回 false 不产生半包）。
 
 struct ClientHelloPayload {
     std::uint16_t protocolVersion = 0;

@@ -41,22 +41,13 @@ void TcpServer::DoAccept() {
         if (!ec) {
             const std::uint64_t id = self->AllocateConnectionId();
             auto connection = std::make_shared<TcpConnection>(std::move(self->m_nextSocket), id);
-            // Close 时从连接表移除（指令一百一十七：DisconnectCleanup）
-            connection->Start(
-                [self](const legend::network::Packet& packet) {
-                    // Packet 回调由 Server 子类注册；此处基类只做 accept
-                    (void)packet;
-                },
-                [self](std::uint64_t closedId, const std::error_code& closeEc) {
-                    self->RemoveConnection(closedId);
-                    if (self->m_onAccept) {
-                        // 复用 onAccept 通道通知关闭由子类实现——基类仅移除
-                    }
-                    (void)closeEc;
-                });
+            // 阶段9.1指令二/三：TcpServer 不再 Start（业务层唯一 Start 决定 handler）；
+            // 内部 close observer 负责连接表清理（指令一百一十七）
+            connection->SetInternalCloseHandler(
+                [self](std::uint64_t closedId) { self->RemoveConnection(closedId); });
             self->m_connections[id] = connection;
             if (self->m_onAccept) {
-                self->m_onAccept(connection);
+                self->m_onAccept(connection); // 业务层自行调用一次 Start
             }
         }
         self->m_nextSocket = asio::ip::tcp::socket(self->m_io);

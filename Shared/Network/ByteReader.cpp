@@ -1,5 +1,7 @@
 #include "Shared/Network/ByteReader.h"
 
+#include <bit>
+
 namespace legend::network {
 
 ByteReader::ByteReader(const std::uint8_t* data, std::size_t size)
@@ -56,14 +58,8 @@ std::int32_t ByteReader::ReadInt32() {
 }
 
 float ByteReader::ReadFloat() {
-    const std::uint32_t bits = ReadUInt32();
-    float value = 0.0f;
-    auto* dst = reinterpret_cast<unsigned char*>(&value);
-    dst[0] = static_cast<unsigned char>((bits >> 24) & 0xFFu);
-    dst[1] = static_cast<unsigned char>((bits >> 16) & 0xFFu);
-    dst[2] = static_cast<unsigned char>((bits >> 8) & 0xFFu);
-    dst[3] = static_cast<unsigned char>(bits & 0xFFu);
-    return value;
+    // 阶段9.1指令二十一：bit_cast 还原 IEEE-754
+    return std::bit_cast<float>(ReadUInt32());
 }
 
 bool ByteReader::ReadBool() {

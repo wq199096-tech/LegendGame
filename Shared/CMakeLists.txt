@@ -8,6 +8,7 @@ add_library(LegendSharedNetwork STATIC
     Network/ByteReader.cpp
     Network/PacketCodec.cpp
     Network/NetworkErrors.cpp
+    Network/Protocol.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})

@@ -245,10 +245,20 @@ void RunNetworkChecks() {
             socket.non_blocking(true);
             std::size_t received = 0;
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-            while (received < kPacketHeaderSize &&
-                   std::chrono::steady_clock::now() < deadline) {
+            while (std::chrono::steady_clock::now() < deadline) {
                 std::error_code readEc;
                 received += socket.read_some(asio::buffer(response), readEc);
+                // 阶段9.1：必须收满完整帧（16B header + payloadSize）再解码
+                if (received >= kPacketHeaderSize) {
+                    PacketHeader header;
+                    std::string headerError;
+                    if (PacketCodec::DecodeHeader(response.data(), received, header,
+                                                  headerError)) {
+                        if (received >= kPacketHeaderSize + header.payloadSize) {
+                            break;
+                        }
+                    }
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
             bool rejected = false;
@@ -258,7 +268,12 @@ void RunNetworkChecks() {
                 if (PacketCodec::DecodePacket(response.data(), received, decoded, decodeError)) {
                     ByteReader reader(decoded.payload.data(), decoded.payload.size());
                     rejected = !reader.ReadBool(); // accepted == false
+                } else {
+                    std::printf("[diag] decode failed: %s (received=%zu)\n", decodeError.c_str(),
+                                received);
                 }
+            } else {
+                std::printf("[diag] no response header (received=%zu)\n", received);
             }
             Check("BadVersionHandshakeCheck: version 999 rejected (accepted=false)", rejected);
         } else {

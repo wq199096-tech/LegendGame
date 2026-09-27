@@ -177,11 +177,11 @@ void GameNetworkClient::OnPacket(const Packet& packet) {
             return;
         }
         case MessageId::HeartbeatPong: {
+            // 阶段9.1指令二十：Pong 只有 pingSequence+serverTimeMs；RTT 用本地 lastPingTime
             ByteReader reader(packet.payload.data(), packet.payload.size());
             reader.ReadUInt32(); // pingSequence
-            reader.ReadUInt64(); // serverTime
-            reader.ReadUInt64(); // clientTime echo
-            if (!reader.IsValid()) {
+            reader.ReadUInt64(); // serverTimeMs
+            if (!reader.IsValid() || reader.Remaining() != 0) {
                 return;
             }
             const auto now = std::chrono::steady_clock::now();

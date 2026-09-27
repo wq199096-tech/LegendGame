@@ -24,6 +24,15 @@ struct GatewayConfig {
     std::uint16_t loginPort = 7100;         // 指令四十一
     double loginReconnectSeconds = 2.0;     // 指令五十：服务间重连节奏（测试可调短）
     double pendingLoginTimeoutSeconds = 4.0; // 指令六十：3~5 秒无响应超时（测试可调短）
+    double clientIdleTimeoutSeconds = 20.0; // 阶段9.1指令三十七/三十八：正式 20s（测试 0.5s）
+};
+
+// 阶段9.1指令十五：登录结果错误码透传（hooks 用 uint64 accountId，指令十四）
+struct LoginResult {
+    bool success = false;
+    std::uint64_t accountId = 0;
+    std::uint16_t errorCode = 0;
+    std::string message;
 };
 
 class GatewayServer : public std::enable_shared_from_this<GatewayServer> {
@@ -31,7 +40,7 @@ public:
     // 测试钩子（阶段9 验收用；正式运行时可空）
     struct Hooks {
         std::function<void(std::uint64_t connectionId)> onClientHandshakeComplete;
-        std::function<void(std::uint64_t connectionId, bool success, std::uint32_t accountId,
+        std::function<void(std::uint64_t connectionId, bool success, std::uint64_t accountId,
                            const std::string& displayName)>
             onLoginResult;
         std::function<void(std::uint64_t connectionId, const std::string& reason)> onClientClosed;
@@ -44,6 +53,8 @@ public:
     void Stop();
 
     std::size_t ClientCount() const;
+    // 阶段9.1指令三十四：测试只读统计（DisconnectCleanup 验证 Pending 清空）
+    std::size_t PendingLoginCount() const { return m_pendingLogins.size(); }
     bool IsLoginConnected() const { return m_loginAvailable.load(); }
     void SetHooks(Hooks hooks) { m_hooks = std::move(hooks); }
 

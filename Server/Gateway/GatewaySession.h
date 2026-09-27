@@ -4,6 +4,7 @@
 
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
+#include "Shared/Network/Protocol.h" // 阶段9.1：LoginErrorCode/payload Encode/Decode
 
 #include <chrono>
 #include <cstdint>
@@ -32,8 +33,8 @@ public:
     void SendPacket(const legend::network::Packet& packet);
     void Disconnect();
 
-    // 登录结果回填（GatewayServer 从 LoginServer 收到 LoginGatewayResponse 后调用）
-    void CompleteLogin(bool success, std::uint32_t accountId, const std::string& displayName,
+    // 登录结果回填（阶段9.1指令七：只更新状态，不发送——GatewayServer 统一单发）
+    void CompleteLogin(bool success, std::uint64_t accountId, const std::string& displayName,
                        const std::string& message);
 
     // 一次性取出待转发登录数据（GatewayServer 检测到 LoginPending 后调用；
@@ -52,7 +53,7 @@ public:
 private:
     bool HandleHandshake(const legend::network::Packet& packet, std::string& error);
     bool HandlePostHandshake(const legend::network::Packet& packet, std::string& error);
-    void SendLoginError(const std::string& message);
+    void SendLoginError(legend::network::LoginErrorCode errorCode, const std::string& message);
 
     legend::net::TcpConnectionPtr m_connection;
     std::uint64_t m_connectionId = 0;
@@ -61,6 +62,8 @@ private:
     std::string m_pendingUsername; // 暂存待转发（token 不落日志，指令五十二）
     std::string m_pendingToken;
     bool m_hasPendingLogin = false;
+    std::uint64_t m_accountId = 0;  // 阶段9.1指令十四：accountId 统一 uint64
+    std::string m_displayName;
     std::uint32_t m_lastPingSequence = 0;
     std::chrono::steady_clock::time_point m_lastPacketTime{std::chrono::steady_clock::now()};
 };

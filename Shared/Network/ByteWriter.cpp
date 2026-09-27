@@ -2,6 +2,8 @@
 
 #include "Shared/Network/NetworkConstants.h"
 
+#include <bit>
+
 namespace legend::network {
 
 ByteWriter::ByteWriter(std::vector<std::uint8_t>& buffer) : m_buffer(buffer) {}
@@ -33,14 +35,8 @@ void ByteWriter::WriteInt32(std::int32_t value) {
 }
 
 void ByteWriter::WriteFloat(float value) {
-    // IEEE-754 位型拷贝（避免类型双关 UB），再按 big endian 序列化
-    std::uint32_t bits = 0;
-    static_assert(sizeof(bits) == sizeof(value), "float must be 32-bit");
-    const auto* src = reinterpret_cast<const unsigned char*>(&value);
-    for (int i = 0; i < 4; ++i) {
-        bits = (bits << 8) | static_cast<std::uint32_t>(src[i]);
-    }
-    WriteUInt32(bits);
+    // 阶段9.1指令二十一：C++20 bit_cast（替代类型双关），再按 big endian 序列化
+    WriteUInt32(std::bit_cast<std::uint32_t>(value));
 }
 
 void ByteWriter::WriteBool(bool value) {
