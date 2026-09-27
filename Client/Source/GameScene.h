@@ -120,6 +120,10 @@ private:
     void RunOfficialEquipmentLootCheck();
     // LEGEND_AUTO_EQUIPMENT_TEST=1：阶段7 验收时间线（Kill->Loot->Pickup->Equip->Stats->Swap->Unequip）
     void UpdateEquipmentTest(float deltaTime);
+    // 阶段7.2：统一恢复正式 slime 掉落表（所有退出路径：正常/FAIL/timeout 均在 Stage90 调用）
+    void RestoreEquipmentTestLootOverride();
+    // 阶段7.2 自检：Override 后按正式表逐项恢复（itemId/chance/min/max 全一致）
+    void RunEquipmentTestRestoreCheck();
     // F6：Equipment Debug 覆盖层（6 槽状态 + Base/Equipment/Final ATK/DEF/HP 几何显示）
     void DrawEquipmentDebugOverlay(legend::render::SpriteBatch& batch);
     // 窗口标题 Equipment 段（" | Equip: n/6"，LogMapStats 调用）
@@ -249,4 +253,7 @@ private:
     float m_equipTestAttackBase = 0.0f;
     int m_equipTestFailures = 0;
     bool m_equipTestSummaryDone = false;
+    // 阶段7.2：正式 slime 掉落表保存（Stage0 首次进入时保存一次，Stage90 统一恢复）
+    std::vector<legend::world::LootEntry> m_equipTestOriginalSlimeLoot;
+    bool m_equipTestLootSaved = false;
 };

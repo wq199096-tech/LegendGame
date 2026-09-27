@@ -930,3 +930,77 @@ void GameScene::RunOfficialEquipmentLootCheck() {
     check("boar official loot has equipment", hasEquipmentLoot("boar"));
     LOG_INFO("[OfficialEquipmentLootCheck] completed, failures = " + std::to_string(failures));
 }
+
+// ==================== [EquipmentTestRestoreCheck] ====================
+// 阶段7.2：Override 后按正式表恢复——逐项验证 itemId/chance/min/max 全一致
+// （不能只比较 size）。使用与 UpdateEquipmentTest/RestoreEquipmentTestLootOverride
+// 相同的协议：保存正式表 -> Override -> Restore -> 逐项比对（等价测试逻辑，
+// 不触碰 Auto Test 运行时状态 m_equipTest*）。
+
+void GameScene::RunEquipmentTestRestoreCheck() {
+    int failures = 0;
+    auto check = [&failures](const std::string& name, bool pass) {
+        LogEquipCheck("EquipmentTestRestoreCheck", name, pass, failures);
+    };
+    const legend::item::ItemDatabase& items = m_worldActors.GetItemDatabase();
+    // 1) 保存正式 slime 掉落表（拷贝，等价 Stage0 协议）
+    const std::vector<legend::world::LootEntry> officialSlimeLoot =
+        m_worldActors.GetSpawner().GetLootEntries("slime");
+    check("official slime loot saved", !officialSlimeLoot.empty());
+
+    // 2) 正式表必须包含 slime_gel / small_potion / wooden_sword
+    auto hasEntry = [&officialSlimeLoot](const char* itemId) {
+        for (const auto& entry : officialSlimeLoot) {
+            if (entry.itemId == itemId) {
+                return true;
+            }
+        }
+        return false;
+    };
+    check("official table has slime_gel", hasEntry("slime_gel"));
+    check("official table has small_potion", hasEntry("small_potion"));
+    check("official table has wooden_sword", hasEntry("wooden_sword"));
+
+    // 3) Test Override：iron_sword x1（当前表只有 Override 内容）
+    std::vector<legend::world::LootEntry> overrideTable;
+    legend::world::LootEntry overrideEntry;
+    overrideEntry.itemId = "iron_sword";
+    overrideEntry.chance = 1.0f;
+    overrideEntry.min = 1;
+    overrideEntry.max = 1;
+    overrideTable.push_back(overrideEntry);
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", overrideTable);
+    const auto& overridden = m_worldActors.GetSpawner().GetLootEntries("slime");
+    bool onlyOverride = overridden.size() == 1 && overridden[0].itemId == "iron_sword" &&
+                        std::fabs(overridden[0].chance - 1.0f) < 0.0001f &&
+                        overridden[0].min == 1 && overridden[0].max == 1;
+    check("override table is iron_sword x1 only", onlyOverride);
+
+    // 4) 统一 Restore（等价 RestoreEquipmentTestLootOverride：用保存的正式表覆盖）
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", officialSlimeLoot);
+    LOG_INFO("[EquipmentTestRestoreCheck] official slime loot restored.");
+
+    // 5) 恢复后逐项验证：itemId/chance/min/max 全部与正式表一致（不能只比较 size）
+    const auto& restored = m_worldActors.GetSpawner().GetLootEntries("slime");
+    bool identical = restored.size() == officialSlimeLoot.size();
+    for (std::size_t i = 0; identical && i < restored.size(); ++i) {
+        identical = restored[i].itemId == officialSlimeLoot[i].itemId &&
+                    std::fabs(restored[i].chance - officialSlimeLoot[i].chance) < 0.0001f &&
+                    restored[i].min == officialSlimeLoot[i].min &&
+                    restored[i].max == officialSlimeLoot[i].max;
+    }
+    check("restored table identical entry-by-entry (itemId/chance/min/max)", identical);
+
+    // 6) 恢复后 OfficialEquipmentLootCheck 语义：slime 仍含 wooden_sword 正式低概率掉落
+    const legend::item::ItemDefinition* woodenDef = items.Get("wooden_sword");
+    bool woodenRestored = false;
+    for (const auto& entry : restored) {
+        if (entry.itemId == "wooden_sword" && entry.min == 1 && entry.max == 1 &&
+            entry.chance > 0.0f && entry.chance <= 1.0f &&
+            woodenDef != nullptr && woodenDef->type == legend::item::ItemType::Equipment) {
+            woodenRestored = true;
+        }
+    }
+    check("slime keeps official wooden_sword low-chance drop", woodenRestored);
+    LOG_INFO("[EquipmentTestRestoreCheck] completed, failures = " + std::to_string(failures));
+}

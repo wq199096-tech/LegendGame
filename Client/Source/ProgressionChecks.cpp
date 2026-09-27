@@ -788,6 +788,19 @@ void GameScene::RunDeathLootIntegrationCheck() {
     LOG_INFO("[DeathLootIntegrationCheck] completed, failures = " + std::to_string(failures));
 }
 
+// ==================== 阶段7.2：统一恢复正式 slime 掉落表 ====================
+// 所有退出路径（正常完成/FAIL/timeout/player missing/monster missing/各步骤失败）
+// 都汇入 Stage90 -> 首次进入时调用本函数；禁止用空 vector 冒充恢复。
+
+void GameScene::RestoreEquipmentTestLootOverride() {
+    if (!m_equipTestLootSaved) {
+        return; // 未保存过正式表（无 Override 发生）：不需要恢复
+    }
+    m_worldActors.GetSpawner().SetTestLootOverride("slime", m_equipTestOriginalSlimeLoot);
+    m_equipTestLootSaved = false;
+    LOG_INFO("[EquipmentTest] official slime loot restored.");
+}
+
 // ==================== LEGEND_AUTO_EQUIPMENT_TEST=1 时间线 ====================
 // 真实流程：Monster Death -> Loot(Override) -> Pickup -> Inventory -> Equip -> Stats ->
 // Swap -> Unequip -> instanceId 全程保持 -> Respawn。禁止绕过 Loot/Inventory 塞槽。
@@ -852,11 +865,19 @@ void GameScene::UpdateEquipmentTest(float deltaTime) {
     };
 
     switch (m_equipTestStage) {
-    case 0: { // 初始化 + Override wooden_sword + 选怪
+    case 0: { // 初始化 + 保存正式 slime 掉落表（仅一次、在 Override 之前）+ 选怪
         if (m_player == nullptr) {
             fail("player missing");
             m_equipTestStage = 90;
             break;
+        }
+        if (!m_equipTestLootSaved) {
+            // 阶段7.2：Override 之前保存完整正式掉落表（只能保存一次）
+            m_equipTestOriginalSlimeLoot =
+                m_worldActors.GetSpawner().GetLootEntries("slime");
+            m_equipTestLootSaved = true;
+            LOG_INFO("[EquipmentTest] official slime loot saved (" +
+                     std::to_string(m_equipTestOriginalSlimeLoot.size()) + " entries).");
         }
         setSwordOverride("wooden_sword");
         m_equipTestAttackBase = m_player->GetCombatStats().attack;
@@ -1090,9 +1111,9 @@ void GameScene::UpdateEquipmentTest(float deltaTime) {
         check("A and B instanceIds preserved end-to-end",
               std::find(ids.begin(), ids.end(), m_equipTestSwordA) != ids.end() &&
                   std::find(ids.begin(), ids.end(), m_equipTestSwordB) != ids.end());
-        // 还原正式掉落表（monster.json 原表）
-        m_worldActors.GetSpawner().SetTestLootOverride("slime", {});
-        pass("loot override restored to official table");
+        // 阶段7.2：正式掉落表恢复统一在 Stage90（RestoreEquipmentTestLootOverride），
+        // 不再使用空 vector 冒充恢复。
+        pass("instance lifecycle complete, entering restore stage");
         LOG_INFO("[EquipmentTest] waiting monster respawn for final check.");
         m_equipTestStage = 11;
         break;
@@ -1112,8 +1133,23 @@ void GameScene::UpdateEquipmentTest(float deltaTime) {
         m_equipTestStage = 90;
         break;
     }
-    case 90: { // 汇总
+    case 90: { // 汇总（所有退出路径统一入口：正常/FAIL/timeout 均到达此处）
+        // 阶段7.2：Stage90 首次进入时统一恢复正式掉落表（覆盖全部退出路径）+ 一次性验证
+        RestoreEquipmentTestLootOverride();
         if (!m_equipTestSummaryDone) {
+            if (!m_equipTestLootSaved && !m_equipTestOriginalSlimeLoot.empty()) {
+                // 恢复后逐项验证：itemId/chance/min/max 与正式表完全一致（不能只比较 size）
+                const auto& restored = m_worldActors.GetSpawner().GetLootEntries("slime");
+                bool identical = restored.size() == m_equipTestOriginalSlimeLoot.size();
+                for (std::size_t i = 0; identical && i < restored.size(); ++i) {
+                    identical = restored[i].itemId == m_equipTestOriginalSlimeLoot[i].itemId &&
+                                std::fabs(restored[i].chance -
+                                          m_equipTestOriginalSlimeLoot[i].chance) < 0.0001f &&
+                                restored[i].min == m_equipTestOriginalSlimeLoot[i].min &&
+                                restored[i].max == m_equipTestOriginalSlimeLoot[i].max;
+                }
+                check("official slime loot restored and verified entry-by-entry", identical);
+            }
             m_equipTestSummaryDone = true;
             LOG_INFO("[EquipmentTest] completed, failures = " +
                      std::to_string(m_equipTestFailures) + ", elapsed = " +
