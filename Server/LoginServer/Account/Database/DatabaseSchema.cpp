@@ -62,32 +62,87 @@ const Migration kMigrations[] = {
     {1, kMigration1Statements, static_cast<int>(std::size(kMigration1Statements))},
 };
 
-bool ReadSchemaVersion(Database& db, int& outVersion, std::string& error) {
-    Statement stmt;
-    if (!stmt.Prepare(db.Handle(), "SELECT version FROM schema_version;", error)) {
-        return false;
-    }
-    if (stmt.Step(error)) { // 有行
-        outVersion = static_cast<int>(stmt.ColumnInt64(0));
-        if (stmt.Step(error)) {
-            error = "schema_version table has more than one row";
+// ---------------------------------------------------------------------------
+// 阶段10.1：schema_version 单行化（COUNT(*) 恒为 1）
+// 新格式：id INTEGER PRIMARY KEY CHECK(id = 1) + version —— 以后 Migration
+// 用 UPSERT 写版本，v2/v3 不会再产生多行。
+// ---------------------------------------------------------------------------
+
+// 旧 v1 库兼容（指令四）：schema_version(version) 旧结构 → 新结构。
+// 只动 schema_version，绝不 DROP accounts/characters/sessions（指令五）。
+bool BootstrapSchemaVersion(Database& db, std::string& error) {
+    bool tableExists = false;
+    bool hasIdColumn = false;
+    {
+        Statement stmt;
+        if (!stmt.Prepare(db.Handle(), "PRAGMA table_info(schema_version);", error)) {
             return false;
+        }
+        while (stmt.Step(error)) {
+            tableExists = true;
+            if (stmt.ColumnText(1) == "id") {
+                hasIdColumn = true;
+            }
         }
         if (!error.empty()) {
             return false;
         }
-        return true;
     }
-    if (!error.empty()) {
-        return false; // Step 出错
+    if (!tableExists || hasIdColumn) {
+        return true; // 新库（无表）或已是新格式
     }
-    outVersion = 0; // 无行 = 空库
+    // 旧结构（仅 version 列）：事务内重建，MAX(version) 携带旧版本号
+    LOG_INFO("[DB] Upgrading legacy schema_version table to single-row format...");
+    if (!db.Execute("BEGIN IMMEDIATE;", error)) {
+        return false;
+    }
+    const char* fixStatements[] = {
+        "CREATE TABLE schema_version_new ("
+        "  id INTEGER PRIMARY KEY CHECK(id = 1),"
+        "  version INTEGER NOT NULL"
+        ");",
+        // 旧表为空时 COALESCE 取 0：后续 Migration 全部补跑（均 IF NOT EXISTS，安全）
+        "INSERT INTO schema_version_new (id, version) "
+        "SELECT 1, COALESCE(MAX(version), 0) FROM schema_version;",
+        "DROP TABLE schema_version;",
+        "ALTER TABLE schema_version_new RENAME TO schema_version;",
+    };
+    for (const char* sql : fixStatements) {
+        if (!db.Execute(sql, error)) {
+            db.Execute("ROLLBACK;", error);
+            return false;
+        }
+    }
+    if (!db.Execute("COMMIT;", error)) {
+        return false;
+    }
     return true;
 }
 
+// 读版本：新格式下 id 是主键，最多一行（无行 = 空库，version 0）。
+bool ReadSchemaVersion(Database& db, int& outVersion, std::string& error) {
+    Statement stmt;
+    if (!stmt.Prepare(db.Handle(), "SELECT version FROM schema_version WHERE id = 1;", error)) {
+        return false;
+    }
+    if (stmt.Step(error)) {
+        outVersion = static_cast<int>(stmt.ColumnInt64(0));
+        return true;
+    }
+    if (!error.empty()) {
+        return false;
+    }
+    outVersion = 0;
+    return true;
+}
+
+// 写版本：UPSERT（指令三）——无论写多少次，schema_version 恒为单行。
 bool WriteSchemaVersion(Database& db, int version, std::string& error) {
     Statement stmt;
-    if (!stmt.Prepare(db.Handle(), "INSERT INTO schema_version (version) VALUES (?);", error)) {
+    if (!stmt.Prepare(db.Handle(),
+                      "INSERT INTO schema_version (id, version) VALUES (1, ?) "
+                      "ON CONFLICT(id) DO UPDATE SET version = excluded.version;",
+                      error)) {
         return false;
     }
     stmt.BindInt64(1, version);
@@ -117,9 +172,15 @@ bool InitializeSchema(Database& db, std::string& error) {
         }
     }
 
-    // schema_version 表（指令六）。
+    // 阶段10.1：旧 v1 结构兼容升级（先于建表/读版本；只动 schema_version）。
+    if (!BootstrapSchemaVersion(db, error)) {
+        return false;
+    }
+
+    // schema_version 表（指令六：新格式，id 固定 1，天然单行）。
     if (!db.Execute(
             "CREATE TABLE IF NOT EXISTS schema_version ("
+            "  id INTEGER PRIMARY KEY CHECK(id = 1),"
             "  version INTEGER NOT NULL"
             ");",
             error)) {

@@ -14,6 +14,7 @@
 #include "Server/LoginServer/Account/AccountService.h"
 #include "Server/LoginServer/Account/CharacterService.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
+#include "Server/LoginServer/Account/DbWorker.h"
 #include "Server/LoginServer/Account/PasswordHasher.h"
 #include "Server/LoginServer/Account/SessionService.h"
 #include "Server/LoginServer/Account/TicketStore.h"
@@ -35,6 +36,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -48,6 +50,7 @@ using legend::account::AccountErrorCode;
 using legend::account::AccountService;
 using legend::account::CharacterService;
 using legend::account::Database;
+using legend::account::DbWorker;
 using legend::account::InitializeSchema;
 using legend::account::SessionService;
 using legend::account::TicketStore;
@@ -689,6 +692,161 @@ void RunCharacterServiceChecks() {
 }
 
 // ===========================================================================
+// 阶段10.1：schema_version 单行化 / 旧库兼容 / DbWorker Flush
+// ===========================================================================
+
+void RunSchemaHardeningChecks() {
+    // ---- SchemaSingleRowCheck（指令六）：新库初始化后恒单行 ----
+    {
+        const std::string path = TempDbPath("schema_single");
+        RemoveDb(path);
+        Database db;
+        std::string error;
+        bool ok = db.Open(path, error) && InitializeSchema(db, error);
+        Check("SchemaSingleRowCheck: fresh db schema_version COUNT == 1",
+              ok && QueryScalar(path, "SELECT COUNT(*) FROM schema_version;") == 1);
+        // 重复 InitializeSchema（幂等重入）仍单行
+        ok = ok && InitializeSchema(db, error);
+        Check("SchemaSingleRowCheck: re-init keeps single row",
+              ok && QueryScalar(path, "SELECT COUNT(*) FROM schema_version;") == 1);
+        db.Close();
+        RemoveDb(path);
+    }
+
+    // ---- MigrationV2SimulationCheck（指令七）：模拟未来 v2 Migration 写版本 ----
+    {
+        const std::string path = TempDbPath("schema_v2");
+        RemoveDb(path);
+        Database db;
+        std::string error;
+        bool ok = db.Open(path, error) && InitializeSchema(db, error);
+        // 模拟 v2 Migration 完成：以与 WriteSchemaVersion 相同的 UPSERT 写 version=2
+        //（旧实现此处 INSERT 会产生 1、2 两行）
+        if (ok) {
+            account::Statement stmt;
+            stmt.Prepare(db.Handle(),
+                         "INSERT INTO schema_version (id, version) VALUES (1, 2) "
+                         "ON CONFLICT(id) DO UPDATE SET version = excluded.version;",
+                         error);
+            stmt.Step(error);
+            ok = error.empty();
+        }
+        db.Close();
+        // 重新打开：version=2 且仍单行
+        Database db2;
+        ok = db2.Open(path, error) && ok;
+        const std::int64_t version =
+            ok ? QueryScalar(path, "SELECT version FROM schema_version WHERE id = 1;") : -1;
+        const std::int64_t count =
+            ok ? QueryScalar(path, "SELECT COUNT(*) FROM schema_version;") : -1;
+        Check("MigrationV2SimulationCheck: reopen version == 2, single row",
+              ok && version == 2 && count == 1);
+        db2.Close();
+        RemoveDb(path);
+    }
+
+    // ---- OldSchemaVersionCompatibilityCheck（指令八）：v1 旧结构兼容升级 ----
+    {
+        const std::string path = TempDbPath("schema_old");
+        RemoveDb(path);
+        Database db;
+        std::string error;
+        bool opened = db.Open(path, error);
+        // 手工构造旧 v1 结构：schema_version(version) 一行 1 + 已有账号数据
+        if (opened) {
+            opened = db.Execute("CREATE TABLE schema_version (version INTEGER NOT NULL);", error) &&
+                     db.Execute("INSERT INTO schema_version (version) VALUES (1);", error) &&
+                     db.Execute(
+                         "CREATE TABLE accounts ("
+                         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                         "  username TEXT NOT NULL UNIQUE COLLATE NOCASE,"
+                         "  password_hash TEXT NOT NULL,"
+                         "  created_at INTEGER NOT NULL,"
+                         "  last_login_at INTEGER,"
+                         "  status INTEGER NOT NULL DEFAULT 0,"
+                         "  failed_login_count INTEGER NOT NULL DEFAULT 0,"
+                         "  locked_until INTEGER"
+                         ");",
+                         error) &&
+                     db.Execute("INSERT INTO accounts (username, password_hash, created_at) "
+                                "VALUES ('legacy_user', 'legacy_hash', 1);",
+                                error);
+        }
+        db.Close();
+        // 兼容升级：InitializeSchema 自动把旧表迁到单行新格式，账号数据不丢
+        Database db2;
+        bool ok = db2.Open(path, error) && opened && InitializeSchema(db2, error);
+        const std::int64_t version =
+            ok ? QueryScalar(path, "SELECT version FROM schema_version WHERE id = 1;") : -1;
+        const std::int64_t count =
+            ok ? QueryScalar(path, "SELECT COUNT(*) FROM schema_version;") : -1;
+        const std::int64_t legacy =
+            ok ? QueryScalar(path, "SELECT COUNT(*) FROM accounts WHERE username='legacy_user';")
+               : -1;
+        // 账号表经 Repository 仍可正常写入
+        auto created = ok ? account::AccountRepository::CreateAccount(db2, "new_user", "hash2")
+                          : account::RepositoryResult<std::uint64_t>{};
+        Check("OldSchemaVersionCompatibilityCheck: old v1 db upgraded, data intact",
+              ok && version == 1 && count == 1 && legacy == 1 && created.success);
+        db2.Close();
+        RemoveDb(path);
+    }
+}
+
+void RunDbWorkerChecks() {
+    // ---- DbWorkerFlushCheck（指令十三）：Flush 必须等执行中任务完成 ----
+    {
+        DbWorker worker;
+        worker.Start();
+        std::atomic<bool> done{false};
+        worker.Post([&done] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            done.store(true);
+        });
+        worker.Flush(); // 若在任务完成前返回，此处 done 仍为 false
+        Check("DbWorkerFlushCheck: flush waits for running task", done.load());
+        worker.Stop();
+    }
+
+    // ---- DbWorkerMultipleFlushCheck（指令十四）：10 任务全部完成 ----
+    {
+        DbWorker worker;
+        worker.Start();
+        std::atomic<int> counter{0};
+        for (int i = 0; i < 10; ++i) {
+            worker.Post([&counter] { ++counter; });
+        }
+        worker.Flush();
+        Check("DbWorkerMultipleFlushCheck: counter == 10 after flush", counter.load() == 10);
+        worker.Stop();
+    }
+
+    // ---- DbWorkerStopCheck（指令十五）：Stop 后已入队任务全部完成、不得丢 ----
+    {
+        DbWorker worker;
+        worker.Start();
+        std::atomic<int> counter{0};
+        for (int i = 0; i < 20; ++i) {
+            worker.Post([&counter] { ++counter; });
+        }
+        worker.Stop(); // join 前必须清空队列
+        Check("DbWorkerStopCheck: all queued tasks complete after stop", counter.load() == 20);
+    }
+
+    // ---- 异常保护（指令十二）：任务抛异常不得杀死线程/卡死 Flush ----
+    {
+        DbWorker worker;
+        worker.Start();
+        std::atomic<bool> afterException{false};
+        worker.Post([] { throw std::runtime_error("db worker test exception"); });
+        worker.Post([&afterException] { afterException.store(true); });
+        worker.Flush();
+        Check("DbWorkerExceptionCheck: worker survives task exception", afterException.load());
+        worker.Stop();
+    }
+}
+
+// ===========================================================================
 // 网络级：完整链路（Client -> Gateway -> LoginServer -> SQLite）
 // ===========================================================================
 
@@ -1152,6 +1310,8 @@ int main() {
     RunSchemaAndCryptoChecks();
     RunAccountServiceChecks();
     RunCharacterServiceChecks();
+    RunSchemaHardeningChecks();
+    RunDbWorkerChecks();
 
     {
         TestServers servers;

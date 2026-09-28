@@ -25,7 +25,7 @@ public:
     // 停止：先等待队列内任务执行完（flush 语义），再 join 线程（指令六十六）。
     void Stop();
     void Post(Task task);
-    // 阻塞直到队列清空（测试/关停用）。
+    // 阻塞直到 队列空 && 无执行中任务（阶段10.1 修复提前返回）。
     void Flush();
 
 private:
@@ -35,6 +35,9 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::deque<Task> m_queue;
+    // 阶段10.1：执行中任务计数——Flush 必须等 队列空 && m_activeTasks == 0
+    //（原实现只看队列空，任务正在执行时提前返回）
+    std::size_t m_activeTasks = 0;
     bool m_started = false;
     bool m_stopping = false;
 };
