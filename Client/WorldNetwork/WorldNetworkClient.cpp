@@ -3,6 +3,7 @@
 #include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/Protocol.h"
+#include "Shared/Progression/ProgressionProtocol.h"
 
 namespace legend::client {
 
@@ -723,6 +724,65 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.status.targetEntityId = payload.targetEntityId;
             event.status.serverTime = payload.serverTime;
             event.status.snapshotEffects = payload.effects;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::RewardGranted: {
+            world::RewardGrantedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeRewardGranted(packet.payload.data(), packet.payload.size(),
+                                            payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::RewardGrantedEvent;
+            event.characterId = payload.characterId;
+            event.progression.sourceMonsterEntityId = payload.sourceMonsterEntityId;
+            event.progression.expGranted = payload.expGranted;
+            event.progression.goldGranted = payload.goldGranted;
+            event.progression.newExperience = payload.newExperience;
+            event.progression.newGold = payload.newGold;
+            event.progression.level = payload.level;
+            event.progression.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::LevelUpEvent: {
+            world::LevelUpEventPayload payload;
+            std::string decodeError;
+            if (!world::DecodeLevelUpEvent(packet.payload.data(), packet.payload.size(),
+                                           payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::LevelUpEvent;
+            event.characterId = payload.characterId;
+            event.progression.oldLevel = payload.oldLevel;
+            event.progression.newLevel = payload.newLevel;
+            event.progression.currentExp = payload.currentExp;
+            event.progression.expToNext = payload.nextLevelExp;
+            event.progression.newMaxHp = payload.newMaxHp;
+            event.progression.newAttackPower = payload.newAttackPower;
+            event.progression.newDefense = payload.newDefense;
+            event.progression.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ProgressionSnapshot: {
+            world::ProgressionSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeProgressionSnapshot(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ProgressionSnapshotEvent;
+            event.characterId = payload.characterId;
+            event.progression.level = payload.level;
+            event.progression.currentExp = payload.experience;
+            event.progression.expToNext = payload.expToNext;
+            event.progression.newGold = payload.gold;
+            event.progression.serverTime = payload.serverTime;
             PushEvent(std::move(event));
             return;
         }

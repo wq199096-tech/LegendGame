@@ -96,9 +96,32 @@ struct WorldNetworkEvent {
         StatusUpdatedEvent,
         StatusRemovedEvent,
         StatusSnapshotEvent,
+        // 阶段17 指令十三~十五：服务器权威成长/奖励事件
+        RewardGrantedEvent,
+        LevelUpEvent,
+        ProgressionSnapshotEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
+
+    // 阶段17 指令十三~十五：成长/奖励事件数据（三个事件共用）。
+    struct ProgressionEventData {
+        std::uint64_t sourceMonsterEntityId = 0;
+        std::uint32_t expGranted = 0;
+        std::uint32_t goldGranted = 0;
+        std::int64_t newExperience = 0;
+        std::int64_t newGold = 0;
+        std::uint32_t level = 0;
+        std::uint32_t oldLevel = 0;
+        std::uint32_t newLevel = 0;
+        std::int64_t currentExp = 0;
+        std::int64_t expToNext = 0;
+        std::uint32_t newMaxHp = 0;
+        std::uint32_t newAttackPower = 0;
+        std::uint32_t newDefense = 0;
+        std::uint64_t serverTime = 0;
+    };
+    ProgressionEventData progression;
 
     // EnterWorldResponse / PlayerSpawn 字段（指令二十/二十二）
     std::uint64_t requestId = 0;

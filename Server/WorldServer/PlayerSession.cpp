@@ -15,6 +15,15 @@ PlayerSession::PlayerSession(std::uint64_t connectionId, std::uint64_t accountId
       m_level(level),
       m_mapId(mapId),
       m_positionX(positionX),
-      m_positionY(positionY) {}
+      m_positionY(positionY) {
+    // 阶段17 指令二/十：加载角色时按持久化 level 初始化基础属性（Level 1 = 100/20/5）。
+    m_maxHp = BaseMaxHpForLevel(level);
+    m_currentHp = m_maxHp;
+    m_attackPower = BaseAttackPowerForLevel(level);
+    m_defense = BaseDefenseForLevel(level);
+    // Derived 初始 = 等级基础值（状态变化时经 RecalculateDerivedStats 重算）。
+    m_effectiveAttackPower = m_attackPower;
+    m_effectiveDefense = m_defense;
+}
 
 } // namespace legend::world

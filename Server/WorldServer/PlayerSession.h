@@ -4,6 +4,7 @@
 
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterTypes.h"
+#include "Shared/Progression/ProgressionTypes.h"
 #include "Shared/Skill/SkillDefinition.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldTypes.h"
@@ -89,7 +90,8 @@ public:
     std::size_t VisibleMonsterCount() const { return m_visibleMonsters.size(); }
 
     // ------------------------------------------------------------------
-    // 阶段14 指令四：固定基础战斗属性（不做装备/成长加成）。
+    // 阶段14 指令四：基础战斗属性（阶段17 指令十：随等级成长，
+    // 构造时按 level 初始化；升级经 ApplyLevelGrowth 更新）。
     // ------------------------------------------------------------------
     std::uint32_t MaxHp() const { return m_maxHp; }
     std::uint32_t CurrentHp() const { return m_currentHp; }
@@ -98,6 +100,27 @@ public:
     float AttackRange() const { return m_attackRange; }
     float AttackCooldownSeconds() const { return m_attackCooldownSeconds; }
     bool Alive() const { return m_alive; }
+
+    // ------------------------------------------------------------------
+    // 阶段17 指令二：Player Progression（服务器权威；WorldServer 加载角色时
+    // 从数据库读取；Client 不能发送"我要多少经验/金币"）。
+    // ------------------------------------------------------------------
+    std::int64_t Experience() const { return m_experience; }
+    std::int64_t Gold() const { return m_gold; }
+    void SetProgression(std::int64_t experience, std::int64_t gold) {
+        m_experience = experience;
+        m_gold = gold;
+    }
+    // 指令五/十：等级更新 + 基础属性成长 + CurrentHp 恢复到新 MaxHp（方便测试）。
+    // Mana 不升级保持 100（指令十）。Derived Stats 由 WorldServer 统一重算。
+    void ApplyLevelGrowth(std::uint32_t newLevel) {
+        m_level = newLevel;
+        m_maxHp = BaseMaxHpForLevel(newLevel);
+        m_currentHp = m_maxHp; // 指令十二：升级直接回满
+        m_attackPower = BaseAttackPowerForLevel(newLevel);
+        m_defense = BaseDefenseForLevel(newLevel);
+        m_maxMana = kPlayerMaxMana; // 指令十：BaseMaxMana 不升级
+    }
 
     // 指令二十四：扣血（不低于 0；返回是否致死）。
     bool ApplyDamage(std::uint32_t damage) {
@@ -266,6 +289,10 @@ private:
     float m_effectiveMoveSpeed = kWorldMoveSpeed;
     // 阶段16 指令十四：状态容器（runtime-only）。
     StatusEffectContainer m_statusEffects;
+
+    // 阶段17 指令二：成长数据（level 已在 m_level；exp/gold 服务器权威 + DB 持久化）。
+    std::int64_t m_experience = 0;
+    std::int64_t m_gold = 0;
 };
 
 } // namespace legend::world

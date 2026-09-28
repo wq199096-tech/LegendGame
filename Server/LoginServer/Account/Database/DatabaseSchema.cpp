@@ -52,6 +52,12 @@ const char* kMigration1Statements[] = {
     "CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(session_token_hash);",
 };
 
+// 阶段17 指令三：Migration 2 —— characters 增加 gold（旧库升级，旧角色默认 0；
+// level/exp 列在 Migration 1 已存在，不破坏旧数据库）。
+const char* kMigration2Statements[] = {
+    "ALTER TABLE characters ADD COLUMN gold INTEGER NOT NULL DEFAULT 0;",
+};
+
 struct Migration {
     int version;
     const char* const* statements;
@@ -60,6 +66,7 @@ struct Migration {
 
 const Migration kMigrations[] = {
     {1, kMigration1Statements, static_cast<int>(std::size(kMigration1Statements))},
+    {2, kMigration2Statements, static_cast<int>(std::size(kMigration2Statements))},
 };
 
 // ---------------------------------------------------------------------------

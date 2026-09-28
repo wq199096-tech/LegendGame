@@ -52,6 +52,8 @@ struct CharacterRow {
     std::uint16_t gender = 0;
     std::uint32_t level = 1;
     std::int64_t exp = 0;
+    // 阶段17 指令三：gold（Migration 2 增加，旧角色默认 0）。
+    std::int64_t gold = 0;
     std::uint16_t mapId = 1;
     double positionX = 0.0;
     double positionY = 0.0;
@@ -106,6 +108,13 @@ RepositoryResult<int> UpdateLastPlayed(Database& db, std::uint64_t characterId);
 RepositoryResult<int> UpdateWorldPosition(Database& db, std::uint64_t characterId,
                                           std::uint16_t mapId, float positionX, float positionY,
                                           std::int64_t lastPlayedAt);
+// 阶段17 指令二/三十四：角色成长保存（level/exp/gold 整体写；经 DbWorker 异步执行）。
+RepositoryResult<int> SaveProgression(Database& db, std::uint64_t characterId,
+                                      std::uint32_t level, std::int64_t exp, std::int64_t gold);
+// 阶段17 指令七：离线 killer 奖励入库（exp/gold 累加，不覆盖；level 由调用方算好后一并写）。
+// 返回更新后的 level/exp/gold（同一 UPDATE 内 RETURNING 语义用读改写事务实现）。
+RepositoryResult<int> AddProgressionRewards(Database& db, std::uint64_t characterId,
+                                            std::int64_t expDelta, std::int64_t goldDelta);
 
 } // namespace CharacterRepository
 

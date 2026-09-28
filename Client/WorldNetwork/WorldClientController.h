@@ -64,6 +64,12 @@ public:
     float CastProgress() const; // 0~1（仅展示；完成必须等服务器事件，指令五十八）
     // 阶段16 指令六十四：本地玩家状态容器（仅展示；Remove 等 StatusRemoved/Snapshot）。
     const RemoteStatusEffectContainer& LocalStatusEffects() const { return m_localStatusEffects; }
+    // 阶段17 指令三十：本地成长数据（服务器权威事件驱动维护：RewardGranted/
+    // LevelUp/ProgressionSnapshot）。
+    std::uint32_t LocalLevel() const { return m_localLevel; }
+    std::int64_t LocalExperience() const { return m_localExperience; }
+    std::int64_t LocalExpToNext() const { return m_localExpToNext; }
+    std::int64_t LocalGold() const { return m_localGold; }
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -116,6 +122,11 @@ private:
     std::uint64_t m_lastSkillRequestId = 0;
     // 阶段16 指令六十四：本地玩家状态容器。
     RemoteStatusEffectContainer m_localStatusEffects;
+    // 阶段17 指令三十：本地成长数据（Level/Experience/ExpToNext/Gold）。
+    std::uint32_t m_localLevel = 1;
+    std::int64_t m_localExperience = 0;
+    std::int64_t m_localExpToNext = 100;
+    std::int64_t m_localGold = 0;
 };
 
 } // namespace legend::client

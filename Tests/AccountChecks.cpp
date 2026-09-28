@@ -326,11 +326,11 @@ void RunSchemaAndCryptoChecks() {
         Database db;
         std::string error;
         bool ok = db.Open(path, error) && InitializeSchema(db, error);
-        Check("SchemaCreateCheck: fresh db -> schema version 1",
+        Check("SchemaCreateCheck: fresh db -> schema version == kCurrentSchemaVersion",
               ok && [&] {
                   account::Statement stmt;
                   return stmt.Prepare(db.Handle(), "SELECT version FROM schema_version;", error) &&
-                         stmt.Step(error) && stmt.ColumnInt64(0) == 1;
+                         stmt.Step(error) && stmt.ColumnInt64(0) == account::kCurrentSchemaVersion;
               }());
         // 插入一行账号后关闭重开：不重复创建、不丢数据
         auto created = account::AccountRepository::CreateAccount(db, "persist_user",
@@ -752,7 +752,8 @@ void RunSchemaHardeningChecks() {
         Database db;
         std::string error;
         bool opened = db.Open(path, error);
-        // 手工构造旧 v1 结构：schema_version(version) 一行 1 + 已有账号数据
+        // 手工构造旧 v1 结构（完整三表：accounts/characters/sessions 均无 gold 列）
+        // + schema_version(version) 一行 1 + 已有账号数据
         if (opened) {
             opened = db.Execute("CREATE TABLE schema_version (version INTEGER NOT NULL);", error) &&
                      db.Execute("INSERT INTO schema_version (version) VALUES (1);", error) &&
@@ -768,12 +769,30 @@ void RunSchemaHardeningChecks() {
                          "  locked_until INTEGER"
                          ");",
                          error) &&
-                     db.Execute("INSERT INTO accounts (username, password_hash, created_at) "
-                                "VALUES ('legacy_user', 'legacy_hash', 1);",
-                                error);
+                     db.Execute(
+                         "CREATE TABLE characters ("
+                         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                         "  account_id INTEGER NOT NULL,"
+                         "  name TEXT NOT NULL UNIQUE,"
+                         "  class_id INTEGER NOT NULL,"
+                         "  gender INTEGER NOT NULL,"
+                         "  level INTEGER NOT NULL DEFAULT 1,"
+                         "  exp INTEGER NOT NULL DEFAULT 0,"
+                         "  map_id INTEGER NOT NULL DEFAULT 1,"
+                         "  position_x REAL NOT NULL DEFAULT 0,"
+                         "  position_y REAL NOT NULL DEFAULT 0,"
+                         "  created_at INTEGER NOT NULL,"
+                         "  last_played_at INTEGER,"
+                         "  deleted INTEGER NOT NULL DEFAULT 0"
+                         ");",
+                         error) &&
+                         db.Execute("INSERT INTO accounts (username, password_hash, created_at) "
+                                    "VALUES ('legacy_user', 'legacy_hash', 1);",
+                                    error);
         }
         db.Close();
-        // 兼容升级：InitializeSchema 自动把旧表迁到单行新格式，账号数据不丢
+        // 兼容升级：InitializeSchema 自动把旧表迁到单行新格式 + Migration 2 加 gold，
+        // 账号数据不丢
         Database db2;
         bool ok = db2.Open(path, error) && opened && InitializeSchema(db2, error);
         const std::int64_t version =
@@ -783,11 +802,17 @@ void RunSchemaHardeningChecks() {
         const std::int64_t legacy =
             ok ? QueryScalar(path, "SELECT COUNT(*) FROM accounts WHERE username='legacy_user';")
                : -1;
+        // Migration 2 必须给旧 characters 表补上 gold 列（默认 0）
+        const std::int64_t goldCols =
+            ok ? QueryScalar(path, "SELECT COUNT(*) FROM pragma_table_info('characters') "
+                                   "WHERE name = 'gold';")
+               : -1;
         // 账号表经 Repository 仍可正常写入
         auto created = ok ? account::AccountRepository::CreateAccount(db2, "new_user", "hash2")
                           : account::RepositoryResult<std::uint64_t>{};
-        Check("OldSchemaVersionCompatibilityCheck: old v1 db upgraded, data intact",
-              ok && version == 1 && count == 1 && legacy == 1 && created.success);
+        Check("OldSchemaVersionCompatibilityCheck: old v1 db upgraded to current, data intact",
+              ok && version == account::kCurrentSchemaVersion && count == 1 && legacy == 1 &&
+                  goldCols == 1 && created.success);
         db2.Close();
         RemoveDb(path);
     }

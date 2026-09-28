@@ -7,7 +7,8 @@ namespace legend::account {
 // 阶段10 指令六：Schema Version（Migration 用，不靠 DROP TABLE 重建）。
 // 阶段10.1：schema_version 恒单行（id=1 主键 + UPSERT 写版本），
 // 旧 v1 结构（仅 version 列）由 InitializeSchema 自动兼容升级。
-inline constexpr int kCurrentSchemaVersion = 1;
+// 阶段17 指令三：Migration 2 —— characters 增加 gold 列（旧角色默认 0）。
+inline constexpr int kCurrentSchemaVersion = 2;
 
 // 初始化：quick_check 损坏检测 + 旧结构兼容升级 + 建表 + Migration 到
 // kCurrentSchemaVersion。新库 -> 应用全部 Migration 并写入 version；

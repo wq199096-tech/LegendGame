@@ -24,15 +24,19 @@ struct MonsterDefinition {
     std::uint32_t defense = 0;         // 防御力
     float attackRange = 0.0f;          // 普通攻击距离
     float attackCooldownSeconds = 0.0f; // 攻击冷却
+    // 阶段17 指令六：击杀奖励（WorldServer 权威发放，Client 不能决定奖励倍率）。
+    std::uint32_t rewardExp = 0;
+    std::uint32_t rewardGold = 0;
 };
 
 // 指令二：Training Slime 基础配置。
 // level=1 / moveSpeed=80 / aggroRadius=350 / leashRadius=600 / patrolRadius=180。
 // 阶段14 指令五：maxHp=80 / attackPower=10 / defense=2 / attackRange=60 / attackCooldown=1.2s。
-// （name 为 std::string：运行期常量而非 constexpr。）
+// 阶段17 指令六：rewardExp=25 / rewardGold=3。
 inline const MonsterDefinition kTrainingSlimeDefinition{
     kTrainingSlimeTypeId, kTrainingSlimeName, 1, 80.0f, 350.0f, 600.0f, 180.0f, 24.0f, 1,
     80u, 10u, 2u, 60.0f, 1.2f,
+    25u, 3u,
 };
 
 // 按 typeId 查找定义（阶段13 只注册 Training Slime，指令五）。

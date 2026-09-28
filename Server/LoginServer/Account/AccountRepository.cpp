@@ -302,8 +302,9 @@ RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db
     Statement stmt;
     std::string error;
     // 阶段10 指令四十四：last_played_at DESC，未玩过的按 created_at ASC 排在最后。
+    // 阶段17：SELECT 补 gold 列（Migration 2）。
     if (!stmt.Prepare(db.Handle(),
-                      "SELECT id, account_id, name, class_id, gender, level, exp, map_id, "
+                      "SELECT id, account_id, name, class_id, gender, level, exp, gold, map_id, "
                       "position_x, position_y, created_at, last_played_at, deleted "
                       "FROM characters WHERE account_id = ? AND deleted = 0 "
                       "ORDER BY last_played_at IS NULL ASC, last_played_at DESC, created_at ASC;",
@@ -320,12 +321,13 @@ RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db
         row.gender = static_cast<std::uint16_t>(stmt.ColumnInt64(4));
         row.level = static_cast<std::uint32_t>(stmt.ColumnInt64(5));
         row.exp = stmt.ColumnInt64(6);
-        row.mapId = static_cast<std::uint16_t>(stmt.ColumnInt64(7));
-        row.positionX = stmt.ColumnDouble(8);
-        row.positionY = stmt.ColumnDouble(9);
-        row.createdAt = stmt.ColumnInt64(10);
-        row.lastPlayedAt = stmt.ColumnInt64(11);
-        row.deleted = stmt.ColumnInt64(12) != 0;
+        row.gold = stmt.ColumnInt64(7);
+        row.mapId = static_cast<std::uint16_t>(stmt.ColumnInt64(8));
+        row.positionX = stmt.ColumnDouble(9);
+        row.positionY = stmt.ColumnDouble(10);
+        row.createdAt = stmt.ColumnInt64(11);
+        row.lastPlayedAt = stmt.ColumnInt64(12);
+        row.deleted = stmt.ColumnInt64(13) != 0;
         result.value.push_back(std::move(row));
     }
     if (!error.empty()) {
@@ -341,7 +343,7 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
     Statement stmt;
     std::string error;
     if (!stmt.Prepare(db.Handle(),
-                      "SELECT id, account_id, name, class_id, gender, level, exp, map_id, "
+                      "SELECT id, account_id, name, class_id, gender, level, exp, gold, map_id, "
                       "position_x, position_y, created_at, last_played_at, deleted "
                       "FROM characters WHERE id = ?;",
                       error)) {
@@ -357,12 +359,13 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
         row.gender = static_cast<std::uint16_t>(stmt.ColumnInt64(4));
         row.level = static_cast<std::uint32_t>(stmt.ColumnInt64(5));
         row.exp = stmt.ColumnInt64(6);
-        row.mapId = static_cast<std::uint16_t>(stmt.ColumnInt64(7));
-        row.positionX = stmt.ColumnDouble(8);
-        row.positionY = stmt.ColumnDouble(9);
-        row.createdAt = stmt.ColumnInt64(10);
-        row.lastPlayedAt = stmt.ColumnInt64(11);
-        row.deleted = stmt.ColumnInt64(12) != 0;
+        row.gold = stmt.ColumnInt64(7);
+        row.mapId = static_cast<std::uint16_t>(stmt.ColumnInt64(8));
+        row.positionX = stmt.ColumnDouble(9);
+        row.positionY = stmt.ColumnDouble(10);
+        row.createdAt = stmt.ColumnInt64(11);
+        row.lastPlayedAt = stmt.ColumnInt64(12);
+        row.deleted = stmt.ColumnInt64(13) != 0;
         result.success = true;
         result.value = std::move(row);
         return result;
@@ -424,6 +427,58 @@ RepositoryResult<int> UpdateWorldPosition(Database& db, std::uint64_t characterI
     stmt.Step(error);
     if (!error.empty()) {
         return MapSqlError<int>("UpdateWorldPosition step", error);
+    }
+    return RepositoryResult<int>{true, 1};
+}
+
+// 阶段17 指令二/三十四：成长整体写（level/exp/gold；DbWorker 线程执行）。
+RepositoryResult<int> SaveProgression(Database& db, std::uint64_t characterId,
+                                      std::uint32_t level, std::int64_t exp, std::int64_t gold) {
+    Statement stmt;
+    std::string error;
+    if (!stmt.Prepare(db.Handle(),
+                      "UPDATE characters SET level = ?, exp = ?, gold = ? WHERE id = ?;",
+                      error)) {
+        return MapSqlError<int>("SaveProgression prepare", error);
+    }
+    stmt.BindInt64(1, static_cast<std::int64_t>(level));
+    stmt.BindInt64(2, exp);
+    stmt.BindInt64(3, gold);
+    stmt.BindInt64(4, static_cast<std::int64_t>(characterId));
+    stmt.Step(error);
+    if (!error.empty()) {
+        return MapSqlError<int>("SaveProgression step", error);
+    }
+    return RepositoryResult<int>{true, 1};
+}
+
+// 阶段17 指令七：离线 killer 奖励入库（读改写事务：exp/gold 累加，不覆盖不丢失）。
+RepositoryResult<int> AddProgressionRewards(Database& db, std::uint64_t characterId,
+                                            std::int64_t expDelta, std::int64_t goldDelta) {
+    std::string error;
+    if (!db.Execute("BEGIN IMMEDIATE;", error)) {
+        return MapSqlError<int>("AddProgressionRewards begin", error);
+    }
+    {
+        Statement stmt;
+        if (!stmt.Prepare(db.Handle(),
+                          "UPDATE characters SET exp = exp + ?, gold = gold + ? WHERE id = ?;",
+                          error)) {
+            db.Execute("ROLLBACK;", error);
+            return MapSqlError<int>("AddProgressionRewards prepare", error);
+        }
+        stmt.BindInt64(1, expDelta);
+        stmt.BindInt64(2, goldDelta);
+        stmt.BindInt64(3, static_cast<std::int64_t>(characterId));
+        stmt.Step(error);
+        if (!error.empty()) {
+            db.Execute("ROLLBACK;", error);
+            return MapSqlError<int>("AddProgressionRewards step", error);
+        }
+    }
+    if (!db.Execute("COMMIT;", error)) {
+        db.Execute("ROLLBACK;", error);
+        return MapSqlError<int>("AddProgressionRewards commit", error);
     }
     return RepositoryResult<int>{true, 1};
 }

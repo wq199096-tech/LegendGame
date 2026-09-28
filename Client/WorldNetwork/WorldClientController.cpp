@@ -1,6 +1,7 @@
 #include "Client/WorldNetwork/WorldClientController.h"
 
 #include "Engine/Debug/Logger.h"
+#include "Shared/Progression/ProgressionTypes.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldError.h"
@@ -417,6 +418,46 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
         case WorldNetworkEvent::Type::StatusRemovedEvent:
         case WorldNetworkEvent::Type::StatusSnapshotEvent:
             HandleStatusEvent(event);
+            break;
+        // ------------------------------------------------------------------
+        // 阶段17 指令三十：成长/奖励事件（Client 只展示，数值全部服务器权威）
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::RewardGrantedEvent:
+            if (event.characterId == m_characterId) {
+                m_localLevel = event.progression.level;
+                m_localExperience = event.progression.newExperience;
+                m_localExpToNext = static_cast<std::int64_t>(
+                    legend::world::ExpToNextLevel(event.progression.level)) -
+                    m_localExperience;
+                if (m_localLevel >= legend::world::kProgressionMaxLevel) {
+                    m_localExpToNext = 0;
+                }
+                m_localGold = event.progression.newGold;
+            }
+            LOG_INFO("[Progression] Reward " +
+                     std::to_string(event.progression.expGranted) + " exp / " +
+                     std::to_string(event.progression.goldGranted) + " gold to #" +
+                     std::to_string(event.characterId));
+            break;
+        case WorldNetworkEvent::Type::LevelUpEvent:
+            if (event.characterId == m_characterId) {
+                m_localLevel = event.progression.newLevel;
+                m_localExperience = event.progression.currentExp;
+                m_localExpToNext = event.progression.expToNext;
+                m_localMaxHp = event.progression.newMaxHp; // 升级回满（指令十二）
+                m_localCurrentHp = event.progression.newMaxHp;
+            }
+            LOG_INFO("[Progression] Player #" + std::to_string(event.characterId) + " leveled " +
+                     std::to_string(event.progression.oldLevel) + " -> " +
+                     std::to_string(event.progression.newLevel));
+            break;
+        case WorldNetworkEvent::Type::ProgressionSnapshotEvent:
+            if (event.characterId == m_characterId) {
+                m_localLevel = event.progression.level;
+                m_localExperience = event.progression.currentExp;
+                m_localExpToNext = event.progression.expToNext;
+                m_localGold = event.progression.newGold;
+            }
             break;
     }
 }

@@ -77,6 +77,10 @@ enum class MessageId : std::uint16_t {
     StatusEffectUpdated = 271,
     StatusEffectRemoved = 272,
     StatusEffectSnapshot = 273,
+    // 阶段17：成长/奖励（服务器权威，Client 只接收）。
+    RewardGranted = 280,
+    LevelUpEvent = 281,
+    ProgressionSnapshot = 282,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -187,6 +191,9 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::StatusEffectUpdated:
         case MessageId::StatusEffectRemoved:
         case MessageId::StatusEffectSnapshot:
+        case MessageId::RewardGranted:
+        case MessageId::LevelUpEvent:
+        case MessageId::ProgressionSnapshot:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

@@ -9,7 +9,10 @@
 #include "Server/WorldServer/AOI/WorldSpatialGrid.h"
 #include "Server/WorldServer/Monster/MonsterAi.h"
 #include "Server/WorldServer/Monster/MonsterManager.h"
+#include "Server/WorldServer/Monster/MonsterRespawnManager.h"
 #include "Server/WorldServer/Monster/MonsterSpatialGrid.h"
+#include "Server/WorldServer/Progression/ProgressionService.h"
+#include "Server/WorldServer/Progression/RewardService.h"
 #include "Server/WorldServer/Skill/SkillRegistry.h"
 #include "Server/WorldServer/Skill/SkillService.h"
 #include "Server/WorldServer/Status/StatusEffectRegistry.h"
@@ -21,6 +24,7 @@
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Network/MessageId.h"
+#include "Shared/Progression/ProgressionProtocol.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/Status/StatusEffectProtocol.h"
@@ -78,6 +82,12 @@ public:
         int statusTickMs = 100;
         // 阶段16 指令五十九：状态 Snapshot 纠偏周期（2s，只发可见实体）
         int statusSnapshotIntervalMs = 2000;
+        // 阶段17 指令二十四：Respawn Tick 250ms（统一轮询，不每怪一个 Timer）
+        int respawnTickMs = 250;
+        // 阶段17 指令二十二：Training Slime respawnDelay = 8s（从 MonsterDeath 起算）
+        std::uint32_t respawnDelayMs = 8000;
+        // 阶段17 指令十五：ProgressionSnapshot 纠偏周期（30s，发给本人）
+        int progressionSnapshotIntervalMs = 30000;
     };
 
     struct Hooks {
@@ -110,6 +120,15 @@ public:
     std::size_t CastingPlayerCount() const;
     // 阶段15：测试辅助——移动怪物（含 SpatialGrid cell 更新；测试确定性布景用）。
     bool MoveMonsterTo(std::uint64_t entityId, float x, float y);
+    // 阶段17：SpawnSlot/Respawn 测试访问器（MonsterRespawnManager 只读视图）。
+    std::size_t SpawnSlotCount() const { return m_respawnManager.SlotCount(); }
+    std::size_t RespawnPendingCount() const { return m_respawnManager.PendingCount(); }
+    std::uint32_t SpawnSlotOfEntity(std::uint64_t entityId) const {
+        return m_respawnManager.SlotOfEntity(entityId);
+    }
+    std::uint64_t ActiveEntityOfSlot(std::uint32_t spawnSlotId) const {
+        return m_respawnManager.ActiveEntityOfSlot(spawnSlotId);
+    }
 
     // 阶段16：状态效果（指令十六~八十三）
     // 施加（技能命中/测试白盒共用；Client 不能直接施加，指令十七）。
@@ -155,6 +174,26 @@ public:
     void RecalculateTargetDerivedStats(CombatEntityType targetType, std::uint64_t targetEntityId);
     void SendStatusRemovedToPayload(const std::vector<std::uint64_t>& receivers,
                                     const StatusEffectRemovedPayload& payload);
+
+    // 阶段17：成长/奖励/重生（服务器权威，Client 不能决定）
+    // 指令七：击杀归属 = 最后造成致死伤害的 Player（Basic/Skill/DOT sourceEntityId）。
+    void GrantMonsterReward(const std::shared_ptr<MonsterEntity>& monster,
+                            std::uint64_t killerCharacterId);
+    // 指令十三/十四/十五：奖励与成长事件发送。
+    void SendRewardGranted(const std::shared_ptr<PlayerSession>& killer,
+                           std::uint64_t sourceMonsterEntityId, std::uint32_t expGain,
+                           std::uint32_t goldGain, std::int64_t newExp, std::int64_t newGold);
+    void SendLevelUpEvent(const std::vector<std::uint64_t>& receivers,
+                          const std::shared_ptr<PlayerSession>& player, std::uint32_t oldLevel,
+                          std::uint32_t newLevel);
+    void SendProgressionSnapshot(const std::shared_ptr<PlayerSession>& player);
+    void ScheduleProgressionSnapshotTick();
+    void SendProgressionSnapshots();
+    // 指令二十三~二十八：Respawn 编排。
+    void ScheduleRespawnTick();
+    void RunRespawnTick();
+    std::shared_ptr<MonsterEntity> SpawnMonsterAtSlot(const MonsterSpawnSlot& slot,
+                                                      std::uint64_t entityId);
 
 private:
     struct PendingTicket {
@@ -320,6 +359,11 @@ private:
     StatusEffectRegistry m_statusRegistry;
     std::uint64_t m_nextStatusInstanceId = 1;
     StatusEffectContainer m_detachedStatusContainer; // 目标已失效时 ApplyEffect 的占位容器
+
+    // 阶段17：怪物重生（指令二十三~二十九：runtime only，重启不持久化）
+    MonsterRespawnManager m_respawnManager;
+    asio::steady_timer m_respawnTimer;     // 指令二十四：Respawn Tick 250ms
+    asio::steady_timer m_progressionTimer; // 指令十五：30s ProgressionSnapshot 纠偏
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;

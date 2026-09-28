@@ -63,6 +63,9 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::StatusEffectUpdated: return "StatusEffectUpdated";
         case MessageId::StatusEffectRemoved: return "StatusEffectRemoved";
         case MessageId::StatusEffectSnapshot: return "StatusEffectSnapshot";
+        case MessageId::RewardGranted: return "RewardGranted";
+        case MessageId::LevelUpEvent: return "LevelUpEvent";
+        case MessageId::ProgressionSnapshot: return "ProgressionSnapshot";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

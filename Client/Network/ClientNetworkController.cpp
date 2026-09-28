@@ -312,6 +312,15 @@ std::string ClientNetworkController::WorldStatusText() const {
     text += std::to_string(m_world.LocalCurrentMana());
     text += "/";
     text += std::to_string(m_world.LocalMaxMana());
+    // 阶段17 指令三十一：F12 增加 Lv / EXP current/next / Gold。
+    text += " lv=";
+    text += std::to_string(m_world.LocalLevel());
+    text += " exp=";
+    text += std::to_string(m_world.LocalExperience());
+    text += "/";
+    text += std::to_string(m_world.LocalExpToNext());
+    text += " gold=";
+    text += std::to_string(m_world.LocalGold());
     if (m_world.LocalCasting()) {
         text += " casting=skill:";
         text += std::to_string(m_world.ActiveSkillId());

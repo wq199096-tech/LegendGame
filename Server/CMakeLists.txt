@@ -129,6 +129,9 @@ add_library(LegendWorldCore STATIC
     WorldServer/Status/StatusEffectRegistry.cpp
     WorldServer/Status/StatusEffectService.cpp
     WorldServer/Status/StatusEffectContainer.cpp
+    WorldServer/Progression/ProgressionService.cpp
+    WorldServer/Progression/RewardService.cpp
+    WorldServer/Monster/MonsterRespawnManager.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)

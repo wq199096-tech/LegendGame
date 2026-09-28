@@ -59,7 +59,9 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_skillTimer(service.Io()),
       m_manaTimer(service.Io()),
       m_statusTimer(service.Io()),
-      m_statusSnapshotTimer(service.Io()) {}
+      m_statusSnapshotTimer(service.Io()),
+      m_respawnTimer(service.Io()),
+      m_progressionTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -100,6 +102,8 @@ bool WorldServer::Start(std::string& error) {
     ScheduleManaSnapshotTick(); // 阶段15 指令六十七：Mana 快照 1s
     ScheduleStatusTick();     // 阶段16 指令四十：Status Tick 100ms
     ScheduleStatusSnapshotTick(); // 阶段16 指令五十九：状态快照 2s
+    ScheduleRespawnTick();    // 阶段17 指令二十四：Respawn Tick 250ms
+    ScheduleProgressionSnapshotTick(); // 阶段17 指令十五：30s ProgressionSnapshot
     return true;
 }
 
@@ -118,6 +122,10 @@ void WorldServer::Stop() {
     m_manaTimer.cancel();      // 阶段15 指令七十九：停止 Mana 快照 timer
     m_statusTimer.cancel();     // 阶段16 指令一百三十七：停止 Status Timer
     m_statusSnapshotTimer.cancel(); // 阶段16：停止状态快照 timer
+    m_respawnTimer.cancel();    // 阶段17：停止 Respawn Timer
+    m_progressionTimer.cancel(); // 阶段17：停止成长快照 timer
+    // 阶段17 指令二十九：重启 Respawn Queue 不持久化，全部清空（slot 重新满怪）。
+    m_respawnManager.Reset();
     // 阶段13 指令六十五/六十六：清 Monster（runtime only，无持久化）。
     m_monsters.Clear();
     m_monsterGrid = MonsterSpatialGrid{};
@@ -510,6 +518,8 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
             auto player = std::make_shared<PlayerSession>(connectionId, accountId, characterId,
                                                           row.name, row.classId, row.gender,
                                                           row.level, mapId, x, y);
+            // 阶段17 指令二：加载持久化成长数据（level 已进构造；exp/gold 服务器权威）。
+            player->SetProgression(row.exp, row.gold);
             // 指令二十九/一百零七：同角色重复上线拒绝。
             if (!self->m_players.TryAddPlayer(player)) {
                 LOG_WARN("[World] EnterWorld rejected (character already online) character=" +
@@ -535,6 +545,8 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
             self->InitializePlayerVisibility(player);
             LOG_INFO("[World] Player entered character=" + row.name + " (#" +
                      std::to_string(characterId) + ") map=" + std::to_string(mapId));
+            // 阶段17 指令十五：进入世界立即下发本人 ProgressionSnapshot。
+            self->SendProgressionSnapshot(player);
             if (self->m_hooks.onPlayerChanged) {
                 self->m_hooks.onPlayerChanged(characterId, true);
             }
@@ -1031,28 +1043,47 @@ std::vector<std::uint64_t> WorldServer::MonsterEntityIds() const {
 
 void WorldServer::SpawnInitialMonsters() {
     // 指令十五/十六：map1 固定生成 20 只 Training Slime（固定位置表，测试可复现）。
+    // 阶段17 指令二十/二十六：位置表改造为 20 个 SpawnSlot（slotId 1~20），启动全满。
     const MonsterDefinition* definition = FindMonsterDefinition(kTrainingSlimeTypeId);
     if (!definition) {
         LOG_ERROR("[World] Monster definition missing (Training Slime).");
         return;
     }
-    for (const auto& point : kInitialMonsterSpawnTable) {
-        auto monster = std::make_shared<MonsterEntity>(m_nextMonsterEntityId++,
-                                                       definition->monsterTypeId, kDefaultMapId,
-                                                       point.x, point.y, definition->moveSpeed);
-        // 阶段14 指令五/六：战斗属性初始化（满血）；阶段16 指令二十四：Base/Derived 属性。
-        monster->InitializeCombat(definition->maxHp);
-        monster->SetBaseStats(definition->attackPower, definition->defense,
-                              definition->moveSpeed);
-        if (!m_monsters.SpawnMonster(monster)) {
-            LOG_WARN("[World] Monster spawn duplicate entityId=" +
-                     std::to_string(monster->EntityId()));
+    m_respawnManager.InitializeFromTable(kInitialMonsterSpawnTable, definition->monsterTypeId,
+                                         kDefaultMapId, m_config.respawnDelayMs);
+    for (const auto& slot : m_respawnManager.Slots()) {
+        const std::uint64_t entityId = m_nextMonsterEntityId++;
+        auto monster = SpawnMonsterAtSlot(slot, entityId);
+        if (!monster) {
+            LOG_WARN("[World] Monster spawn duplicate entityId=" + std::to_string(entityId));
             continue;
         }
-        m_monsterGrid.AddMonster(monster);
+        m_respawnManager.ConfirmSpawned(slot.spawnSlotId, monster->EntityId());
     }
     LOG_INFO("[World] Spawned " + std::to_string(m_monsters.Count()) + " " +
-             definition->name + " monsters (fixed table).");
+             definition->name + " monsters (" + std::to_string(m_respawnManager.SlotCount()) +
+             " spawn slots).");
+}
+
+// 阶段17 指令二十七/二十八：按 slot 生成新怪（满 HP/无状态/Idle/target=0/满 Combat 状态；
+// 正确加入 MonsterManager + MonsterSpatialGrid；AOI 由下个 tick 通知附近玩家）。
+std::shared_ptr<MonsterEntity> WorldServer::SpawnMonsterAtSlot(const MonsterSpawnSlot& slot,
+                                                               std::uint64_t entityId) {
+    const MonsterDefinition* definition = FindMonsterDefinition(slot.monsterTypeId);
+    if (!definition) {
+        return nullptr;
+    }
+    auto monster = std::make_shared<MonsterEntity>(entityId, slot.monsterTypeId, slot.mapId,
+                                                   slot.spawnX, slot.spawnY,
+                                                   definition->moveSpeed);
+    // 阶段14 指令五/六：战斗属性初始化（满血）；阶段16 指令二十四：Base/Derived 属性。
+    monster->InitializeCombat(definition->maxHp);
+    monster->SetBaseStats(definition->attackPower, definition->defense, definition->moveSpeed);
+    if (!m_monsters.SpawnMonster(monster)) {
+        return nullptr;
+    }
+    m_monsterGrid.AddMonster(monster);
+    return monster;
 }
 
 void WorldServer::ScheduleMonsterAiTick() {
@@ -1092,15 +1123,20 @@ void WorldServer::RunMonsterAiTick() {
 void WorldServer::CleanupDeadMonsters() {
     const auto now = std::chrono::steady_clock::now();
     std::vector<std::uint64_t> expired;
+    std::vector<std::chrono::steady_clock::time_point> deathTimes;
     for (const auto& monster : m_monsters.SnapshotMonsters()) {
         if (!monster->Alive() &&
             std::chrono::duration<float>(now - monster->DeadSince()).count() >=
                 kMonsterDeathCleanupSeconds) {
             expired.push_back(monster->EntityId());
+            deathTimes.push_back(monster->DeadSince());
         }
     }
-    for (const auto entityId : expired) {
-        RemoveMonster(entityId); // 广播 MonsterDespawn(Removed)
+    for (std::size_t i = 0; i < expired.size(); ++i) {
+        // 阶段17 指令十八/二十二：尸体 Remove 后进入 Respawn Queue
+        //（respawnTime 从 MonsterDeath 起算，尸体 3 秒包含在 8 秒内）。
+        m_respawnManager.NotifyEntityRemoved(expired[i], deathTimes[i]);
+        RemoveMonster(expired[i]); // 广播 MonsterDespawn(Removed)
     }
 }
 
@@ -1401,6 +1437,9 @@ void WorldServer::KillMonster(const std::shared_ptr<MonsterEntity>& monster,
     monster->MarkDead();
     monster->SetState(MonsterState::Dead);
     monster->SetTargetCharacterId(0);
+    // 阶段17 指令七/八：击杀归属（最后致死伤害的 Player；DOT 用 StatusEffect 的
+    // sourceEntityId）-> 服务器发放 EXP/Gold（先奖励，指令三十九顺序）。
+    GrantMonsterReward(monster, killerCharacterId);
     // 阶段16 指令三十八/一百一十四：死亡 -> 逐个 StatusRemoved(TargetDied) + 清空容器。
     ClearStatusOnDeath(CombatEntityType::Monster, monster->EntityId(), monster->StatusEffects(),
                        observers);
@@ -1571,6 +1610,9 @@ bool WorldServer::MoveMonsterTo(std::uint64_t entityId, float x, float y) {
         }
         moved->SetPosition(x, y);
         moved->SetSpawnPoint(x, y);
+        // 阶段17：Respawn slot 出生点同步"重新安家"——否则 respawn 仍发生在
+        // 初始表位置，与 monster 当前 home 脱节（AOI/位置断言均会失配）。
+        self->m_respawnManager.RelocateSlot(entityId, x, y);
         self->m_monsterGrid.UpdateMonsterCell(moved);
     });
     return true;
@@ -2519,6 +2561,186 @@ void WorldServer::ClearStatusOnDeath(CombatEntityType targetType, std::uint64_t 
     (void)targetEntityId;
     LOG_INFO("[Status] target " + std::to_string(targetEntityId) +
              " died -> status cleared");
+}
+
+// ---------------------------------------------------------------------------
+// 阶段17：成长/奖励/重生编排（服务器权威；WorldServer 只做编排，规则在
+// ProgressionService / RewardService，指令九）。
+// ---------------------------------------------------------------------------
+
+void WorldServer::GrantMonsterReward(const std::shared_ptr<MonsterEntity>& monster,
+                                     std::uint64_t killerCharacterId) {
+    if (killerCharacterId == 0) {
+        return; // 无归属（理论上不会发生：所有致死来源都带 player attackerId）
+    }
+    const MonsterDefinition* definition = FindMonsterDefinition(monster->MonsterTypeId());
+    if (!definition) {
+        return;
+    }
+    const std::uint32_t expGain = definition->rewardExp;
+    const std::uint32_t goldGain = definition->rewardGold;
+    if (expGain == 0 && goldGain == 0) {
+        return;
+    }
+    auto killer = m_players.FindByCharacter(killerCharacterId);
+    if (killer) {
+        // 指令八：在线 killer —— session 结算（支持跨多级/满级封顶）。
+        const auto progression =
+            AddExperience(killer->Level(), killer->Experience(),
+                          static_cast<std::int64_t>(expGain));
+        const std::int64_t newGold = AddGold(killer->Gold(), static_cast<std::int64_t>(goldGain));
+        const std::uint32_t oldLevel = killer->Level();
+        killer->SetProgression(progression.exp, newGold);
+        if (progression.levelUp) {
+            // 指令十/十二：基础属性成长 + CurrentHp 回满；Derived 经统一重算
+            //（不覆盖 StatusEffect 派生属性，指令十一）。
+            killer->ApplyLevelGrowth(progression.level);
+            RecalculateTargetDerivedStats(CombatEntityType::Player, killerCharacterId);
+            // 升级回满血 -> 立即纠偏 HP（1s HealthSnapshot 之前先可见）。
+            SendEntityHealthSnapshot(killer, CombatEntityType::Player, killerCharacterId,
+                                     killer->CurrentHp(), killer->MaxHp(), killer->Alive());
+        }
+        // 指令十三/十六：RewardGranted 只给本人。
+        SendRewardGranted(killer, monster->EntityId(), expGain, goldGain, progression.exp,
+                          newGold);
+        if (progression.levelUp) {
+            // 指令十四/十六：LevelUpEvent 给本人 + 能看到该 Player 的附近玩家。
+            std::vector<std::uint64_t> receivers =
+                PlayerStatusReceivers(killerCharacterId);
+            SendLevelUpEvent(receivers, killer, oldLevel, progression.level);
+            LOG_INFO("[Progression] Player #" + std::to_string(killerCharacterId) + " leveled " +
+                     std::to_string(oldLevel) + " -> " + std::to_string(progression.level));
+        }
+        LOG_INFO("[Progression] Reward " + std::to_string(expGain) + " exp / " +
+                 std::to_string(goldGain) + " gold to #" + std::to_string(killerCharacterId));
+        // 指令三十四：成长写 DB 继续走 DbWorker（io 线程禁止同步 SQLite 写）。
+        auto self = shared_from_this();
+        const auto level = progression.level;
+        const auto exp = progression.exp;
+        const auto gold = newGold;
+        m_dbWorker.Post([self, killerCharacterId, level, exp, gold]() {
+            CharacterRepository::SaveProgression(self->m_database, killerCharacterId, level, exp,
+                                                 gold);
+        });
+        return;
+    }
+    // 指令七：离线 killer —— 奖励入库（不能因 PlayerSession 不在线就丢失奖励）。
+    auto self = shared_from_this();
+    const std::int64_t expDelta = static_cast<std::int64_t>(expGain);
+    const std::int64_t goldDelta = static_cast<std::int64_t>(goldGain);
+    m_dbWorker.Post([self, killerCharacterId, expDelta, goldDelta]() {
+        // DB 线程：读 level/exp -> 算升级 -> 整体写回（事务性由单 UPDATE 保证）。
+        auto found = CharacterRepository::FindCharacterById(self->m_database, killerCharacterId);
+        if (found.success && found.value.has_value()) {
+            const auto row = *found.value;
+            const auto progression = AddExperience(row.level, row.exp, expDelta);
+            CharacterRepository::SaveProgression(self->m_database, killerCharacterId,
+                                                 progression.level, progression.exp,
+                                                 AddGold(row.gold, goldDelta));
+        } else {
+            // 角色已被删除等边界：保底累加（不丢失奖励）。
+            CharacterRepository::AddProgressionRewards(self->m_database, killerCharacterId,
+                                                       expDelta, goldDelta);
+        }
+    });
+}
+
+void WorldServer::SendRewardGranted(const std::shared_ptr<PlayerSession>& killer,
+                                    std::uint64_t sourceMonsterEntityId, std::uint32_t expGain,
+                                    std::uint32_t goldGain, std::int64_t newExp,
+                                    std::int64_t newGold) {
+    const auto payload =
+        BuildRewardEvent(killer->CharacterId(), sourceMonsterEntityId, expGain, goldGain,
+                         newExp, newGold, killer->Level(), ServerTimeMs());
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::RewardGranted);
+    if (EncodeRewardGranted(payload, packet.payload)) {
+        SendPacketToPlayer(killer, packet); // 指令十六：只给本人
+    }
+}
+
+void WorldServer::SendLevelUpEvent(const std::vector<std::uint64_t>& receivers,
+                                   const std::shared_ptr<PlayerSession>& player,
+                                   std::uint32_t oldLevel, std::uint32_t newLevel) {
+    const auto payload =
+        BuildLevelUpEvent(player->CharacterId(), oldLevel, newLevel, player->Experience(),
+                          ServerTimeMs());
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::LevelUpEvent);
+    if (EncodeLevelUpEvent(payload, packet.payload)) {
+        for (const auto characterId : receivers) {
+            auto target = m_players.FindByCharacter(characterId);
+            if (target) {
+                SendPacketToPlayer(target, packet);
+            }
+        }
+    }
+}
+
+void WorldServer::SendProgressionSnapshot(const std::shared_ptr<PlayerSession>& player) {
+    const auto payload =
+        BuildProgressionSnapshot(player->CharacterId(), player->Level(), player->Experience(),
+                                 player->Gold(), ServerTimeMs());
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::ProgressionSnapshot);
+    if (EncodeProgressionSnapshot(payload, packet.payload)) {
+        SendPacketToPlayer(player, packet); // 指令十五：本人纠偏
+    }
+}
+
+void WorldServer::ScheduleProgressionSnapshotTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_progressionTimer.expires_after(
+        std::chrono::milliseconds(m_config.progressionSnapshotIntervalMs));
+    auto self = shared_from_this();
+    m_progressionTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->SendProgressionSnapshots();
+        self->ScheduleProgressionSnapshotTick();
+    });
+}
+
+void WorldServer::SendProgressionSnapshots() {
+    // 指令十五：每 30s 对每个在线玩家发本人 ProgressionSnapshot 纠偏。
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        SendProgressionSnapshot(player);
+    }
+}
+
+void WorldServer::ScheduleRespawnTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_respawnTimer.expires_after(std::chrono::milliseconds(m_config.respawnTickMs));
+    auto self = shared_from_this();
+    m_respawnTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->RunRespawnTick();
+        self->ScheduleRespawnTick();
+    });
+}
+
+void WorldServer::RunRespawnTick() {
+    // 指令二十四/二十五/二十七：250ms 轮询到点 slot -> 生成全新 MonsterEntity
+    //（新 entityId、满 HP、无状态、Idle、target=0）并重新加入 Manager/Grid；
+    // AOI 附近玩家经下个 AOI tick 收到 MonsterSpawn（不全图广播，指令二十八）。
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& due : m_respawnManager.Poll(now)) {
+        const std::uint64_t entityId = m_nextMonsterEntityId++;
+        auto monster = SpawnMonsterAtSlot(due.slot, entityId);
+        if (!monster) {
+            continue; // entityId 冲突等异常：放弃本轮（队列不重试，防风暴）
+        }
+        m_respawnManager.ConfirmSpawned(due.spawnSlotId, monster->EntityId());
+        LOG_INFO("[Respawn] slot " + std::to_string(due.spawnSlotId) + " -> new Monster #" +
+                 std::to_string(monster->EntityId()));
+    }
 }
 
 void WorldServer::SendMonsterSpawn(const std::shared_ptr<PlayerSession>& receiver,

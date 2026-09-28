@@ -155,6 +155,8 @@ struct WorldTestServers {
     std::shared_ptr<WorldServer> world;
     std::shared_ptr<GatewayServer> gateway;
     std::string dbPath;
+    // 阶段17：测试可调 respawnDelay（长 delay = 测试期间无重生怪干扰围殴）。
+    std::uint32_t worldRespawnDelayMs = 8000;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -185,6 +187,7 @@ struct WorldTestServers {
         world->GetConfig().loginReconnectSeconds = 0.3;
         world->GetConfig().snapshotIntervalMs = 50;      // 快照加速（默认 100ms）
         world->GetConfig().positionSaveIntervalSeconds = 0.5; // 指令一百：测试短周期
+        world->GetConfig().respawnDelayMs = worldRespawnDelayMs; // 阶段17：测试可调
         std::string error;
         if (!world->Start(error)) {
             std::printf("[TestServers] world start failed: %s\n", error.c_str());
@@ -287,9 +290,11 @@ struct WorldTestClient {
         controller.SetWorldEndpoint("127.0.0.1", kWorldPort);
     }
 
-    std::deque<WorldNetworkEvent> recorded[32];
-    int counts[32] = {};
-    WorldNetworkEvent lastEvent[32];
+    // 阶段17：事件枚举扩容（阶段16 末尾 30 个 + 成长 3 个 + 阶段18 余量）。
+    static constexpr int kEventCapacity = 48;
+    std::deque<WorldNetworkEvent> recorded[kEventCapacity];
+    int counts[kEventCapacity] = {};
+    WorldNetworkEvent lastEvent[kEventCapacity];
 
     static int IndexOf(WorldNetworkEvent::Type type) { return static_cast<int>(type); }
 
@@ -300,7 +305,7 @@ struct WorldTestClient {
         client().PollEvents(events);
         for (auto& e : events) {
             const int idx = IndexOf(e.type);
-            if (idx >= 0 && idx < 32) {
+            if (idx >= 0 && idx < kEventCapacity) {
                 ++counts[idx];
                 recorded[idx].push_back(e);
             }

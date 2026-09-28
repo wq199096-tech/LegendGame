@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Status Effect Core V0.16**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Progression/Reward/Respawn Core V0.17**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -308,6 +308,33 @@ SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发
   （Buff 金/紫/橙/绿/蓝）
 - **同 Effect 多来源**：阶段16 同一 effectId 只保留一个实例，后施加者覆盖 source（README 明确
   记录；独立来源 Stack 留待后续阶段）
+
+**服务器权威成长、奖励与怪物重生（阶段17：Progression/Reward/Respawn Core V0.17）**：
+
+- **服务器权威成长**：EXP/Gold/Level 只由 WorldServer 决定（Client 不能发送"我要多少经验"）；
+  DB 持久化（Migration 2：characters.gold 列，旧角色默认 0）；在线击杀走 PlayerSession 结算
+  后经 DbWorker 落盘，离线 killer（DOT 击杀后断线）奖励照常入库不丢失
+- **EXP 公式**：ExpToNextLevel(level) = 100 × level（线性）；Level cap = 100（满级后 EXP 不
+  累计、不溢出、不再升级）；一次大额奖励自动跨多级（while 循环结算）
+- **Training Slime 奖励**：每只 EXP +25 / Gold +3（MonsterDefinition 数据驱动）；击杀归属 =
+  最后造成致死伤害的 Player（Basic/Skill/DOT sourceEntityId 统一）
+- **Level 属性成长**：每级 MaxHp +10 / Attack +2 / Defense +1（lv1 = 100/20/5）；升级立即
+  回满 HP，Derived Stats 经统一重算入口刷新（不覆盖状态加成）；LevelUpEvent(281) 发本人+
+  附近可见玩家
+- **协议**：RewardGranted(280)（只发本人）/ LevelUpEvent(281) / ProgressionSnapshot(282)
+  （进世界下发 + 每 30s 纠偏；重进世界加载持久化 level/exp/gold）
+- **Monster SpawnSlot**：map1 固定 20 个 SpawnSlot（slotId 1~20，位置表即
+  `Shared/Monster/MonsterTypes.h` kInitialMonsterSpawnTable）；启动全满、slot 与 entity
+  双向绑定
+- **Respawn 8s**：怪物死亡 3s 尸体清理后进入 runtime Respawn Queue（respawnTime 从
+  MonsterDeath 起算，尸体 3s 包含在 8s 内）；统一 Respawn Tick 250ms 轮询（不建 per-怪
+  Timer）；到点生成全新 MonsterEntity（新 entityId、满 HP、无状态、Idle、target=0、原 slot
+  出生点），正确加入 MonsterManager + MonsterSpatialGrid，AOI 下个 tick 通知附近玩家
+- **防重复复活**：NotifyEntityRemoved 仅在 slot 无 active entity 且未入队时入队；Poll 时 slot
+  仍被占用则放弃本次重生；重启 Respawn Queue 清空、20 slot 全部重新满怪（runtime-only 不
+  持久化）
+- **MoveMonsterTo 语义**：测试布景搬移怪物 = "重新安家"，同步更新 Respawn slot 出生点
+  （respawn 发生在当前 home，与 SpatialGrid/AOI 一致）
 
 ## Engine V0.2 操作说明
 
