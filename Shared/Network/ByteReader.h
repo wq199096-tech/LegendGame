@@ -25,6 +25,8 @@ public:
     bool IsValid() const { return m_valid; }
     std::size_t Offset() const { return m_offset; }
     std::size_t Remaining() const { return m_valid ? m_size - m_offset : 0; }
+    // 手动进入粘滞失败状态（语义校验失败时使用，如 batch count 超上限）
+    void Invalidate() { m_valid = false; }
 
 private:
     // 取 n 字节指针；越界 -> 置 failed 并返回 nullptr

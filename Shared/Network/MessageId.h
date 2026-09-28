@@ -47,6 +47,11 @@ enum class MessageId : std::uint16_t {
     WorldDisconnectNotice = 212,
     PlayerMoveInput = 220,
     PlayerPositionSnapshot = 221,
+    // 阶段12 指令二十一：AOI 多玩家同步
+    PlayerSpawn = 230,
+    PlayerDespawn = 231,
+    RemotePlayerSnapshot = 232,
+    RemotePlayerBatchSnapshot = 233,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -133,6 +138,10 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::WorldDisconnectNotice:
         case MessageId::PlayerMoveInput:
         case MessageId::PlayerPositionSnapshot:
+        case MessageId::PlayerSpawn:
+        case MessageId::PlayerDespawn:
+        case MessageId::RemotePlayerSnapshot:
+        case MessageId::RemotePlayerBatchSnapshot:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

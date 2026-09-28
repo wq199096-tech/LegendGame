@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace legend::client {
 
@@ -44,11 +45,15 @@ struct WorldNetworkEvent {
         EnterWorldFailed,
         PositionSnapshot,
         ProtocolError,
+        // 阶段12 指令四十六：AOI 多玩家同步事件
+        PlayerSpawn,
+        PlayerDespawn,
+        RemotePlayerBatchSnapshot,
     };
     Type type = Type::Disconnected;
     std::string message;
 
-    // EnterWorldResponse 字段（指令二十）
+    // EnterWorldResponse / PlayerSpawn 字段（指令二十/二十二）
     std::uint64_t requestId = 0;
     std::uint64_t accountId = 0;
     std::uint64_t characterId = 0;
@@ -63,6 +68,11 @@ struct WorldNetworkEvent {
 
     // PlayerPositionSnapshot 字段（指令四十二）
     std::uint32_t lastProcessedInputSequence = 0;
+
+    // 阶段12：PlayerDespawn reason（指令二十三）+ batch 快照（指令二十五）
+    std::uint8_t despawnReason = 0;
+    std::uint64_t serverTime = 0;
+    std::vector<world::RemotePlayerBatchEntry> batchPlayers;
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：

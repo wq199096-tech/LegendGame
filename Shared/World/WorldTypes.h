@@ -36,6 +36,30 @@ inline constexpr std::size_t kSelectionTicketMaxLength = 128;
 inline constexpr const char* kServiceNameGateway = "LegendGateway";
 inline constexpr const char* kServiceNameWorldServer = "LegendWorldServer";
 
+// ---------------------------------------------------------------------------
+// 阶段12：AOI（Uniform Grid / Spatial Hash Grid，指令四~八/二十七/三十八）
+// ---------------------------------------------------------------------------
+
+// 指令五：固定 cellSize=400（2000x2000 约 5x5 cells）。
+inline constexpr float kAoiCellSize = 400.0f;
+// 指令六/七：进入/离开滞回（<=600 进入；已可见 >700 才离开）。
+inline constexpr float kAoiEnterRadius = 600.0f;
+inline constexpr float kAoiLeaveRadius = 700.0f;
+// 指令二十七：单玩家可见人数上限（候选超出按距离近优先）。
+inline constexpr std::size_t kAoiVisibleLimit = 128;
+// 指令二十六：单个 batch 最多 128 玩家，超过拆包。
+inline constexpr std::size_t kRemoteBatchMaxPlayers = 128;
+// 指令三十八：位置差 >300 视为 teleport/correction，直接 snap。
+inline constexpr float kRemoteTeleportDistance = 300.0f;
+
+// 指令二十三：PlayerDespawn.reason。
+enum class PlayerDespawnReason : std::uint8_t {
+    LeftAOI = 1,
+    Disconnected = 2,
+    ChangedMap = 3,
+    ServerCleanup = 4,
+};
+
 inline bool IsMapIdSupported(std::uint16_t mapId) {
     return mapId == kDefaultMapId;
 }

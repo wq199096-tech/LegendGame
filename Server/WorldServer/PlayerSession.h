@@ -3,11 +3,13 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 
 namespace legend::world {
 
 // 阶段11 指令二十七：PlayerSession —— 进入世界后的权威玩家数据。
 // 由 WorldManager 持有（io 线程访问）；位置为服务器权威（指令三十三）。
+// 阶段12 指令十三/十四：visiblePlayers 由 WorldServer 权威维护（Client 不决定谁可见）。
 class PlayerSession {
 public:
     PlayerSession() = default;
@@ -42,6 +44,15 @@ public:
     std::chrono::steady_clock::time_point LastMoveTime() const { return m_lastMoveTime; }
     void TouchMoveTime() { m_lastMoveTime = std::chrono::steady_clock::now(); }
 
+    // 阶段12 指令十三：AOI 可见集合（characterId）。返回值 = 是否原本存在。
+    const std::unordered_set<std::uint64_t>& VisiblePlayers() const { return m_visiblePlayers; }
+    void AddVisiblePlayer(std::uint64_t characterId) { m_visiblePlayers.insert(characterId); }
+    bool EraseVisiblePlayer(std::uint64_t characterId) {
+        return m_visiblePlayers.erase(characterId) != 0;
+    }
+    void ClearVisiblePlayers() { m_visiblePlayers.clear(); }
+    std::size_t VisibleCount() const { return m_visiblePlayers.size(); }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -56,6 +67,8 @@ private:
     std::uint32_t m_lastProcessedInputSequence = 0;
     bool m_dirtyPosition = false;
     std::chrono::steady_clock::time_point m_lastMoveTime{std::chrono::steady_clock::now()};
+    // 阶段12 指令十三：仅 WorldServer io 线程维护。
+    std::unordered_set<std::uint64_t> m_visiblePlayers;
 };
 
 } // namespace legend::world

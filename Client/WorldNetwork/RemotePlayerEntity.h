@@ -1,0 +1,52 @@
+#pragma once
+
+#include "Shared/World/WorldProtocol.h"
+
+#include <cstdint>
+#include <string>
+
+namespace legend::client {
+
+// 阶段12 指令三十二：RemotePlayerEntity —— 服务器 Spawn/Snapshot 驱动的远程玩家。
+// 只存状态与插值，禁止持有网络/渲染逻辑（渲染复用 GameScene Debug 绘制，指令四十）。
+class RemotePlayerEntity {
+public:
+    // 指令三十四：不存在则由 Manager 创建；已存在则更新元数据与位置。
+    void ApplySpawn(const world::PlayerSpawnPayload& spawn);
+    // 指令三十六：只更新 server target，不瞬移 render（teleport 除外）。
+    void ApplySnapshot(float serverX, float serverY, std::uint64_t serverTime);
+    // 指令三十七/三十八：render = lerp(render, server, 1 - exp(-12*dt))；差 >300 直接 snap。
+    void UpdateInterpolation(float deltaTime);
+
+    std::uint64_t CharacterId() const { return m_characterId; }
+    const std::string& Name() const { return m_name; }
+    std::uint16_t ClassId() const { return m_classId; }
+    std::uint16_t Gender() const { return m_gender; }
+    std::uint32_t Level() const { return m_level; }
+    std::uint16_t MapId() const { return m_mapId; }
+    float ServerX() const { return m_serverX; }
+    float ServerY() const { return m_serverY; }
+    float RenderX() const { return m_renderX; }
+    float RenderY() const { return m_renderY; }
+    // 指令四十一：相邻两次服务器位置差估算移动（Walk/Idle；不同步动画帧，指令四十二）。
+    bool IsMoving() const { return m_moving; }
+    bool Active() const { return m_active; }
+    std::uint64_t LastSnapshotServerTime() const { return m_lastSnapshotServerTime; }
+
+private:
+    std::uint64_t m_characterId = 0;
+    std::string m_name;
+    std::uint16_t m_classId = 0;
+    std::uint16_t m_gender = 0;
+    std::uint32_t m_level = 1;
+    std::uint16_t m_mapId = 1;
+    float m_serverX = 0.0f;
+    float m_serverY = 0.0f;
+    float m_renderX = 0.0f;
+    float m_renderY = 0.0f;
+    std::uint64_t m_lastSnapshotServerTime = 0;
+    bool m_moving = false;
+    bool m_active = false;
+};
+
+} // namespace legend::client

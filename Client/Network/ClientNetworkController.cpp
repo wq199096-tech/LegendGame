@@ -93,6 +93,8 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
         m_world.HandleEvent(worldEvents.front());
         worldEvents.pop_front();
     }
+    // 阶段12 指令三十七/四十七：主线程远程玩家插值
+    m_world.UpdateRemotePlayers(deltaTime);
 
     // 指令六十四：心跳超时检测
     m_client->UpdateHeartbeat(deltaTime);
@@ -286,6 +288,27 @@ std::string ClientNetworkController::WorldStatusText() const {
     text += ")";
     text += " seq=";
     text += std::to_string(m_world.LastSentInputSequence());
+    // 阶段12 指令七十二：F12 增加 RemotePlayers / LastRemoteBatchSize。
+    text += " remotes=";
+    text += std::to_string(m_world.RemotePlayers().Count());
+    text += " batch=";
+    text += std::to_string(m_world.LastRemoteBatchSize());
+    // 阶段12 指令四十四：Debug 列出前 4 个远程玩家名（无世界内文字渲染器，
+    // 名字随 F12 面板显示；正式头顶 UI 后续单独阶段）。
+    if (m_world.RemotePlayers().Count() > 0) {
+        text += " [";
+        int listed = 0;
+        for (const auto& [id, remote] : m_world.RemotePlayers().All()) {
+            if (listed++ >= 4) {
+                break;
+            }
+            if (listed > 1) {
+                text += ",";
+            }
+            text += remote.Name();
+        }
+        text += "]";
+    }
     if (m_world.RttMs() >= 0.0f) {
         text += " rtt=";
         text += std::to_string(static_cast<int>(m_world.RttMs()));

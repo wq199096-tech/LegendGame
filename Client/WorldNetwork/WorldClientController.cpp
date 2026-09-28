@@ -15,6 +15,11 @@ void WorldClientController::SetState(WorldFlowState state) {
     }
 }
 
+void WorldClientController::UpdateRemotePlayers(float deltaTime) {
+    // 阶段12 指令三十七：主线程插值（网络线程绝不直接改实体，指令四十七）。
+    m_remotePlayers.Update(deltaTime);
+}
+
 void WorldClientController::EnterWorldWithTicket(const std::string& selectionTicket) {
     if (selectionTicket.empty()) {
         return;
@@ -39,10 +44,12 @@ void WorldClientController::SendMoveInput(float directionX, float directionY, fl
 
 void WorldClientController::Disconnect() {
     m_client->Disconnect(true);
+    m_remotePlayers.Clear(); // 阶段12 指令五十九（客户端侧）：断开清空远程实体
     SetState(WorldFlowState::Disconnected);
 }
 
 void WorldClientController::OnDisconnected() {
+    m_remotePlayers.Clear();
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -58,6 +65,7 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             break;
         case WorldNetworkEvent::Type::Disconnected:
             LOG_INFO("[World] Disconnected: " + event.message);
+            m_remotePlayers.Clear(); // 阶段12 指令五十九
             SetState(WorldFlowState::Disconnected);
             break;
         case WorldNetworkEvent::Type::HandshakeSuccess:
@@ -77,6 +85,8 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_lastServerSequence = 0;
             m_lastErrorCode = 0;
             m_lastError.clear();
+            m_remotePlayers.Clear(); // 阶段12：新世界会话不残留上次远程实体
+            m_lastRemoteBatchSize = 0;
             SetState(WorldFlowState::WorldReady);
             LOG_INFO("[World] EnterWorld success character=" + event.characterName + " (#" +
                      std::to_string(event.characterId) + ") map=" + std::to_string(event.mapId) +
@@ -97,6 +107,41 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_serverPositionY = event.positionY;
             m_lastServerSequence = event.lastProcessedInputSequence;
             break;
+        // ------------------------------------------------------------------
+        // 阶段12 指令四十六：AOI 事件 -> RemotePlayerManager（主线程，指令四十七）
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::PlayerSpawn: {
+            // 指令三十四：不存在创建 / 已存在更新（Manager 保证不重复实体）。
+            world::PlayerSpawnPayload spawn;
+            spawn.characterId = event.characterId;
+            spawn.name = event.characterName;
+            spawn.classId = event.classId;
+            spawn.gender = event.gender;
+            spawn.level = event.level;
+            spawn.mapId = event.mapId;
+            spawn.positionX = event.positionX;
+            spawn.positionY = event.positionY;
+            spawn.serverTime = event.serverTime;
+            m_remotePlayers.HandleSpawn(spawn);
+            LOG_DEBUG("[World] PlayerSpawn #" + std::to_string(event.characterId) + " " +
+                      event.characterName);
+            break;
+        }
+        case WorldNetworkEvent::Type::PlayerDespawn:
+            // 指令三十五：立即删除（四十九：Despawn 后旧 snapshot 自然忽略）。
+            m_remotePlayers.HandleDespawn(event.characterId);
+            LOG_DEBUG("[World] PlayerDespawn #" + std::to_string(event.characterId) + " reason=" +
+                      std::to_string(static_cast<int>(event.despawnReason)));
+            break;
+        case WorldNetworkEvent::Type::RemotePlayerBatchSnapshot: {
+            // 指令二十五/四十八：未知 characterId 丢弃在 Manager 内处理。
+            world::RemotePlayerBatchSnapshotPayload batch;
+            batch.serverTime = event.serverTime;
+            batch.players = event.batchPlayers;
+            m_remotePlayers.HandleBatch(batch);
+            m_lastRemoteBatchSize = static_cast<std::uint32_t>(batch.players.size());
+            break;
+        }
         case WorldNetworkEvent::Type::ProtocolError:
             LOG_WARN("[World] Protocol error: " + event.message);
             m_lastError = event.message;

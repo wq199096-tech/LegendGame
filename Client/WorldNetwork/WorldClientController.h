@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/WorldNetworkClient.h"
 
 #include <cstdint>
@@ -11,6 +12,7 @@ namespace legend::client {
 // 阶段11 指令四十五/五十：WorldClientController——世界连接编排。
 // CharacterSelect 成功后（拿到 selectionTicket）自动连接 WorldServer；
 // 只更新自身状态/缓存，禁止直接修改 PlayerCharacter/Combat。
+// 阶段12：持有 RemotePlayerManager（指令三十三，主线程独占，指令四十七）。
 class WorldClientController {
 public:
     WorldClientController();
@@ -18,6 +20,8 @@ public:
     // 每帧由上层喂入世界网络事件（主线程消费）。
     void HandleEvent(const WorldNetworkEvent& event);
     void OnDisconnected();
+    // 阶段12 指令三十七：每帧远程玩家插值（主线程）。
+    void UpdateRemotePlayers(float deltaTime);
 
     // 指令四十六：CharacterSelect 成功后调用（自动连接 + EnterWorld）。
     void EnterWorldWithTicket(const std::string& selectionTicket);
@@ -34,6 +38,9 @@ public:
     std::uint64_t WorldConnectionId() const { return m_client->ServerConnectionId(); }
     std::uint64_t CharacterId() const { return m_characterId; }
     std::uint16_t MapId() const { return m_mapId; }
+    // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
+    const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
+    std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
     float ServerPositionX() const { return m_serverPositionX; }
     float ServerPositionY() const { return m_serverPositionY; }
     std::uint32_t LastServerInputSequence() const { return m_lastServerSequence; }
@@ -49,6 +56,8 @@ private:
 
     std::shared_ptr<WorldNetworkClient> m_client = std::make_shared<WorldNetworkClient>();
     WorldFlowState m_state = WorldFlowState::Disconnected;
+    RemotePlayerManager m_remotePlayers; // 阶段12 指令三十三
+    std::uint32_t m_lastRemoteBatchSize = 0;
 
     std::uint64_t m_characterId = 0;
     std::uint16_t m_mapId = 1;

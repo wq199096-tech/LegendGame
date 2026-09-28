@@ -145,6 +145,115 @@ bool DecodePlayerPositionSnapshot(const std::uint8_t* data, std::size_t size,
     });
 }
 
+// ---------------------------------------------------------------------------
+// 阶段12：AOI 多玩家同步（指令二十二~二十五/一百零二~一百零四）
+// ---------------------------------------------------------------------------
+
+bool EncodePlayerSpawn(const PlayerSpawnPayload& p, std::vector<std::uint8_t>& out) {
+    return EncodePayload(out, [&](legend::network::ByteWriter& w) {
+        w.WriteUInt64(p.characterId);
+        w.WriteUInt16(p.classId);
+        w.WriteUInt16(p.gender);
+        w.WriteUInt32(p.level);
+        w.WriteUInt16(p.mapId);
+        w.WriteFloat(p.positionX);
+        w.WriteFloat(p.positionY);
+        w.WriteUInt64(p.serverTime);
+        return w.WriteString(p.name);
+    });
+}
+
+bool DecodePlayerSpawn(const std::uint8_t* data, std::size_t size, PlayerSpawnPayload& out,
+                       std::string& error) {
+    return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
+        out.characterId = r.ReadUInt64();
+        out.classId = r.ReadUInt16();
+        out.gender = r.ReadUInt16();
+        out.level = r.ReadUInt32();
+        out.mapId = r.ReadUInt16();
+        out.positionX = r.ReadFloat();
+        out.positionY = r.ReadFloat();
+        out.serverTime = r.ReadUInt64();
+        (void)(r.ReadString(out.name));
+    });
+}
+
+bool EncodePlayerDespawn(const PlayerDespawnPayload& p, std::vector<std::uint8_t>& out) {
+    return EncodePayload(out, [&](legend::network::ByteWriter& w) {
+        w.WriteUInt64(p.characterId);
+        w.WriteUInt8(p.reason);
+        return true;
+    });
+}
+
+bool DecodePlayerDespawn(const std::uint8_t* data, std::size_t size, PlayerDespawnPayload& out,
+                         std::string& error) {
+    return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
+        out.characterId = r.ReadUInt64();
+        out.reason = r.ReadUInt8();
+    });
+}
+
+bool EncodeRemotePlayerSnapshot(const RemotePlayerSnapshotPayload& p,
+                                std::vector<std::uint8_t>& out) {
+    return EncodePayload(out, [&](legend::network::ByteWriter& w) {
+        w.WriteUInt64(p.characterId);
+        w.WriteFloat(p.positionX);
+        w.WriteFloat(p.positionY);
+        w.WriteUInt32(p.lastProcessedInputSequence);
+        w.WriteUInt64(p.serverTime);
+        return true;
+    });
+}
+
+bool DecodeRemotePlayerSnapshot(const std::uint8_t* data, std::size_t size,
+                                RemotePlayerSnapshotPayload& out, std::string& error) {
+    return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
+        out.characterId = r.ReadUInt64();
+        out.positionX = r.ReadFloat();
+        out.positionY = r.ReadFloat();
+        out.lastProcessedInputSequence = r.ReadUInt32();
+        out.serverTime = r.ReadUInt64();
+    });
+}
+
+bool EncodeRemotePlayerBatchSnapshot(const RemotePlayerBatchSnapshotPayload& p,
+                                     std::vector<std::uint8_t>& out) {
+    return EncodePayload(out, [&](legend::network::ByteWriter& w) {
+        w.WriteUInt64(p.serverTime);
+        w.WriteUInt16(static_cast<std::uint16_t>(p.players.size()));
+        for (const auto& entry : p.players) {
+            w.WriteUInt64(entry.characterId);
+            w.WriteFloat(entry.positionX);
+            w.WriteFloat(entry.positionY);
+            w.WriteUInt32(entry.lastProcessedInputSequence);
+        }
+        return true;
+    });
+}
+
+bool DecodeRemotePlayerBatchSnapshot(const std::uint8_t* data, std::size_t size,
+                                     RemotePlayerBatchSnapshotPayload& out, std::string& error) {
+    return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
+        out.serverTime = r.ReadUInt64();
+        const std::uint16_t count = r.ReadUInt16();
+        // 指令一百零四：count > 128 拒绝；指令一百零三：count 超剩余 payload 拒绝。
+        if (count > kRemoteBatchMaxPlayers) {
+            r.Invalidate();
+            return;
+        }
+        out.players.reserve(count);
+        for (std::uint16_t i = 0; i < count; ++i) {
+            RemotePlayerBatchEntry entry;
+            entry.characterId = r.ReadUInt64();
+            entry.positionX = r.ReadFloat();
+            entry.positionY = r.ReadFloat();
+            entry.lastProcessedInputSequence = r.ReadUInt32();
+            out.players.push_back(entry);
+        }
+    });
+}
+
 bool EncodeConsumeSelectionTicketRequest(const ConsumeSelectionTicketRequestPayload& p,
                                          std::vector<std::uint8_t>& out) {
     return EncodePayload(out, [&](legend::network::ByteWriter& w) {

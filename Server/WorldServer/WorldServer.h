@@ -6,6 +6,7 @@
 #include "Server/LoginServer/Account/AccountRepository.h"
 #include "Server/LoginServer/Account/Database/Database.h"
 #include "Server/LoginServer/Account/DbWorker.h"
+#include "Server/WorldServer/AOI/WorldSpatialGrid.h"
 #include "Server/WorldServer/WorldManager.h"
 #include "Server/WorldServer/WorldMapManager.h"
 #include "Server/WorldServer/WorldSession.h"
@@ -46,6 +47,11 @@ public:
         double clientIdleTimeoutSeconds = 20.0;             // 指令七十七
         int snapshotIntervalMs = 100;                        // 指令四十二
         double positionSaveIntervalSeconds = 30.0;           // 指令五十四
+        // 阶段12 AOI（指令五~七/十五/二十七/二十九）
+        int aoiTickMs = 200;                                 // 指令十五：AOI tick 200ms
+        float aoiEnterRadius = kAoiEnterRadius;              // 指令六：600
+        float aoiLeaveRadius = kAoiLeaveRadius;              // 指令七：700（滞回）
+        std::size_t aoiVisibleLimit = kAoiVisibleLimit;      // 指令二十七：128
     };
 
     struct Hooks {
@@ -102,6 +108,19 @@ private:
     void ScheduleClientIdleCheck();
     void CheckClientIdle();
 
+    // 阶段12：AOI（指令九~二十一/五十~五十二/六十九/七十）
+    void ScheduleAoiTick();
+    void RunAoiTick();
+    void InitializePlayerVisibility(const std::shared_ptr<PlayerSession>& player);
+    void NotifyPlayerGoneToObservers(std::uint64_t characterId, PlayerDespawnReason reason);
+    void SendPlayerSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                         const std::shared_ptr<PlayerSession>& target);
+    void SendPlayerDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                           std::uint64_t targetCharacterId, PlayerDespawnReason reason);
+    void SendRemoteBatches(const std::shared_ptr<PlayerSession>& player, std::uint64_t serverTime);
+    void SendPacketToPlayer(const std::shared_ptr<PlayerSession>& player,
+                            const legend::network::Packet& packet);
+
     // 位置保存（指令五十二/五十三/五十四/五十六）
     void SavePlayerPosition(const std::shared_ptr<PlayerSession>& player, bool touchLastPlayed);
     void SavePlayerPositionNow(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
@@ -122,6 +141,7 @@ private:
 
     WorldManager m_players;
     WorldMapManager m_mapManager;
+    WorldSpatialGrid m_spatialGrid; // 阶段12 指令九：仅 io 线程访问（无锁）
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;
@@ -132,6 +152,7 @@ private:
     asio::steady_timer m_snapshotTimer;
     asio::steady_timer m_saveTimer;
     asio::steady_timer m_idleTimer;
+    asio::steady_timer m_aoiTimer; // 阶段12 指令六十九：AOI tick 200ms，Stop 时 cancel
 
     std::uint64_t m_nextRequestId = 1; // 指令七十三：单调增长
     Hooks m_hooks;

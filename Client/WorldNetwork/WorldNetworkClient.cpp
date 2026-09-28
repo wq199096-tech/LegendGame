@@ -266,6 +266,77 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.positionX = snapshot.positionX;
             event.positionY = snapshot.positionY;
             event.lastProcessedInputSequence = snapshot.lastProcessedInputSequence;
+            event.serverTime = snapshot.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // 阶段12 指令四十六：AOI 多玩家同步（Spawn/Despawn/Remote batch）
+        // ------------------------------------------------------------------
+        case MessageId::PlayerSpawn: {
+            world::PlayerSpawnPayload spawn;
+            std::string decodeError;
+            if (!world::DecodePlayerSpawn(packet.payload.data(), packet.payload.size(), spawn,
+                                          decodeError)) {
+                return; // 畸形包丢弃（服务器只断自己连接的语义由服务端负责）
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PlayerSpawn;
+            event.characterId = spawn.characterId;
+            event.characterName = spawn.name;
+            event.classId = spawn.classId;
+            event.gender = spawn.gender;
+            event.level = spawn.level;
+            event.mapId = spawn.mapId;
+            event.positionX = spawn.positionX;
+            event.positionY = spawn.positionY;
+            event.serverTime = spawn.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::PlayerDespawn: {
+            world::PlayerDespawnPayload despawn;
+            std::string decodeError;
+            if (!world::DecodePlayerDespawn(packet.payload.data(), packet.payload.size(), despawn,
+                                            decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PlayerDespawn;
+            event.characterId = despawn.characterId;
+            event.despawnReason = despawn.reason;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::RemotePlayerSnapshot: {
+            // 阶段12 服务器只发 batch；单条(232)转成单元素 batch 事件统一处理。
+            world::RemotePlayerSnapshotPayload snapshot;
+            std::string decodeError;
+            if (!world::DecodeRemotePlayerSnapshot(packet.payload.data(), packet.payload.size(),
+                                                   snapshot, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::RemotePlayerBatchSnapshot;
+            event.serverTime = snapshot.serverTime;
+            event.batchPlayers.push_back({snapshot.characterId, snapshot.positionX,
+                                          snapshot.positionY,
+                                          snapshot.lastProcessedInputSequence});
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::RemotePlayerBatchSnapshot: {
+            world::RemotePlayerBatchSnapshotPayload batch;
+            std::string decodeError;
+            if (!world::DecodeRemotePlayerBatchSnapshot(packet.payload.data(),
+                                                        packet.payload.size(), batch,
+                                                        decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::RemotePlayerBatchSnapshot;
+            event.serverTime = batch.serverTime;
+            event.batchPlayers = std::move(batch.players);
             PushEvent(std::move(event));
             return;
         }

@@ -64,6 +64,51 @@ struct PlayerPositionSnapshotPayload {
     std::uint64_t serverTime = 0;
 };
 
+// ---------------------------------------------------------------------------
+// 阶段12 指令二十二~二十五：AOI 多玩家同步 payload
+// ---------------------------------------------------------------------------
+
+// 指令二十二：PlayerSpawn(230)。
+struct PlayerSpawnPayload {
+    std::uint64_t characterId = 0;
+    std::string name;
+    std::uint16_t classId = 0;
+    std::uint16_t gender = 0;
+    std::uint32_t level = 1;
+    std::uint16_t mapId = 1;
+    float positionX = 0.0f;
+    float positionY = 0.0f;
+    std::uint64_t serverTime = 0;
+};
+
+// 指令二十三：PlayerDespawn(231)，reason = PlayerDespawnReason。
+struct PlayerDespawnPayload {
+    std::uint64_t characterId = 0;
+    std::uint8_t reason = 0;
+};
+
+// 指令二十四：RemotePlayerSnapshot(232)（阶段12 服务器只发 batch，保留单条协议）。
+struct RemotePlayerSnapshotPayload {
+    std::uint64_t characterId = 0;
+    float positionX = 0.0f;
+    float positionY = 0.0f;
+    std::uint32_t lastProcessedInputSequence = 0;
+    std::uint64_t serverTime = 0;
+};
+
+// 指令二十五：RemotePlayerBatchSnapshot(233) 推荐形态。
+struct RemotePlayerBatchEntry {
+    std::uint64_t characterId = 0;
+    float positionX = 0.0f;
+    float positionY = 0.0f;
+    std::uint32_t lastProcessedInputSequence = 0;
+};
+
+struct RemotePlayerBatchSnapshotPayload {
+    std::uint64_t serverTime = 0;
+    std::vector<RemotePlayerBatchEntry> players; // count <= kRemoteBatchMaxPlayers
+};
+
 // 阶段11 指令十二/十三：WorldServer -> LoginServer Ticket 一次性消费。
 struct ConsumeSelectionTicketRequestPayload {
     std::uint64_t requestId = 0;
@@ -98,6 +143,20 @@ bool EncodePlayerPositionSnapshot(const PlayerPositionSnapshotPayload& p,
                                   std::vector<std::uint8_t>& out);
 bool DecodePlayerPositionSnapshot(const std::uint8_t* data, std::size_t size,
                                   PlayerPositionSnapshotPayload& out, std::string& error);
+bool EncodePlayerSpawn(const PlayerSpawnPayload& p, std::vector<std::uint8_t>& out);
+bool DecodePlayerSpawn(const std::uint8_t* data, std::size_t size, PlayerSpawnPayload& out,
+                       std::string& error);
+bool EncodePlayerDespawn(const PlayerDespawnPayload& p, std::vector<std::uint8_t>& out);
+bool DecodePlayerDespawn(const std::uint8_t* data, std::size_t size, PlayerDespawnPayload& out,
+                         std::string& error);
+bool EncodeRemotePlayerSnapshot(const RemotePlayerSnapshotPayload& p,
+                                std::vector<std::uint8_t>& out);
+bool DecodeRemotePlayerSnapshot(const std::uint8_t* data, std::size_t size,
+                                RemotePlayerSnapshotPayload& out, std::string& error);
+bool EncodeRemotePlayerBatchSnapshot(const RemotePlayerBatchSnapshotPayload& p,
+                                     std::vector<std::uint8_t>& out);
+bool DecodeRemotePlayerBatchSnapshot(const std::uint8_t* data, std::size_t size,
+                                     RemotePlayerBatchSnapshotPayload& out, std::string& error);
 bool EncodeConsumeSelectionTicketRequest(const ConsumeSelectionTicketRequestPayload& p,
                                          std::vector<std::uint8_t>& out);
 bool DecodeConsumeSelectionTicketRequest(const std::uint8_t* data, std::size_t size,

@@ -616,6 +616,9 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     }
     m_mapRenderer.Flush();
 
+    // 阶段12 指令四十/四十五：远程玩家 Debug 绘制（跟随相机剔除由 SpriteBatch 裁剪）
+    DrawRemotePlayers(m_mapRenderer.GetBatch());
+
     if (m_collisionDebug) {
         m_mapRenderer.RenderCollisionOverlay(*m_map);
     }
@@ -660,6 +663,30 @@ void GameScene::DrawCharacterDebug(legend::render::SpriteBatch& batch) {
                    legend::math::Color(1.0f, 1.0f, 1.0f, 0.9f));
     batch.DrawQuad(*m_whiteTexture, feet, {2.0f / 64.0f, 16.0f / 64.0f}, 0.0f,
                    legend::math::Color(1.0f, 1.0f, 1.0f, 0.9f));
+}
+
+// 阶段12 指令四十/四十五：远程玩家 Debug 绘制。
+// 复用白纹理 Quad（网络逻辑不进 Renderer，指令四十）；绿色身体 + 白色头顶标记与
+// 本地玩家区分（指令四十五：Debug 描边/文字区分）；名字走 F12 文本（指令四十四，
+// 世界内暂无文字渲染器，正式头顶 UI 后续单独阶段）。移动状态用亮/暗色区分（指令四十一）。
+void GameScene::DrawRemotePlayers(legend::render::SpriteBatch& batch) {
+    if (!m_networkController || !m_whiteTexture) {
+        return;
+    }
+    const auto& remotes = m_networkController->World().RemotePlayers().All();
+    for (const auto& [characterId, remote] : remotes) {
+        const legend::math::Vector2 feet(remote.RenderX(), remote.RenderY());
+        // 身体 48x64（中心在 feet 上方 32）
+        const legend::math::Color bodyColor = remote.IsMoving()
+                                                  ? legend::math::Color(0.35f, 0.95f, 0.45f, 0.95f)
+                                                  : legend::math::Color(0.20f, 0.55f, 0.30f, 0.95f);
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -32.0f),
+                       {48.0f / 64.0f, 64.0f / 64.0f}, 0.0f, bodyColor);
+        // 头顶白色小方块标记（远程玩家标识）
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -70.0f),
+                       {12.0f / 64.0f, 12.0f / 64.0f}, 0.0f,
+                       legend::math::Color(1.0f, 1.0f, 1.0f, 0.95f));
+    }
 }
 
 void GameScene::ApplyAutoTestHooks() {

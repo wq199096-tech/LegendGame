@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**World & Character Handoff Core V0.11**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**AOI & Multiplayer Replication Core V0.12**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -97,6 +97,27 @@ Build\bin\Debug\LegendClient.exe
 **WorldServer 细节**：SQLite WAL 多进程并发（Login 写 / World 读+位置更新）；
 同角色不允许重复在线（CharacterAlreadyOnline）；Ticket 重放/过期 → 统一 InvalidTicket；
 Login 链路断开时已在线玩家不受影响，WorldServer 自动重连。
+
+**多玩家可见性与同步（阶段12：AOI & Multiplayer Replication Core V0.12）**：
+
+- **AOI 权威在 WorldServer**：Client 不计算谁可见，只根据服务器 Spawn/Snapshot/Despawn 维护远程玩家
+- **Uniform Grid / Spatial Hash Grid**（`Server/WorldServer/AOI/WorldSpatialGrid`）：cellSize=400，
+  地图 2000×2000 约 5×5 cells；查询跨 cell（±2 格覆盖半径）；距离比较只用 distanceSquared（无 sqrt）
+- **可见半径滞回**：EnterRadius=600（<=600 进入可见）/ LeaveRadius=700（已可见 >700 才离开），防边界抖动
+- **AOI Tick**：200ms 一次（WorldServer m_aoiTimer），对每个玩家：Grid 候选 → 排除自己/跨地图 →
+  滞回判定 → 与服务器权威 visiblePlayers（上限 128，距离近优先，同距离 characterId 升序）比较 → 只发
+  Spawn/Despawn 差量（exactly-once；离开再进入重新 Spawn）
+- **协议**：PlayerSpawn=230（全元数据）/ PlayerDespawn=231（reason：LeftAOI=1 / Disconnected=2 /
+  ChangedMap=3 / ServerCleanup=4）/ RemotePlayerSnapshot=232 / RemotePlayerBatchSnapshot=233
+  （serverTime + count + entries，单批 ≤128 超出拆包；count>128 或超剩余 payload 拒绝解码）
+- **远程位置同步**：复用 100ms 快照 timer——自己的 PlayerPositionSnapshot + 可见玩家的 batch 快照
+  （不含接收者自己，位置来自服务器权威 PlayerSession）
+- **断线清理**：Grid/MapManager/可见集全清，所有能看到该玩家的收到 Despawn(Disconnected)，无 ghost
+- **客户端**：RemotePlayerEntity/RemotePlayerManager（network thread → event queue → main thread），
+  render = lerp(render, server, 1-exp(-12·dt)) 线性插值，位置差 >300 直接 snap（teleport correction）；
+  远程玩家不接受本地输入，移动方向/亮暗色由服务器位置差估算（不同步动画帧/技能）；
+  F12 World Debug 增加 remotes=N / batch=M / 远程玩家名列表
+- **双开验收**：两个 LegendClient 不同账号进入同一地图，靠近互见、移动同步、走远消失、走近重现
 
 **Account Database（SQLite3）**：
 
