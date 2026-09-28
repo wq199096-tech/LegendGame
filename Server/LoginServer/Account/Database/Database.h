@@ -47,6 +47,7 @@ public:
 
     // 绑定（index 从 1 开始）。失败置 m_valid=false。
     void BindInt64(int index, std::int64_t value);
+    void BindDouble(int index, double value);
     void BindText(int index, const std::string& value);
 
     // SQLITE_ROW -> true（有行）；SQLITE_DONE -> false（无行，成功）；

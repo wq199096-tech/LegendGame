@@ -64,6 +64,35 @@ bool TicketStore::Consume(const std::string& ticket, std::uint64_t accountId,
     return true;
 }
 
+TicketStore::ConsumeOutcome TicketStore::ConsumeForWorld(const std::string& ticket) {
+    ConsumeOutcome outcome;
+    if (ticket.empty()) {
+        outcome.failure = ConsumeOutcome::Failure::NotFound;
+        return outcome;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    ClearExpiredLocked();
+    const auto it = m_entries.find(Sha256Hex(ticket));
+    if (it == m_entries.end()) {
+        outcome.failure = ConsumeOutcome::Failure::NotFound;
+        return outcome;
+    }
+    TicketEntry& entry = it->second;
+    if (entry.consumed) {
+        outcome.failure = ConsumeOutcome::Failure::Consumed; // 指令十四：重放拒绝
+        return outcome;
+    }
+    if (std::chrono::steady_clock::now() >= entry.expiresAt) {
+        outcome.failure = ConsumeOutcome::Failure::Expired;
+        return outcome;
+    }
+    entry.consumed = true; // 指令十四：消费成功后再也不能使用
+    outcome.success = true;
+    outcome.accountId = entry.accountId;
+    outcome.characterId = entry.characterId;
+    return outcome;
+}
+
 void TicketStore::ClearExpiredLocked() {
     const auto now = std::chrono::steady_clock::now();
     for (auto it = m_entries.begin(); it != m_entries.end();) {

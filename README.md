@@ -1,12 +1,13 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Account & Character Core V0.10**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**World & Character Handoff Core V0.11**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
 - 渲染：OpenGL 3.3 Core（自带精简 GL 函数加载器，不依赖 GLEW/GLAD）
-- 网络：WinSock2 + asio standalone（TcpConnection/TcpClient/TcpServer，LegendGateway + LegendLoginServer）
-- 账号：SQLite3 持久化（账号/角色/Session），密码 Argon2id（libsodium），Session Token CSPRNG
+- 网络：WinSock2 + asio standalone（TcpConnection/TcpClient/TcpServer，Gateway + LoginServer + WorldServer）
+- 账号：SQLite3 持久化（账号/角色/Session，WAL 多进程并发），密码 Argon2id（libsodium），Session Token CSPRNG
+- 世界：SelectionTicket 一次性交接 + 权威位置移动 + 位置周期/断线/关服保存
 - 地图：数据驱动（JSON），Tile/Object/Collision/Occlusion 四层，Chunk 可视剔除 + SpriteBatch 批渲染 + Y-Sort
 - 角色：Entity/Character/Controller 体系，8 方向移动，SpriteSheet + UVRect 动画（Idle/Walk × 8 方向 = 16 Clip）
 - 图片解码：stb_image.h（单头文件，公有领域，位于 ThirdParty/stb）
@@ -74,8 +75,28 @@ Build\bin\Debug\LegendMapEditor.exe
 ```bat
 Build\bin\Debug\LegendLoginServer.exe          :: 127.0.0.1:7100
 Build\bin\Debug\LegendGateway.exe              :: 127.0.0.1:7000
+Build\bin\Debug\LegendWorldServer.exe          :: 127.0.0.1:7200（阶段11）
 Build\bin\Debug\LegendClient.exe
 ```
+
+**角色进入世界流程（阶段11）**：
+
+1. Client → Gateway 注册/登录（AccountLoginRequest）
+2. 角色列表 / 创建角色 / CharacterSelect → 返回一次性 SelectionTicket（60s）
+3. Client 直连 WorldServer（7200）→ WorldHandshake → EnterWorldRequest（只带 ticket）
+4. WorldServer → LoginServer 内部协议 ConsumeSelectionTicket（一次性消费，返回 accountId/characterId）
+5. WorldServer 从 SQLite 加载角色 → PlayerSession → 进入 MapInstance(mapId=1)
+6. Client 收到 EnterWorldResponse → WorldReady（本地参考位置 = 服务器位置）
+7. 移动：Client 只发方向输入（PlayerMoveInput，dt clamp 0.1s、方向 Normalize、边界 Clamp 0~2000）
+8. WorldServer 每 100ms 下发 PlayerPositionSnapshot（权威位置 + lastProcessedInputSequence）
+9. 下线/异常断线/关服：保存 mapId/position/last_played_at（周期 30s + 断线 + 关服 Flush）
+10. 重新登录 → CharacterSelect → 新 Ticket → EnterWorld → 位置从上次保存点恢复
+
+**端口**：7000 Gateway / 7100 Login / 7200 World。
+
+**WorldServer 细节**：SQLite WAL 多进程并发（Login 写 / World 读+位置更新）；
+同角色不允许重复在线（CharacterAlreadyOnline）；Ticket 重放/过期 → 统一 InvalidTicket；
+Login 链路断开时已在线玩家不受影响，WorldServer 自动重连。
 
 **Account Database（SQLite3）**：
 

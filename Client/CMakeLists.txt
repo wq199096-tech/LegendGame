@@ -1,11 +1,14 @@
 # ---------------------------------------------------------------------------
 # LegendClientAccount：客户端账号/角色控制器 + 网络客户端（阶段10 指令五十七）
-# 独立静态库：LegendClient 与 LegendAccountTests 共用（不依赖 SDL）。
+# 阶段11：加入 WorldNetworkClient/WorldClientController（指令四十五）。
+# 独立静态库：LegendClient 与 LegendAccountTests/LegendWorldTests 共用（不依赖 SDL）。
 # ---------------------------------------------------------------------------
 add_library(LegendClientAccount STATIC
     Network/GameNetworkClient.cpp
     Account/AccountClientController.cpp
     Account/CharacterSelectionController.cpp
+    WorldNetwork/WorldNetworkClient.cpp
+    WorldNetwork/WorldClientController.cpp
 )
 target_include_directories(LegendClientAccount PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendClientAccount PUBLIC cxx_std_20)

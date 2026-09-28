@@ -19,7 +19,7 @@ jobs:
       - name: Build (all targets)
         run: cmake --build build --config Debug --parallel
 
-      - name: Verify artifacts (6 executables)
+      - name: Verify artifacts (8 executables)
         shell: pwsh
         run: |
           $exes = @(
@@ -27,16 +27,20 @@ jobs:
             'build/bin/Debug/LegendMapEditor.exe',
             'build/bin/Debug/LegendGateway.exe',
             'build/bin/Debug/LegendLoginServer.exe',
+            'build/bin/Debug/LegendWorldServer.exe',
             'build/bin/Debug/LegendNetworkTests.exe',
-            'build/bin/Debug/LegendAccountTests.exe'
+            'build/bin/Debug/LegendAccountTests.exe',
+            'build/bin/Debug/LegendWorldTests.exe'
           )
           foreach ($exe in $exes) {
             if (-not (Test-Path $exe)) { Write-Error "$exe missing"; exit 1 }
           }
           Write-Host 'NETWORK BUILD PASS'
           Write-Host 'ACCOUNT BUILD PASS'
+          Write-Host 'WORLD BUILD PASS'
 
-      # 阶段9.3指令三十一 + 阶段10指令一百零七：CTest Runtime 硬门禁（禁止 continue-on-error）
+      # 阶段9.3指令三十一 + 阶段10指令一百零七 + 阶段11指令一百一十三：
+      # CTest Runtime 硬门禁（禁止 continue-on-error）
       - name: Run runtime tests (CTest hard gate)
         shell: pwsh
         run: |
@@ -44,3 +48,4 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Error 'Runtime tests failed'; exit 1 }
           Write-Host 'NETWORK RUNTIME TEST PASS'
           Write-Host 'ACCOUNT RUNTIME TEST PASS'
+          Write-Host 'WORLD RUNTIME TEST PASS'

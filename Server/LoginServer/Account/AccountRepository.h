@@ -102,6 +102,10 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
 RepositoryResult<int> SoftDeleteCharacter(Database& db, std::uint64_t characterId);
 // 阶段10 指令四十四：选择角色即视为游玩（列表排序依据）。
 RepositoryResult<int> UpdateLastPlayed(Database& db, std::uint64_t characterId);
+// 阶段11 指令五十六：WorldServer 位置保存（prepared statement）。
+RepositoryResult<int> UpdateWorldPosition(Database& db, std::uint64_t characterId,
+                                          std::uint16_t mapId, float positionX, float positionY,
+                                          std::int64_t lastPlayedAt);
 
 } // namespace CharacterRepository
 

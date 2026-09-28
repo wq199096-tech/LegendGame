@@ -40,6 +40,25 @@ if(MSVC)
     )
 endif()
 
+add_executable(LegendWorldTests
+    WorldChecks.cpp
+)
+target_include_directories(LegendWorldTests PRIVATE ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendWorldTests PRIVATE cxx_std_20)
+target_link_libraries(LegendWorldTests PRIVATE LegendGatewayCore LegendLoginCore LegendWorldCore LegendClientAccount)
+
+if(MSVC)
+    target_compile_options(LegendWorldTests PRIVATE /utf-8)
+    add_custom_command(TARGET LegendWorldTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:LegendWorldTests>
+            $<TARGET_FILE_DIR:LegendWorldTests>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Copying runtime DLLs next to LegendWorldTests.exe"
+    )
+endif()
+
 enable_testing()
 add_test(NAME NetworkTests COMMAND LegendNetworkTests)
 add_test(NAME AccountTests COMMAND LegendAccountTests)
+add_test(NAME WorldTests COMMAND LegendWorldTests)

@@ -404,6 +404,30 @@ RepositoryResult<int> UpdateLastPlayed(Database& db, std::uint64_t characterId) 
     return RepositoryResult<int>{true, 1};
 }
 
+RepositoryResult<int> UpdateWorldPosition(Database& db, std::uint64_t characterId,
+                                          std::uint16_t mapId, float positionX, float positionY,
+                                          std::int64_t lastPlayedAt) {
+    // 阶段11 指令五十六：WorldServer 位置保存（prepared statement，禁止拼接 SQL）。
+    Statement stmt;
+    std::string error;
+    if (!stmt.Prepare(db.Handle(),
+                      "UPDATE characters SET map_id = ?, position_x = ?, position_y = ?, "
+                      "last_played_at = ? WHERE id = ?;",
+                      error)) {
+        return MapSqlError<int>("UpdateWorldPosition prepare", error);
+    }
+    stmt.BindInt64(1, mapId);
+    stmt.BindDouble(2, static_cast<double>(positionX));
+    stmt.BindDouble(3, static_cast<double>(positionY));
+    stmt.BindInt64(4, lastPlayedAt);
+    stmt.BindInt64(5, static_cast<std::int64_t>(characterId));
+    stmt.Step(error);
+    if (!error.empty()) {
+        return MapSqlError<int>("UpdateWorldPosition step", error);
+    }
+    return RepositoryResult<int>{true, 1};
+}
+
 } // namespace CharacterRepository
 
 } // namespace legend::account

@@ -29,9 +29,12 @@ bool Database::Open(const std::string& path, std::string& error) {
     m_db = db;
     m_path = path;
     // 指令十一：外键约束 + 忙等待（并发进程访问同一文件时兜底）。
+    // 阶段11 指令二十三：WAL —— LoginServer（写）与 WorldServer（读/位置更新）
+    // 多进程并发访问同一 SQLite 文件。
     std::string pragmaError;
     if (!Execute("PRAGMA foreign_keys = ON;", pragmaError) ||
-        !Execute("PRAGMA busy_timeout = 5000;", pragmaError)) {
+        !Execute("PRAGMA busy_timeout = 5000;", pragmaError) ||
+        !Execute("PRAGMA journal_mode = WAL;", pragmaError)) {
         error = pragmaError;
         Close();
         return false;
@@ -85,6 +88,12 @@ bool Statement::Prepare(sqlite3* db, const char* sql, std::string& error) {
 
 void Statement::BindInt64(int index, std::int64_t value) {
     if (m_stmt == nullptr || sqlite3_bind_int64(m_stmt, index, value) != SQLITE_OK) {
+        m_valid = false;
+    }
+}
+
+void Statement::BindDouble(int index, double value) {
+    if (m_stmt == nullptr || sqlite3_bind_double(m_stmt, index, value) != SQLITE_OK) {
         m_valid = false;
     }
 }

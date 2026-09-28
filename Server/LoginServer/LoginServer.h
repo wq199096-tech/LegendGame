@@ -73,6 +73,9 @@ private:
     void OnGatewayClosed(std::uint64_t connectionId);
     void HandleAuthRequest(std::uint64_t gatewayConnectionId,
                            const legend::network::Packet& packet);
+    // 阶段11 指令十二：SelectionTicket 一次性消费（WorldServer 内部服务协议）。
+    void HandleConsumeSelectionTicket(std::uint64_t gatewayConnectionId,
+                                      const legend::network::Packet& packet);
     // 阶段10：GatewayAccountForward 信封 -> DB Worker 任务 -> post 回 io 发响应。
     void HandleAccountForward(std::uint64_t gatewayConnectionId,
                               const legend::network::Packet& packet);

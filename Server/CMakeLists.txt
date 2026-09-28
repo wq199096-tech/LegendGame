@@ -14,20 +14,38 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# LegendAccountData：SQLite 数据层（Database/Schema/Repository/DbWorker/PasswordHasher）
+# 阶段11：LoginServer 与 WorldServer 共用同一数据库抽象（WAL，指令二十二/二十五）。
+# ---------------------------------------------------------------------------
+add_library(LegendAccountData STATIC
+    LoginServer/Account/AccountRepository.cpp
+    LoginServer/Account/PasswordHasher.cpp
+    LoginServer/Account/DbWorker.cpp
+    LoginServer/Account/Database/Database.cpp
+    LoginServer/Account/Database/DatabaseSchema.cpp
+)
+target_include_directories(LegendAccountData PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendAccountData PUBLIC cxx_std_20)
+target_link_libraries(LegendAccountData
+    PUBLIC
+        LegendNetworkTransport
+        LegendServerCommon
+        sqlite3_core
+        sodium
+)
+if(MSVC)
+    target_compile_options(LegendAccountData PRIVATE /utf-8)
+endif()
+
+# ---------------------------------------------------------------------------
 # LegendLoginCore：LoginServer + 账号/角色/Session 服务（阶段10 指令五十五）
-# SQLite（sqlite3_core）与 libsodium（sodium）在此链接——Gateway 不碰数据库。
 # ---------------------------------------------------------------------------
 add_library(LegendLoginCore STATIC
     LoginServer/LoginServer.cpp
     LoginServer/Account/AccountService.cpp
-    LoginServer/Account/AccountRepository.cpp
     LoginServer/Account/CharacterService.cpp
     LoginServer/Account/SessionService.cpp
-    LoginServer/Account/PasswordHasher.cpp
     LoginServer/Account/TicketStore.cpp
-    LoginServer/Account/DbWorker.cpp
-    LoginServer/Account/Database/Database.cpp
-    LoginServer/Account/Database/DatabaseSchema.cpp
 )
 target_include_directories(LegendLoginCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendLoginCore PUBLIC cxx_std_20)
@@ -35,8 +53,7 @@ target_link_libraries(LegendLoginCore
     PUBLIC
         LegendNetworkTransport
         LegendServerCommon
-        sqlite3_core
-        sodium
+        LegendAccountData
 )
 if(MSVC)
     target_compile_options(LegendLoginCore PRIVATE /utf-8)
@@ -86,5 +103,44 @@ if(MSVC)
             $<TARGET_FILE_DIR:LegendLoginServer>
         COMMAND_EXPAND_LISTS
         COMMENT "Copying runtime DLLs next to LegendLoginServer.exe"
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# LegendWorldCore / LegendWorldServer：世界服务（阶段11 指令一/六十一）
+# 纯 Console，不链接 SDL/OpenGL/Renderer/GameScene（指令一百零九）。
+# ---------------------------------------------------------------------------
+add_library(LegendWorldCore STATIC
+    WorldServer/WorldServer.cpp
+    WorldServer/WorldSession.cpp
+    WorldServer/WorldManager.cpp
+    WorldServer/WorldMapManager.cpp
+    WorldServer/PlayerSession.cpp
+)
+target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendWorldCore PUBLIC cxx_std_20)
+target_link_libraries(LegendWorldCore
+    PUBLIC
+        LegendNetworkTransport
+        LegendServerCommon
+        LegendAccountData
+)
+if(MSVC)
+    target_compile_options(LegendWorldCore PRIVATE /utf-8)
+endif()
+
+add_executable(LegendWorldServer
+    ../Apps/WorldServerMain.cpp
+)
+target_link_libraries(LegendWorldServer PRIVATE LegendWorldCore)
+
+if(MSVC)
+    target_compile_options(LegendWorldServer PRIVATE /utf-8)
+    add_custom_command(TARGET LegendWorldServer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:LegendWorldServer>
+            $<TARGET_FILE_DIR:LegendWorldServer>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Copying runtime DLLs next to LegendWorldServer.exe"
     )
 endif()

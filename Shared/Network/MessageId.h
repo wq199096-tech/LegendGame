@@ -36,6 +36,18 @@ enum class MessageId : std::uint16_t {
     // 阶段10 内部（Gateway <-> LoginServer 账号信封，Client 不感知）
     GatewayAccountForward = 102,
     GatewayAccountResponse = 103,
+    // 阶段11 内部（WorldServer <-> LoginServer，Ticket 一次性消费）
+    ConsumeSelectionTicketRequest = 120,
+    ConsumeSelectionTicketResponse = 121,
+    // 阶段11：Client <-> WorldServer
+    WorldClientHello = 200,
+    WorldServerHello = 201,
+    EnterWorldRequest = 210,
+    EnterWorldResponse = 211,
+    WorldDisconnectNotice = 212,
+    PlayerMoveInput = 220,
+    PlayerPositionSnapshot = 221,
+    WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
 
@@ -112,6 +124,16 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::LoginGatewayResponse:
         case MessageId::GatewayAccountForward:
         case MessageId::GatewayAccountResponse:
+        case MessageId::ConsumeSelectionTicketRequest:
+        case MessageId::ConsumeSelectionTicketResponse:
+        case MessageId::WorldClientHello:
+        case MessageId::WorldServerHello:
+        case MessageId::EnterWorldRequest:
+        case MessageId::EnterWorldResponse:
+        case MessageId::WorldDisconnectNotice:
+        case MessageId::PlayerMoveInput:
+        case MessageId::PlayerPositionSnapshot:
+        case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;
         case MessageId::None:

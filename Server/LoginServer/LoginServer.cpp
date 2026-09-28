@@ -6,6 +6,9 @@
 #include "Shared/Account/AccountTypes.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/ByteWriter.h"
+#include "Shared/World/WorldError.h"
+#include "Shared/World/WorldProtocol.h"
+#include "Shared/World/WorldTypes.h"
 
 #include <filesystem>
 
@@ -167,10 +170,15 @@ void LoginServer::OnGatewayPacket(std::uint64_t connectionId, const Packet& pack
             serverHello.protocolVersion = kProtocolVersion;
             serverHello.connectionId = connectionId;
             serverHello.serverName = "LegendLoginServer";
-            if (hello.protocolVersion != kProtocolVersion) {
-                // 指令八：版本错误 -> ServerHello accepted=false + CloseAfterFlush
+            // 阶段11 指令九：内部服务白名单（clientName），其它拒绝。
+            const bool trustedService = hello.clientName == world::kServiceNameGateway ||
+                                        hello.clientName == world::kServiceNameWorldServer;
+            if (hello.protocolVersion != kProtocolVersion || !trustedService) {
+                // 指令八：版本错误 / 非白名单服务 -> ServerHello accepted=false + CloseAfterFlush
                 serverHello.accepted = false;
-                serverHello.message = "protocol version mismatch";
+                serverHello.message = hello.protocolVersion != kProtocolVersion
+                                          ? "protocol version mismatch"
+                                          : "service not allowed";
                 Packet out;
                 out.header.messageId = static_cast<std::uint16_t>(MessageId::ServerHello);
                 if (EncodeServerHello(serverHello, out.payload)) {
@@ -220,6 +228,16 @@ void LoginServer::OnGatewayPacket(std::uint64_t connectionId, const Packet& pack
                 return;
             }
             HandleAccountForward(connectionId, packet);
+            return;
+        case MessageId::ConsumeSelectionTicketRequest:
+            // 阶段11 指令十二/十四：WorldServer -> LoginServer Ticket 一次性消费
+            if (!handshakeDone) {
+                connection->Close();
+                std::lock_guard<std::mutex> lock(m_gatewaysMutex);
+                m_gateways.erase(connectionId);
+                return;
+            }
+            HandleConsumeSelectionTicket(connectionId, packet);
             return;
         default:
             // 阶段9.2指令十一：未知 MessageId -> 关闭 Gateway link（不静默吞）
@@ -272,6 +290,64 @@ void LoginServer::HandleAuthRequest(std::uint64_t gatewayConnectionId, const Pac
     if (m_hooks.onAuthResult) {
         m_hooks.onAuthResult(requestId, username, success, out.accountId);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段11 指令十二/十三/十四：SelectionTicket 一次性消费（WorldServer 内部协议）
+// 纯内存操作（TicketStore 自带互斥），不经 DB Worker。
+// ---------------------------------------------------------------------------
+
+void LoginServer::HandleConsumeSelectionTicket(std::uint64_t gatewayConnectionId,
+                                               const Packet& packet) {
+    std::shared_ptr<legend::net::TcpConnection> connection;
+    {
+        std::lock_guard<std::mutex> lock(m_gatewaysMutex);
+        auto it = m_gateways.find(gatewayConnectionId);
+        if (it == m_gateways.end()) {
+            return;
+        }
+        connection = it->second.connection;
+    }
+    world::ConsumeSelectionTicketRequestPayload request;
+    std::string decodeError;
+    if (!world::DecodeConsumeSelectionTicketRequest(packet.payload.data(), packet.payload.size(),
+                                                    request, decodeError)) {
+        LOG_WARN("[Login] Malformed ConsumeSelectionTicketRequest dropped.");
+        return; // World 侧有 pending 超时兜底（指令七十四）
+    }
+    auto consumed = m_ticketStore.ConsumeForWorld(request.selectionTicket);
+    world::ConsumeSelectionTicketResponsePayload response;
+    response.requestId = request.requestId; // 指令七十三：requestId 原样回传
+    response.success = consumed.success;
+    response.accountId = consumed.success ? consumed.accountId : 0;
+    response.characterId = consumed.success ? consumed.characterId : 0;
+    if (consumed.success) {
+        response.errorCode = static_cast<std::uint16_t>(world::WorldErrorCode::None);
+        response.message = "ok";
+        // 指令五十九：日志只含 accountId/characterId，绝不含 ticket 内容
+        LOG_INFO("[Login] SelectionTicket consumed account=" +
+                 std::to_string(consumed.accountId) + " character=" +
+                 std::to_string(consumed.characterId));
+    } else {
+        using Failure = legend::account::TicketStore::ConsumeOutcome::Failure;
+        world::WorldErrorCode code = world::WorldErrorCode::InvalidTicket;
+        switch (consumed.failure) {
+            case Failure::Expired: code = world::WorldErrorCode::ExpiredTicket; break;
+            case Failure::Consumed: code = world::WorldErrorCode::ConsumedTicket; break;
+            case Failure::NotFound: code = world::WorldErrorCode::InvalidTicket; break;
+        }
+        // 指令六十七：精确原因仅进服务端日志（World->Client 统一 InvalidTicket）
+        response.errorCode = static_cast<std::uint16_t>(code);
+        response.message = world::WorldErrorCodeName(response.errorCode);
+        LOG_WARN(std::string("[Login] SelectionTicket consume failed: ") +
+                 world::WorldErrorCodeName(response.errorCode));
+    }
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ConsumeSelectionTicketResponse);
+    if (!world::EncodeConsumeSelectionTicketResponse(response, out.payload)) {
+        return;
+    }
+    connection->Send(out);
 }
 
 // ---------------------------------------------------------------------------

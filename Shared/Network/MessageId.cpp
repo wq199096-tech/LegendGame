@@ -30,6 +30,16 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::LoginGatewayResponse: return "LoginGatewayResponse";
         case MessageId::GatewayAccountForward: return "GatewayAccountForward";
         case MessageId::GatewayAccountResponse: return "GatewayAccountResponse";
+        case MessageId::ConsumeSelectionTicketRequest: return "ConsumeSelectionTicketRequest";
+        case MessageId::ConsumeSelectionTicketResponse: return "ConsumeSelectionTicketResponse";
+        case MessageId::WorldClientHello: return "WorldClientHello";
+        case MessageId::WorldServerHello: return "WorldServerHello";
+        case MessageId::EnterWorldRequest: return "EnterWorldRequest";
+        case MessageId::EnterWorldResponse: return "EnterWorldResponse";
+        case MessageId::WorldDisconnectNotice: return "WorldDisconnectNotice";
+        case MessageId::PlayerMoveInput: return "PlayerMoveInput";
+        case MessageId::PlayerPositionSnapshot: return "PlayerPositionSnapshot";
+        case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }
     return "Unknown";

@@ -1328,6 +1328,10 @@ void GameScene::LogMapStats(double deltaTime) {
         // 阶段10：F11 Account Debug（指令六十/一百一十一：最基础文本面板）
         (m_networkController && m_networkController->AccountDebugVisible()
              ? m_networkController->AccountStatusText()
+             : std::string()) +
+        // 阶段11：F12 World Debug（指令八十）
+        (m_networkController && m_networkController->WorldDebugVisible()
+             ? m_networkController->WorldStatusText()
              : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame

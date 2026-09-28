@@ -61,6 +61,13 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
                  (m_accountDebugVisible ? "enabled (F11)" : "disabled (F11)"));
     }
 
+    // 阶段11 指令八十：F12 = World Debug
+    if (input.IsKeyPressed(SDL_SCANCODE_F12)) {
+        m_worldDebugVisible = !m_worldDebugVisible;
+        LOG_INFO(std::string("[World] Debug overlay: ") +
+                 (m_worldDebugVisible ? "enabled (F12)" : "disabled (F12)"));
+    }
+
     // 指令八十三：F8 = Network Debug（切换时输出一次状态）
     if (input.IsKeyPressed(SDL_SCANCODE_F8)) {
         m_debugVisible = !m_debugVisible;
@@ -79,11 +86,67 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
         events.pop_front();
     }
 
+    // 阶段11 指令四十八：world 网络线程 -> 事件队列 -> 主线程控制器
+    std::deque<WorldNetworkEvent> worldEvents;
+    m_world.Client().PollEvents(worldEvents);
+    while (!worldEvents.empty()) {
+        m_world.HandleEvent(worldEvents.front());
+        worldEvents.pop_front();
+    }
+
     // 指令六十四：心跳超时检测
     m_client->UpdateHeartbeat(deltaTime);
+    m_world.Client().UpdateHeartbeat(deltaTime);
 
     // F10 开发自动登录重试（注册 -> 登录）
     UpdateDevAutoLogin(deltaTime);
+
+    // 阶段11：CharacterSelected -> 自动连世界；WorldReady -> 发送移动输入
+    UpdateWorldFlow();
+    UpdateWorldMoveInput(input, deltaTime);
+}
+
+void ClientNetworkController::UpdateWorldFlow() {
+    const AccountFlowState accountState = m_account.State();
+    // 阶段11 指令四十六：CharacterSelect 成功（拿到 ticket）-> 连接 WorldServer
+    if (accountState == AccountFlowState::CharacterSelected &&
+        m_prevAccountState != AccountFlowState::CharacterSelected) {
+        if (!m_account.SelectionTicket().empty()) {
+            m_world.EnterWorldWithTicket(m_account.SelectionTicket());
+        }
+    }
+    if (accountState != AccountFlowState::CharacterSelected &&
+        m_prevAccountState == AccountFlowState::CharacterSelected) {
+        // 重新选择/删除角色等 -> 退出当前世界连接（需重新走 CharacterSelect）
+        m_world.Disconnect();
+    }
+    m_prevAccountState = accountState;
+}
+
+void ClientNetworkController::UpdateWorldMoveInput(legend::input::InputManager& input,
+                                                   float deltaTime) {
+    if (!m_world.IsWorldReady()) {
+        return;
+    }
+    // 阶段11 指令三十四/三十五：只发送输入方向（WASD），禁止绝对坐标。
+    float dx = 0.0f;
+    float dy = 0.0f;
+    if (input.IsKeyDown(SDL_SCANCODE_D) || input.IsKeyDown(SDL_SCANCODE_RIGHT)) {
+        dx += 1.0f;
+    }
+    if (input.IsKeyDown(SDL_SCANCODE_A) || input.IsKeyDown(SDL_SCANCODE_LEFT)) {
+        dx -= 1.0f;
+    }
+    if (input.IsKeyDown(SDL_SCANCODE_S) || input.IsKeyDown(SDL_SCANCODE_DOWN)) {
+        dy += 1.0f;
+    }
+    if (input.IsKeyDown(SDL_SCANCODE_W) || input.IsKeyDown(SDL_SCANCODE_UP)) {
+        dy -= 1.0f;
+    }
+    if (dx == 0.0f && dy == 0.0f) {
+        return;
+    }
+    m_world.SendMoveInput(dx, dy, deltaTime);
 }
 
 void ClientNetworkController::UpdateDevAutoLogin(float) {
@@ -135,6 +198,8 @@ void ClientNetworkController::HandleEvent(const NetworkEvent& event) {
         case NetworkEvent::Type::Disconnected:
             LOG_INFO("[Network] Disconnected: " + event.message);
             m_account.OnNetworkDisconnected();
+            // 阶段11：Gateway/Login 断开 -> 世界连接同步断开（需重新选角）
+            m_world.Disconnect();
             m_devLoginStage = DevLoginStage::Idle;
             break;
         case NetworkEvent::Type::HandshakeSuccess:
@@ -197,6 +262,37 @@ std::string ClientNetworkController::AccountStatusText() const {
     if (m_account.LastErrorCode() != 0) {
         text += " err=";
         text += std::to_string(m_account.LastErrorCode());
+    }
+    return text;
+}
+
+std::string ClientNetworkController::WorldStatusText() const {
+    // 阶段11 指令八十：F12 World Debug（WorldState/WorldConnectionId/
+    // SelectedCharacterId/MapId/ServerPosition/LastInputSequence/RTT/LastWorldError）
+    std::string text = " | World: ";
+    text += WorldFlowStateName(m_world.State());
+    if (m_world.WorldConnectionId() != 0) {
+        text += " #";
+        text += std::to_string(m_world.WorldConnectionId());
+    }
+    text += " char=";
+    text += std::to_string(m_world.CharacterId());
+    text += " map=";
+    text += std::to_string(m_world.MapId());
+    text += " pos=(";
+    text += std::to_string(static_cast<int>(m_world.ServerPositionX()));
+    text += ",";
+    text += std::to_string(static_cast<int>(m_world.ServerPositionY()));
+    text += ")";
+    text += " seq=";
+    text += std::to_string(m_world.LastSentInputSequence());
+    if (m_world.RttMs() >= 0.0f) {
+        text += " rtt=";
+        text += std::to_string(static_cast<int>(m_world.RttMs()));
+        text += "ms";
+    }
+    if (!m_world.LastError().empty()) {
+        text += " err=" + m_world.LastError();
     }
     return text;
 }

@@ -11,6 +11,7 @@ add_library(LegendSharedNetwork STATIC
     Network/Protocol.cpp
     Network/MessageId.cpp
     Account/AccountProtocol.cpp
+    World/WorldProtocol.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})
