@@ -1,9 +1,12 @@
 #pragma once
 
+#include "Server/WorldServer/Status/StatusEffectContainer.h"
+
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Skill/SkillDefinition.h"
 #include "Shared/Skill/SkillTypes.h"
+#include "Shared/World/WorldTypes.h"
 
 #include <array>
 #include <chrono>
@@ -193,6 +196,28 @@ public:
             (m_recentSkillRequestCursor + 1) % m_recentSkillRequestIds.size();
     }
 
+    // ------------------------------------------------------------------
+    // 阶段16 指令二十三/二十五：Base / Derived 战斗属性。
+    // base 固定（20/5/120），effective 由 StatusEffectService::Recalculate-
+    // DerivedStats 在状态 Applied/stack 变化/Removed/Expired 时更新（不每帧重算）。
+    // ------------------------------------------------------------------
+    std::uint32_t BaseAttackPower() const { return m_attackPower; }
+    std::uint32_t BaseDefense() const { return m_defense; }
+    float BaseMoveSpeed() const { return kWorldMoveSpeed; }
+    std::uint32_t EffectiveAttackPower() const { return m_effectiveAttackPower; }
+    std::uint32_t EffectiveDefense() const { return m_effectiveDefense; }
+    float EffectiveMoveSpeed() const { return m_effectiveMoveSpeed; }
+    void SetEffectiveCombatStats(std::uint32_t attackPower, std::uint32_t defense,
+                                 float moveSpeed) {
+        m_effectiveAttackPower = attackPower;
+        m_effectiveDefense = defense;
+        m_effectiveMoveSpeed = moveSpeed;
+    }
+
+    // 阶段16 指令十四：状态容器（runtime-only，死亡/断线/重启即消失）。
+    StatusEffectContainer& StatusEffects() { return m_statusEffects; }
+    const StatusEffectContainer& StatusEffects() const { return m_statusEffects; }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -234,6 +259,13 @@ private:
     PendingSkillCast m_casting; // 指令十四：同一时间最多一个施法
     std::array<std::uint64_t, kAttackRequestHistorySize> m_recentSkillRequestIds{};
     std::size_t m_recentSkillRequestCursor = 0;
+
+    // 阶段16 指令二十三：Derived 战斗属性（初始 = base；状态变化时重算）。
+    std::uint32_t m_effectiveAttackPower = kPlayerAttackPower;
+    std::uint32_t m_effectiveDefense = kPlayerDefense;
+    float m_effectiveMoveSpeed = kWorldMoveSpeed;
+    // 阶段16 指令十四：状态容器（runtime-only）。
+    StatusEffectContainer m_statusEffects;
 };
 
 } // namespace legend::world

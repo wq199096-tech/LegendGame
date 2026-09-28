@@ -72,6 +72,11 @@ enum class MessageId : std::uint16_t {
     SkillCastCancelled = 264,
     SkillImpactEvent = 265,
     ManaSnapshot = 266,
+    // 阶段16 指令五十一：Status Effect（编号允许微调不冲突）
+    StatusEffectApplied = 270,
+    StatusEffectUpdated = 271,
+    StatusEffectRemoved = 272,
+    StatusEffectSnapshot = 273,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -178,6 +183,10 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::SkillCastCancelled:
         case MessageId::SkillImpactEvent:
         case MessageId::ManaSnapshot:
+        case MessageId::StatusEffectApplied:
+        case MessageId::StatusEffectUpdated:
+        case MessageId::StatusEffectRemoved:
+        case MessageId::StatusEffectSnapshot:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

@@ -3,10 +3,12 @@
 namespace legend::world {
 
 SkillRegistry::SkillRegistry() {
-    // 阶段15 指令三十四：硬编码三个固定测试技能（指令八/九/十）。
+    // 阶段15 指令三十四：硬编码固定测试技能；阶段16 指令十九/二十：+Battle Focus/Crippling Strike。
     m_skills.push_back(kQuickStrikeDefinition);
     m_skills.push_back(kFireBoltDefinition);
     m_skills.push_back(kWhirlwindDefinition);
+    m_skills.push_back(kBattleFocusSkillDefinition);
+    m_skills.push_back(kCripplingStrikeSkillDefinition);
 }
 
 const SkillDefinition* SkillRegistry::FindSkill(SkillId skillId) const {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Client/WorldNetwork/RemoteStatusEffectContainer.h"
 #include "Shared/World/WorldProtocol.h"
 
 #include <cstdint>
@@ -56,6 +57,10 @@ public:
         m_castDurationMs = durationMs;
     }
 
+    // 阶段16 指令六十二：远程玩家状态容器（仅展示）。
+    RemoteStatusEffectContainer& StatusEffects() { return m_statusEffects; }
+    const RemoteStatusEffectContainer& StatusEffects() const { return m_statusEffects; }
+
 private:
     std::uint64_t m_characterId = 0;
     std::string m_name;
@@ -79,6 +84,8 @@ private:
     std::uint32_t m_castingSkillId = 0;
     std::uint64_t m_castStartServerTime = 0;
     std::uint32_t m_castDurationMs = 0;
+    // 阶段16 指令六十二：状态容器。
+    RemoteStatusEffectContainer m_statusEffects;
 };
 
 } // namespace legend::client

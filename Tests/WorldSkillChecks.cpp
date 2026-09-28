@@ -31,10 +31,17 @@ using legend::world::CalculateSkillDamage;
 using legend::world::kFireBoltDefinition;
 using legend::world::kPlayerMaxMana;
 using legend::world::kQuickStrikeDefinition;
+using legend::world::kSkillIdBattleFocus;
+using legend::world::kSkillIdCripplingStrike;
 using legend::world::kSkillIdFireBolt;
 using legend::world::kSkillIdQuickStrike;
 using legend::world::kSkillIdWhirlwind;
 using legend::world::kSkillImpactMaxTargets;
+using legend::world::kStatusEffectIdArmorBreak;
+using legend::world::kStatusEffectIdBattleFocus;
+using legend::world::kStatusEffectIdBurn;
+using legend::world::kStatusEffectIdPoison;
+using legend::world::kStatusEffectIdSlow;
 using legend::world::kWhirlwindDefinition;
 using legend::world::MonsterAoiCandidate;
 using legend::world::MonsterState;
@@ -293,10 +300,10 @@ bool WaitAllMonstersWithin(WorldTestServers& servers, std::uint64_t characterId,
 // ===========================================================================
 
 void RunSkillLogicChecks() {
-    // ---- SkillDefinitionCheck（指令一百/八/九/十）----
+    // ---- SkillDefinitionCheck（指令一百/八/九/十；阶段16 指令十九/二十：+1004/1005）----
     {
         SkillRegistry registry;
-        bool ok = registry.Count() == 3;
+        bool ok = registry.Count() == 5;
         const auto* qs = registry.FindSkill(kSkillIdQuickStrike);
         ok = ok && qs != nullptr && qs->name == "Quick Strike" &&
              qs->castType == legend::world::SkillCastType::Instant &&
@@ -317,8 +324,25 @@ void RunSkillLogicChecks() {
              ww->targetType == SkillTargetType::Self &&
              ww->cooldownSeconds == 5.0f && ww->manaCost == 25 && ww->range == 0.0f &&
              ww->baseDamage == 25 && ww->aoeRadius == 160.0f && ww->maxTargets == 16;
+        // 阶段16：Battle Focus（1004 Self 无伤害）+ Crippling Strike（1005 Slow）
+        const auto* bf = registry.FindSkill(kSkillIdBattleFocus);
+        ok = ok && bf != nullptr && bf->name == "Battle Focus" &&
+             bf->castType == legend::world::SkillCastType::Instant &&
+             bf->targetType == SkillTargetType::Self &&
+             bf->cooldownSeconds == 8.0f && bf->manaCost == 15 && bf->baseDamage == 0 &&
+             bf->applyStatusEffectId == kStatusEffectIdBattleFocus;
+        const auto* cs = registry.FindSkill(kSkillIdCripplingStrike);
+        ok = ok && cs != nullptr && cs->name == "Crippling Strike" &&
+             cs->castType == legend::world::SkillCastType::Instant &&
+             cs->targetType == SkillTargetType::Monster &&
+             cs->cooldownSeconds == 4.0f && cs->manaCost == 15 && cs->range == 120.0f &&
+             cs->baseDamage == 10 && cs->applyStatusEffectId == kStatusEffectIdSlow;
+        // 阶段16：技能-状态关联（指令十八）
+        ok = ok && qs->applyStatusEffectId == kStatusEffectIdArmorBreak &&
+             qs->applyStatusStacks == 1 && fb->applyStatusEffectId == kStatusEffectIdBurn &&
+             ww->applyStatusEffectId == kStatusEffectIdPoison;
         ok = ok && registry.FindSkill(999999) == nullptr;
-        Check("SkillDefinitionCheck: QuickStrike/FireBolt/Whirlwind config + unknown", ok);
+        Check("SkillDefinitionCheck: QS/FB/WW/BF/CS config + status links + unknown", ok);
     }
 
     // ---- SkillProtocolRoundtripCheck（指令二十二~三十/八十六）----
@@ -850,7 +874,8 @@ void RunSkillChainChecksMain() {
         ok = ok && monster3b != nullptr && monster3b->CurrentHp() == hpBefore; // HP 不变
         Check("QuickStrikeCooldownCheck: instant recast -> Cooldown, hp/mana unchanged", ok);
 
-        // 等 1.5s CD 过后再放：48 >= 32 -> 击杀
+        // 等 1.5s CD 过后再放：QS#1 命中自动施加 Armor Break（阶段16 指令十八），
+        // slime defense 2->0 -> QS#2 伤害 30+20-0 = 50 >= 32 -> 击杀
         std::this_thread::sleep_for(std::chrono::milliseconds(1600));
         clientA.controller.SendSkillCast(kSkillIdQuickStrike, kTargetMonster, 3);
         WorldNetworkEvent resp2;
@@ -873,7 +898,7 @@ void RunSkillChainChecksMain() {
             },
             3000);
         bool killedOk = got2 && gotImpact && impact2.impactTargets.size() == 1 &&
-                        impact2.impactTargets[0].damage == 48 &&
+                        impact2.impactTargets[0].damage == 50 &&
                         impact2.impactTargets[0].killed;
         const bool gotDeath = WaitUntil(
             [&] {
@@ -884,7 +909,7 @@ void RunSkillChainChecksMain() {
         auto monster3c = servers.world->FindMonster(3);
         killedOk = killedOk && gotDeath && monster3c != nullptr && !monster3c->Alive() &&
                    monster3c->State() == MonsterState::Dead;
-        Check("SkillKillMonsterCheck: QS#2 kills slime (48 dmg), MonsterDeath, state Dead",
+        Check("SkillKillMonsterCheck: QS#2 kills slime (50 dmg after ArmorBreak), Death, Dead",
               killedOk);
         //Mana bookkeeping：90 -> 80
         // ---- 3 秒清理（指令一百二十五：复用阶段14 生命周期）----
@@ -1064,7 +1089,10 @@ void RunSkillChainChecksMain() {
                   cancelled.cancelReason ==
                       static_cast<std::uint8_t>(SkillCancelReason::TargetInvalid);
         auto monster4 = servers.world->FindMonster(4);
-        ok = ok && monster4 != nullptr && monster4->CurrentHp() == 22; // 不伤害
+        // 阶段16 指令十八：FB#2 命中自动施加 Burn——DOT tick 是合法服务器行为，
+        // "不伤害"断言放宽为 Burn tick 后的合法值（22 -> 14 -> 6）。
+        const std::uint32_t hp4 = monster4 ? monster4->CurrentHp() : 0u;
+        ok = ok && monster4 != nullptr && (hp4 == 22 || hp4 == 14 || hp4 == 6);
         ok = ok && resp.currentMana == 80; // 100 -> 80（已扣，不返还）
         Check("FireBoltTargetOutOfRangeCheck: target >500 at complete -> TargetInvalid cancel", ok);
     }
@@ -1395,10 +1423,11 @@ void RunSkillChainChecksMain() {
              clientA.LastEnterSuccess().maxManaVal == 100; // Mana 不持久化
         auto casterA = servers.world->FindPlayerByCharacter(seedA.characterId);
         ok = ok && casterA != nullptr && !casterA->IsCasting(); // 施法状态清空
-        // CD 清空：QS 立即可用（slime4 还在 22 HP，48 >= 22 -> 击杀）
-        servers.world->MoveMonsterTo(4, 140.0f, 980.0f);
-        const bool positioned = WaitMonsterDistance(servers, seedA.characterId, 4, 20.0f, 120.0f);
-        clientA.controller.SendSkillCast(kSkillIdQuickStrike, kTargetMonster, 4);
+        // CD 清空：QS 立即可用（阶段16 指令十八：FB#2 给 slime4 施加了 Burn，其死于
+        // DOT 并被 3s 清理移除——改用未被动过的 slime16 验证 accepted）。
+        servers.world->MoveMonsterTo(16, 140.0f, 980.0f);
+        const bool positioned = WaitMonsterDistance(servers, seedA.characterId, 16, 20.0f, 120.0f);
+        clientA.controller.SendSkillCast(kSkillIdQuickStrike, kTargetMonster, 16);
         WorldNetworkEvent resp;
         const bool accepted = WaitSkillResponse(clientA, clientA.controller.LastSkillRequestId(),
                                                 resp, 3000, 1);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Client/WorldNetwork/RemoteStatusEffectContainer.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterTypes.h"
 
@@ -47,6 +48,10 @@ public:
     std::uint32_t MaxHp() const { return m_maxHp; }
     bool Alive() const { return m_alive; }
 
+    // 阶段16 指令六十三：远程怪物状态容器（仅展示）。
+    RemoteStatusEffectContainer& StatusEffects() { return m_statusEffects; }
+    const RemoteStatusEffectContainer& StatusEffects() const { return m_statusEffects; }
+
 private:
     std::uint64_t m_entityId = 0;
     std::uint32_t m_monsterTypeId = 0;
@@ -66,6 +71,8 @@ private:
     bool m_alive = true;
     // 阶段14 指令六十七：CombatEvent 乱序保护。
     std::uint64_t m_lastCombatEventId = 0;
+    // 阶段16 指令六十三：状态容器。
+    RemoteStatusEffectContainer m_statusEffects;
 };
 
 } // namespace legend::client

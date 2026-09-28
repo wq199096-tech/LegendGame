@@ -2,6 +2,7 @@
 
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
+#include "Client/WorldNetwork/RemoteStatusEffectContainer.h"
 #include "Client/WorldNetwork/WorldNetworkClient.h"
 
 #include <cstdint>
@@ -61,6 +62,8 @@ public:
     std::uint64_t ActiveCastId() const { return m_activeCastId; }
     std::uint32_t ActiveSkillId() const { return m_activeSkillId; }
     float CastProgress() const; // 0~1（仅展示；完成必须等服务器事件，指令五十八）
+    // 阶段16 指令六十四：本地玩家状态容器（仅展示；Remove 等 StatusRemoved/Snapshot）。
+    const RemoteStatusEffectContainer& LocalStatusEffects() const { return m_localStatusEffects; }
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -79,6 +82,7 @@ public:
 
 private:
     void SetState(WorldFlowState state);
+    void HandleStatusEvent(const WorldNetworkEvent& event); // 阶段16：状态事件路由
 
     std::shared_ptr<WorldNetworkClient> m_client = std::make_shared<WorldNetworkClient>();
     WorldFlowState m_state = WorldFlowState::Disconnected;
@@ -110,6 +114,8 @@ private:
     std::uint64_t m_castStartSteadyMs = 0; // 本地展示计时（steady，仅进度条）
     std::uint32_t m_castDurationMs = 0;
     std::uint64_t m_lastSkillRequestId = 0;
+    // 阶段16 指令六十四：本地玩家状态容器。
+    RemoteStatusEffectContainer m_localStatusEffects;
 };
 
 } // namespace legend::client

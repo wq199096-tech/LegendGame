@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Skill & Ability Replication Core V0.15**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Status Effect Core V0.16**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -270,6 +270,44 @@ LegendAccountTests 覆盖：Schema/Migration、注册（含大小写不敏感重
 SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发同名注册/并发建角（事务上限）、
 断线期间 DB 操作安全、服务器重启持久化、日志不落密码/Token/Ticket。
 
+**Buff / Debuff / 状态效果系统（阶段16：Status Effect Core V0.16）**：
+
+- **所有状态效果 100% WorldServer 权威**：Client 不能发送 ApplyStatusRequest（阶段16 状态
+  只能由 WorldServer 技能逻辑或测试白盒施加）；是否有 Buff/持续时间/剩余时间/层数/属性加成/
+  DOT 伤害/减速倍率/什么时候结束全部服务器决定；Client 只接收 StatusApplied(270)/
+  StatusUpdated(271)/StatusRemoved(272)/StatusSnapshot(273) 做展示（remainingMs 仅 UI 倒计时，
+  不影响战斗数值；真正移除必须等 StatusRemoved 或 Snapshot 纠偏）
+- **五种固定状态**（StatusEffectRegistry 硬编码，`Shared/Status/`+`Server/WorldServer/Status/`）：
+  2001 Battle Focus（Buff，Attack +10，10s，不叠层，重复刷新）/ 2002 Armor Break（Debuff，
+  Defense -2/层，8s，最多 3 层，AddStackRefresh，满层刷新 duration）/ 2003 Burn（DOT 8 伤害
+  /2s，8s 共 4 跳，不叠层，重复刷新 duration 且 nextTick 重置 now+2s）/ 2004 Poison（DOT 4
+  伤害/层/s，6s 共 6 跳，最多 3 层，AddStackRefresh 不重置 nextTick）/ 2005 Slow（MoveSpeed
+  ×0.6，5s，不叠层，重复刷新）
+- **stack/refresh 规则**（StatusEffectService 纯函数）：RefreshDuration=stacks 不变+expire 刷新；
+  AddStackRefresh=未满层 stacks+1+expire 刷新（nextTick 不重置）、满层仅刷新 duration；
+  最新 source 覆盖旧 source（同 effectId 同一目标只保留一个 Active 实例，key=effectId）
+- **DOT Tick 规则**：统一 100ms Status Tick 扫描（不建 per-status Timer）；`now >= nextTick 且
+  nextTick <= expireTime` 才结算；服务器卡顿一次最多补 3 跳（kStatusDotMaxCatchUpTicks），
+  超出把 nextTick 推进到未来；到期（Expired）立即移除，绝不继续掉血
+- **Derived Stats**（Base/Derived 分离，状态变化时重算、不每帧）：effectiveAttack = base +
+  Σ attackFlat×stacks；effectiveDefense = max(0, base + Σ defenseFlat×stacks) 不能负；
+  effectiveMoveSpeed = base × Π moveSpeedMultiplier（乘法叠加）；普攻/技能伤害、Monster AI
+  移动、玩家移动全部接入 Effective 值
+- **技能关联状态**：QuickStrike→Armor Break+1、FireBolt→Burn、Whirlwind→Poison+1（目标未死
+  才施加，击杀不施加）；新增技能 1004 Battle Focus（Self，CD 8s，耗蓝 15，无伤害）/
+  1005 Crippling Strike（单体，CD 4s，距离 120，伤害 10，施加 Slow）；客户端技能键 1~5
+- **DOT 击杀与死亡清理**：DOT 击杀复用 KillMonster（MonsterDeath killer=原始施加者 characterId，
+  断线后仍保留）；死亡逐个广播 StatusRemoved(TargetDied) 并清空容器；玩家死亡清全部状态；
+  状态 runtime-only 不持久化（重启清空、不写 SQLite）
+- **AOI 同步**：Monster 状态发给当前可见玩家+source 本人；Player 状态发给本人+可见者；
+  远处 Client 收不到任何状态事件/快照；每 2s StatusSnapshot（上限 32 条）只发自身+可见实体，
+  用于纠偏（客户端多余删除、缺少创建）；同 instanceId Applied 去重，未知 Updated/Removed 忽略
+- **客户端**：RemoteStatusEffectContainer（RemotePlayerEntity/RemoteMonsterEntity 各一份）+
+  WorldClientController 本地玩家 LocalStatusEffects；Debug 键 4/5 施放 Battle Focus/
+  Crippling Strike；F12 显示 Self/Monster 状态（含层数与剩余秒），Debug 颜色标记
+  （Buff 金/紫/橙/绿/蓝）
+- **同 Effect 多来源**：阶段16 同一 effectId 只保留一个实例，后施加者覆盖 source（README 明确
+  记录；独立来源 Stack 留待后续阶段）
 
 ## Engine V0.2 操作说明
 

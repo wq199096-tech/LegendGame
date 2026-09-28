@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Server/WorldServer/Status/StatusEffectContainer.h"
+
 #include "Shared/Monster/MonsterTypes.h"
 
 #include <chrono>
@@ -102,6 +104,35 @@ public:
         m_deadSince = std::chrono::steady_clock::now();
     }
 
+    // ------------------------------------------------------------------
+    // 阶段16 指令二十四：Base / Derived 战斗属性（Definition 提供基础，
+    // StatusEffectService 在状态变化时重算 effective；不每帧重算）。
+    // ------------------------------------------------------------------
+    void SetBaseStats(std::uint32_t attackPower, std::uint32_t defense, float moveSpeed) {
+        m_baseAttackPower = attackPower;
+        m_baseDefense = defense;
+        m_baseMoveSpeed = moveSpeed;
+        m_effectiveAttackPower = attackPower;
+        m_effectiveDefense = defense;
+        m_effectiveMoveSpeed = moveSpeed;
+    }
+    std::uint32_t BaseAttackPower() const { return m_baseAttackPower; }
+    std::uint32_t BaseDefense() const { return m_baseDefense; }
+    float BaseMoveSpeed() const { return m_baseMoveSpeed; }
+    std::uint32_t EffectiveAttackPower() const { return m_effectiveAttackPower; }
+    std::uint32_t EffectiveDefense() const { return m_effectiveDefense; }
+    float EffectiveMoveSpeed() const { return m_effectiveMoveSpeed; }
+    void SetEffectiveCombatStats(std::uint32_t attackPower, std::uint32_t defense,
+                                 float moveSpeed) {
+        m_effectiveAttackPower = attackPower;
+        m_effectiveDefense = defense;
+        m_effectiveMoveSpeed = moveSpeed;
+    }
+
+    // 阶段16 指令十四：状态容器（runtime-only，死亡即清空）。
+    StatusEffectContainer& StatusEffects() { return m_statusEffects; }
+    const StatusEffectContainer& StatusEffects() const { return m_statusEffects; }
+
 private:
     std::uint64_t m_entityId = 0;
     std::uint32_t m_monsterTypeId = 0;
@@ -127,6 +158,16 @@ private:
     // epoch 初始化：首次攻击不受 CD 限制。
     std::chrono::steady_clock::time_point m_lastAttackTime{};
     std::chrono::steady_clock::time_point m_deadSince{std::chrono::steady_clock::now()};
+
+    // 阶段16 指令二十四：Base / Derived 战斗属性（spawn 时由 Definition 初始化）。
+    std::uint32_t m_baseAttackPower = 0;
+    std::uint32_t m_baseDefense = 0;
+    float m_baseMoveSpeed = 0.0f;
+    std::uint32_t m_effectiveAttackPower = 0;
+    std::uint32_t m_effectiveDefense = 0;
+    float m_effectiveMoveSpeed = 0.0f;
+    // 阶段16 指令十四：状态容器（runtime-only）。
+    StatusEffectContainer m_statusEffects;
 };
 
 } // namespace legend::world

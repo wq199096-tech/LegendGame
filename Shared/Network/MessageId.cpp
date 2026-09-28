@@ -59,6 +59,10 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::SkillCastCancelled: return "SkillCastCancelled";
         case MessageId::SkillImpactEvent: return "SkillImpactEvent";
         case MessageId::ManaSnapshot: return "ManaSnapshot";
+        case MessageId::StatusEffectApplied: return "StatusEffectApplied";
+        case MessageId::StatusEffectUpdated: return "StatusEffectUpdated";
+        case MessageId::StatusEffectRemoved: return "StatusEffectRemoved";
+        case MessageId::StatusEffectSnapshot: return "StatusEffectSnapshot";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

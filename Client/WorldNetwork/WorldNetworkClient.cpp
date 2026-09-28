@@ -647,6 +647,85 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             PushEvent(std::move(event));
             return;
         }
+        // ------------------------------------------------------------------
+        // 阶段16 指令五十二~五十五：服务器权威状态事件（Client 只展示）
+        // ------------------------------------------------------------------
+        case MessageId::StatusEffectApplied: {
+            world::StatusEffectAppliedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeStatusEffectApplied(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::StatusAppliedEvent;
+            event.status.instanceId = payload.instanceId;
+            event.status.effectId = payload.effectId;
+            event.status.targetType = payload.targetType;
+            event.status.targetEntityId = payload.targetEntityId;
+            event.status.sourceType = payload.sourceType;
+            event.status.sourceEntityId = payload.sourceEntityId;
+            event.status.sourceSkillId = payload.sourceSkillId;
+            event.status.stacks = payload.stacks;
+            event.status.durationMs = payload.durationMs;
+            event.status.remainingMs = payload.remainingMs;
+            event.status.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::StatusEffectUpdated: {
+            world::StatusEffectUpdatedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeStatusEffectUpdated(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::StatusUpdatedEvent;
+            event.status.instanceId = payload.instanceId;
+            event.status.effectId = payload.effectId;
+            event.status.targetType = payload.targetType;
+            event.status.targetEntityId = payload.targetEntityId;
+            event.status.stacks = payload.stacks;
+            event.status.remainingMs = payload.remainingMs;
+            event.status.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::StatusEffectRemoved: {
+            world::StatusEffectRemovedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeStatusEffectRemoved(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::StatusRemovedEvent;
+            event.status.instanceId = payload.instanceId;
+            event.status.effectId = payload.effectId;
+            event.status.targetType = payload.targetType;
+            event.status.targetEntityId = payload.targetEntityId;
+            event.status.reason = payload.reason;
+            event.status.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::StatusEffectSnapshot: {
+            world::StatusEffectSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeStatusEffectSnapshot(packet.payload.data(), packet.payload.size(),
+                                                   payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::StatusSnapshotEvent;
+            event.status.targetType = payload.targetType;
+            event.status.targetEntityId = payload.targetEntityId;
+            event.status.serverTime = payload.serverTime;
+            event.status.snapshotEffects = payload.effects;
+            PushEvent(std::move(event));
+            return;
+        }
         case MessageId::HeartbeatPong: {
             legend::network::ByteReader reader(packet.payload.data(), packet.payload.size());
             reader.ReadUInt32(); // pingSequence

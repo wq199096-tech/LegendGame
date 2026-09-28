@@ -11,6 +11,8 @@
 #include "Shared/Network/NetworkConstants.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
+#include "Shared/Status/StatusEffectProtocol.h"
+#include "Shared/Status/StatusEffectTypes.h"
 #include "Shared/World/WorldProtocol.h"
 
 #include <asio.hpp>
@@ -38,6 +40,23 @@ enum class WorldFlowState {
 };
 
 const char* WorldFlowStateName(WorldFlowState state);
+
+// 阶段16 指令五十五：状态事件数据（Applied/Updated/Removed/Snapshot 共用）。
+struct StatusEventData {
+    std::uint64_t instanceId = 0;
+    std::uint32_t effectId = 0;
+    std::uint8_t targetType = 0;      // CombatEntityType
+    std::uint64_t targetEntityId = 0;
+    std::uint8_t sourceType = 0;
+    std::uint64_t sourceEntityId = 0;
+    std::uint32_t sourceSkillId = 0;
+    std::uint8_t stacks = 1;
+    std::uint32_t durationMs = 0;
+    std::uint32_t remainingMs = 0;
+    std::uint8_t reason = 0;          // StatusRemovedReason
+    std::uint64_t serverTime = 0;
+    std::vector<world::StatusEffectSnapshotEntry> snapshotEffects; // Snapshot
+};
 
 // 阶段11 指令四十九：WorldNetworkEvent（world 网络线程 -> 主线程事件队列）。
 struct WorldNetworkEvent {
@@ -72,6 +91,11 @@ struct WorldNetworkEvent {
         SkillCastCancelledEvent,
         SkillImpact,
         ManaSnapshot,
+        // 阶段16 指令五十五：服务器权威状态事件
+        StatusAppliedEvent,
+        StatusUpdatedEvent,
+        StatusRemovedEvent,
+        StatusSnapshotEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -136,6 +160,7 @@ struct WorldNetworkEvent {
     std::uint32_t currentMana = 0;  // SkillCastResponse / ManaSnapshot
     std::uint32_t maxManaVal = 0;   // ManaSnapshot（maxMana 名与 CombatEvent 冲突改用）
     std::vector<world::SkillImpactTarget> impactTargets; // Impact
+    StatusEventData status;         // 阶段16：状态事件（Applied/Updated/Removed/Snapshot）
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：

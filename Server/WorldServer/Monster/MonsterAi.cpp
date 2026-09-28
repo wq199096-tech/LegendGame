@@ -140,8 +140,9 @@ void StepMonsterAi(MonsterEntity& monster, const MonsterDefinition& definition, 
                 break;
             }
             // 指令三十五：朝 patrol 目标点移动，到达(<=10) -> Idle。
+            // 阶段16 指令三十：使用 EffectiveMoveSpeed（Slow 后变慢）。
             if (StepToward(monster, monster.PatrolTargetX(), monster.PatrolTargetY(),
-                           definition.moveSpeed, dt)) {
+                           monster.EffectiveMoveSpeed(), dt)) {
                 TransitionTo(monster, MonsterState::Idle, "patrol arrived");
             }
             break;
@@ -184,15 +185,16 @@ void StepMonsterAi(MonsterEntity& monster, const MonsterDefinition& definition, 
             if (distTargetSq <= definition.attackRange * definition.attackRange) {
                 break;
             }
-            // 指令四十：朝玩家服务器权威位置移动（speed=80，dt 为 server tick；不用 Client dt）。
+            // 指令四十：朝玩家服务器权威位置移动（dt 为 server tick；不用 Client dt）。
+            // 阶段16 指令三十：使用 EffectiveMoveSpeed（Slow 后追击变慢）。
             (void)StepToward(monster, target->PositionX(), target->PositionY(),
-                             definition.moveSpeed, dt);
+                             monster.EffectiveMoveSpeed(), dt);
             break;
         }
         case MonsterState::Returning: {
             // 指令四十五/四十六：返回 spawn；到达(<=10) -> Idle(target=0)。
             // 回途不做 aggro 扫描（回途无敌，保证回到出生点语义稳定）。
-            if (StepToward(monster, monster.SpawnX(), monster.SpawnY(), definition.moveSpeed,
+            if (StepToward(monster, monster.SpawnX(), monster.SpawnY(), monster.EffectiveMoveSpeed(),
                            dt)) {
                 monster.SetTargetCharacterId(0);
                 TransitionTo(monster, MonsterState::Idle, "returned home");

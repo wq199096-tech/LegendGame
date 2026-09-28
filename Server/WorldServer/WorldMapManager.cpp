@@ -77,8 +77,9 @@ bool WorldMapManager::ApplyMoveInput(PlayerSession& player, std::uint32_t inputS
         dy *= invLength;
     }
     // 指令三十六：position += direction * speed * deltaTime。
-    float x = player.PositionX() + dx * kWorldMoveSpeed * dt;
-    float y = player.PositionY() + dy * kWorldMoveSpeed * dt;
+    // 阶段16 指令三十一：使用玩家 EffectiveMoveSpeed（不再固定 120）。
+    float x = player.PositionX() + dx * player.EffectiveMoveSpeed() * dt;
+    float y = player.PositionY() + dy * player.EffectiveMoveSpeed() * dt;
     // 指令四十：地图边界服务器 Clamp。
     if (!(x >= kMapMinX)) {
         x = kMapMinX;

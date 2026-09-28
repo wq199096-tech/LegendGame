@@ -126,6 +126,9 @@ add_library(LegendWorldCore STATIC
     WorldServer/Combat/CombatService.cpp
     WorldServer/Skill/SkillRegistry.cpp
     WorldServer/Skill/SkillService.cpp
+    WorldServer/Status/StatusEffectRegistry.cpp
+    WorldServer/Status/StatusEffectService.cpp
+    WorldServer/Status/StatusEffectContainer.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)

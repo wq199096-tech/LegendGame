@@ -58,6 +58,40 @@ void RemoteMonsterManager::ApplyHealthSnapshot(std::uint64_t entityId, std::uint
     entity.ApplySnapshotHealth(currentHp, maxHp);
 }
 
+// ---------------------------------------------------------------------------
+// 阶段16 指令六十三：状态事件转发（未知实体忽略）
+// ---------------------------------------------------------------------------
+
+void RemoteMonsterManager::ApplyStatus(std::uint64_t entityId, const RemoteStatusEffect& effect) {
+    const auto it = m_monsters.find(entityId);
+    if (it != m_monsters.end()) {
+        it->second.StatusEffects().Apply(effect);
+    }
+}
+
+void RemoteMonsterManager::UpdateStatus(std::uint64_t entityId, std::uint64_t instanceId,
+                                        std::uint8_t stacks, std::uint32_t remainingMs) {
+    const auto it = m_monsters.find(entityId);
+    if (it != m_monsters.end()) {
+        it->second.StatusEffects().Update(instanceId, stacks, remainingMs);
+    }
+}
+
+void RemoteMonsterManager::RemoveStatus(std::uint64_t entityId, std::uint64_t instanceId) {
+    const auto it = m_monsters.find(entityId);
+    if (it != m_monsters.end()) {
+        it->second.StatusEffects().Remove(instanceId);
+    }
+}
+
+void RemoteMonsterManager::SnapshotStatus(std::uint64_t entityId,
+                                          const std::vector<RemoteStatusEffect>& effects) {
+    const auto it = m_monsters.find(entityId);
+    if (it != m_monsters.end()) {
+        it->second.StatusEffects().SnapshotReplace(effects);
+    }
+}
+
 void RemoteMonsterManager::Update(float deltaTime) {
     for (auto& [entityId, entity] : m_monsters) {
         entity.UpdateInterpolation(deltaTime);

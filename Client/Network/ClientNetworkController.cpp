@@ -335,6 +335,45 @@ std::string ClientNetworkController::WorldStatusText() const {
         }
         text += "]";
     }
+    // 阶段16 指令六十七：F12 增加 Self Effects 与 Monster Effects（仅 Debug 文本）。
+    if (!m_world.LocalStatusEffects().All().empty()) {
+        text += " SelfFx[";
+        int listed = 0;
+        for (const auto& [instanceId, effect] : m_world.LocalStatusEffects().All()) {
+            if (listed++ >= 4) {
+                break;
+            }
+            if (listed > 1) {
+                text += ",";
+            }
+            text += std::to_string(effect.effectId) + "x" + std::to_string(effect.stacks) + " " +
+                    std::to_string(effect.remainingMs / 1000) + "s";
+        }
+        text += "]";
+    }
+    {
+        int listed = 0;
+        for (const auto& [id, monster] : m_world.RemoteMonsters().All()) {
+            if (monster.StatusEffects().Count() == 0) {
+                continue;
+            }
+            if (listed++ >= 2) {
+                break;
+            }
+            text += " mFx#" + std::to_string(id) + "[";
+            int fx = 0;
+            for (const auto& [instanceId, effect] : monster.StatusEffects().All()) {
+                if (fx++ >= 3) {
+                    break;
+                }
+                if (fx > 1) {
+                    text += ",";
+                }
+                text += std::to_string(effect.effectId) + "x" + std::to_string(effect.stacks);
+            }
+            text += "]";
+        }
+    }
     // 阶段12 指令四十四：Debug 列出前 4 个远程玩家名（无世界内文字渲染器，
     // 名字随 F12 面板显示；正式头顶 UI 后续单独阶段）。
     if (m_world.RemotePlayers().Count() > 0) {

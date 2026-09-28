@@ -443,13 +443,19 @@ void GameScene::Update(float deltaTime) {
             skillId = legend::world::kSkillIdFireBolt;
         } else if (input.IsKeyPressed(SDL_SCANCODE_3)) {
             skillId = legend::world::kSkillIdWhirlwind;
+        } else if (input.IsKeyPressed(SDL_SCANCODE_4)) {
+            skillId = legend::world::kSkillIdBattleFocus;      // 阶段16：Self Buff
+        } else if (input.IsKeyPressed(SDL_SCANCODE_5)) {
+            skillId = legend::world::kSkillIdCripplingStrike;  // 阶段16：Slow
         }
         if (skillId != 0) {
-            if (skillId == legend::world::kSkillIdWhirlwind) {
+            if (skillId == legend::world::kSkillIdWhirlwind ||
+                skillId == legend::world::kSkillIdBattleFocus) {
+                // 指令六十一：Whirlwind/Battle Focus 无需目标（Self）。
                 world.SendSkillCast(skillId,
                                     static_cast<std::uint8_t>(legend::world::SkillTargetType::Self),
                                     0);
-                LOG_INFO("[Skill] Key3 -> Whirlwind (Self).");
+                LOG_INFO("[Skill] Key -> skill " + std::to_string(skillId) + " (Self).");
             } else {
                 const float selfX = world.ServerPositionX();
                 const float selfY = world.ServerPositionY();
@@ -795,6 +801,23 @@ void GameScene::DrawRemotePlayers(legend::render::SpriteBatch& batch) {
                        {20.0f / 64.0f, 8.0f / 64.0f}, 0.0f,
                        legend::math::Color(0.25f, 0.45f, 1.0f, 0.9f));
     }
+    // 阶段16 指令六十八：Battle Focus（2001）激活时本地角色顶部金色 Debug 标记。
+    if (m_networkController->World().IsWorldReady()) {
+        const auto& world = m_networkController->World();
+        bool battleFocus = false;
+        for (const auto& [instanceId, effect] : world.LocalStatusEffects().All()) {
+            if (effect.effectId == legend::world::kStatusEffectIdBattleFocus) {
+                battleFocus = true;
+                break;
+            }
+        }
+        if (battleFocus) {
+            const legend::math::Vector2 feet(world.ServerPositionX(), world.ServerPositionY());
+            batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -96.0f),
+                           {24.0f / 64.0f, 8.0f / 64.0f}, 0.0f,
+                           legend::math::Color(1.0f, 0.85f, 0.20f, 0.95f)); // 金色
+        }
+    }
 }
 
 // 阶段13 指令五十六/五十七：远程怪物 Debug 绘制——红/橙 Quad 与远程玩家（绿色）区分；
@@ -827,6 +850,35 @@ void GameScene::DrawRemoteMonsters(legend::render::SpriteBatch& batch) {
         batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -50.0f),
                        {10.0f / 64.0f, 10.0f / 64.0f}, 0.0f,
                        legend::math::Color(1.0f, 0.55f, 0.10f, 0.95f));
+        // 阶段16 指令六十八：状态 Debug 标记（ArmorBreak 紫 / Burn 橙 / Poison 绿 /
+        // Slow 蓝），最多显示 4 个，横向排布；仅 Debug，不做正式图标。
+        int statusSlot = 0;
+        for (const auto& [instanceId, effect] : monster.StatusEffects().All()) {
+            if (statusSlot >= 4) {
+                break;
+            }
+            legend::math::Color statusColor(0.6f, 0.6f, 0.6f, 0.9f);
+            switch (effect.effectId) {
+                case legend::world::kStatusEffectIdArmorBreak:
+                    statusColor = legend::math::Color(0.70f, 0.30f, 0.90f, 0.9f); // 紫
+                    break;
+                case legend::world::kStatusEffectIdBurn:
+                    statusColor = legend::math::Color(1.00f, 0.55f, 0.10f, 0.9f); // 橙
+                    break;
+                case legend::world::kStatusEffectIdPoison:
+                    statusColor = legend::math::Color(0.30f, 0.90f, 0.30f, 0.9f); // 绿
+                    break;
+                case legend::world::kStatusEffectIdSlow:
+                    statusColor = legend::math::Color(0.30f, 0.60f, 1.00f, 0.9f); // 蓝
+                    break;
+                default:
+                    break;
+            }
+            const float offsetX = -18.0f + static_cast<float>(statusSlot) * 12.0f;
+            batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(offsetX, -58.0f),
+                           {8.0f / 64.0f, 8.0f / 64.0f}, 0.0f, statusColor);
+            ++statusSlot;
+        }
     }
 }
 

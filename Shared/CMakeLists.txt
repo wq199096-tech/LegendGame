@@ -15,6 +15,7 @@ add_library(LegendSharedNetwork STATIC
     Monster/MonsterProtocol.cpp
     Combat/CombatProtocol.cpp
     Skill/SkillProtocol.cpp
+    Status/StatusEffectProtocol.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})

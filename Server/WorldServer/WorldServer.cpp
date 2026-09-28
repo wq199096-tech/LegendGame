@@ -57,7 +57,9 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_monsterAiTimer(service.Io()),
       m_healthTimer(service.Io()),
       m_skillTimer(service.Io()),
-      m_manaTimer(service.Io()) {}
+      m_manaTimer(service.Io()),
+      m_statusTimer(service.Io()),
+      m_statusSnapshotTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -96,6 +98,8 @@ bool WorldServer::Start(std::string& error) {
     ScheduleHealthSnapshotTick(); // 阶段14 指令六十八：HP 纠偏 1s
     ScheduleSkillTick();      // 阶段15 指令七十七/七十八：Skill Tick 50ms（与 AI 分离）
     ScheduleManaSnapshotTick(); // 阶段15 指令六十七：Mana 快照 1s
+    ScheduleStatusTick();     // 阶段16 指令四十：Status Tick 100ms
+    ScheduleStatusSnapshotTick(); // 阶段16 指令五十九：状态快照 2s
     return true;
 }
 
@@ -112,6 +116,8 @@ void WorldServer::Stop() {
     m_healthTimer.cancel();     // 阶段14：停止 HP 纠偏 timer
     m_skillTimer.cancel();      // 阶段15 指令七十九：停止 Skill Timer
     m_manaTimer.cancel();      // 阶段15 指令七十九：停止 Mana 快照 timer
+    m_statusTimer.cancel();     // 阶段16 指令一百三十七：停止 Status Timer
+    m_statusSnapshotTimer.cancel(); // 阶段16：停止状态快照 timer
     // 阶段13 指令六十五/六十六：清 Monster（runtime only，无持久化）。
     m_monsters.Clear();
     m_monsterGrid = MonsterSpatialGrid{};
@@ -119,6 +125,7 @@ void WorldServer::Stop() {
     m_nextCombatEventId = 1;   // 阶段14：eventId 同步复位
     m_nextCastId = 1;          // 阶段15 指令一百四十七：重启 castId 复位，Pending Cast 随
                                // PlayerSession 一起消失（无网络 Cancel，指令七十九）
+    m_nextStatusInstanceId = 1; // 阶段16 指令一百三十四/七十九：重启状态全部清空
     m_loginClient->Cancel();
     if (m_loginConnection) {
         m_loginConnection->Close();
@@ -1033,8 +1040,10 @@ void WorldServer::SpawnInitialMonsters() {
         auto monster = std::make_shared<MonsterEntity>(m_nextMonsterEntityId++,
                                                        definition->monsterTypeId, kDefaultMapId,
                                                        point.x, point.y, definition->moveSpeed);
-        // 阶段14 指令五/六：战斗属性初始化（满血）。
+        // 阶段14 指令五/六：战斗属性初始化（满血）；阶段16 指令二十四：Base/Derived 属性。
         monster->InitializeCombat(definition->maxHp);
+        monster->SetBaseStats(definition->attackPower, definition->defense,
+                              definition->moveSpeed);
         if (!m_monsters.SpawnMonster(monster)) {
             LOG_WARN("[World] Monster spawn duplicate entityId=" +
                      std::to_string(monster->EntityId()));
@@ -1120,7 +1129,9 @@ void WorldServer::TryMonsterAttack(const std::shared_ptr<MonsterEntity>& monster
     }
     monster->TouchAttackTime();
     // 指令二十四/二十六：伤害 = max(1, atk - def) = max(1, 10 - 5) = 5。
-    const std::uint32_t damage = CalculateDamage(definition.attackPower, target->Defense());
+    // 阶段16 指令二十九：改用 Derived Stats（Effective）。
+    const std::uint32_t damage =
+        CalculateDamage(monster->EffectiveAttackPower(), target->EffectiveDefense());
     const bool killed = target->ApplyDamage(damage);
     // 指令四十/四十一：广播范围 = 能看到受害玩家的附近玩家 ∪ 受害者本人（去重）。
     std::vector<std::uint64_t> receivers;
@@ -1307,10 +1318,9 @@ void WorldServer::HandlePlayerAttack(std::uint64_t connectionId,
     attacker->TouchAttackTime();
     attacker->SetCombatTargetEntityId(target->EntityId());
     // 指令二十四/二十五/三十六：damage = max(1, atk - def) = max(1, 20 - 2) = 18
-    //（怪物防御来自 Definition，指令五）。
-    const MonsterDefinition* targetDefinition = FindMonsterDefinition(target->MonsterTypeId());
+    //（怪物防御来自 Entity 的 EffectiveDefense——阶段16 指令二十九）。
     const std::uint32_t damage =
-        CalculateDamage(attacker->AttackPower(), targetDefinition ? targetDefinition->defense : 0u);
+        CalculateDamage(attacker->EffectiveAttackPower(), target->EffectiveDefense());
     const bool killed = target->ApplyDamage(damage);
     // 指令四十/四十二：广播范围 = 目标怪物当前所有观察者 ∪ 攻击者本人（去重，
     // 不全世界广播，指令一百一十五）。
@@ -1391,6 +1401,9 @@ void WorldServer::KillMonster(const std::shared_ptr<MonsterEntity>& monster,
     monster->MarkDead();
     monster->SetState(MonsterState::Dead);
     monster->SetTargetCharacterId(0);
+    // 阶段16 指令三十八/一百一十四：死亡 -> 逐个 StatusRemoved(TargetDied) + 清空容器。
+    ClearStatusOnDeath(CombatEntityType::Monster, monster->EntityId(), monster->StatusEffects(),
+                       observers);
     // 指令五十：MonsterDeath 广播（观察者集合已含 killer）。
     MonsterDeathPayload death;
     death.entityId = monster->EntityId();
@@ -1421,6 +1434,16 @@ void WorldServer::KillPlayer(const std::shared_ptr<PlayerSession>& victim,
         CancelActiveCast(victim, SkillCancelReason::Dead);
     }
     victim->MarkDead();
+    // 阶段16 指令三十九/一百一十五：玩家死亡 -> 清除全部状态（StatusRemoved(TargetDied)）。
+    {
+        std::vector<std::uint64_t> statusReceivers;
+        statusReceivers.push_back(victim->CharacterId());
+        for (const auto characterId : observers) {
+            MergeReceiver(statusReceivers, characterId);
+        }
+        ClearStatusOnDeath(CombatEntityType::Player, victim->CharacterId(),
+                           victim->StatusEffects(), statusReceivers);
+    }
     // 指令四十九：PlayerDeath 广播（观察者 ∪ 受害者本人）。
     PlayerDeathPayload death;
     death.characterId = victim->CharacterId();
@@ -1831,23 +1854,33 @@ void WorldServer::ResolveAndApplySkillDamage(const std::shared_ptr<PlayerSession
     impact.serverTime = ServerTimeMs();
 
     // ---- 逐目标结算（指令三十七：damage = max(1, base + atk - def)）----
+    // 阶段16：baseDamage == 0 的技能（Battle Focus）不结算伤害；
+    // 命中后若目标存活 -> 施加 Definition 指定的状态效果（指令六十九：
+    // 直接杀死的目标不再施加状态）。
+    const bool dealsDamage = skill.baseDamage > 0;
     for (const auto& target : targets) {
         const MonsterDefinition* targetDefinition = FindMonsterDefinition(target->MonsterTypeId());
         const std::uint32_t damage =
-            CalculateSkillDamage(skill.baseDamage, caster->AttackPower(),
-                                 targetDefinition ? targetDefinition->defense : 0u);
-        const bool killed = target->ApplyDamage(damage);
+            dealsDamage ? CalculateSkillDamage(skill.baseDamage, caster->EffectiveAttackPower(),
+                                               target->EffectiveDefense())
+                        : 0u;
+        bool killed = false;
+        if (dealsDamage) {
+            killed = target->ApplyDamage(damage);
+        }
 
-        SkillImpactTarget impactTarget;
-        impactTarget.entityType = static_cast<std::uint8_t>(CombatEntityType::Monster);
-        impactTarget.entityId = target->EntityId();
-        impactTarget.damage = damage;
-        impactTarget.hpAfter = target->CurrentHp();
-        impactTarget.maxHp = target->MaxHp();
-        impactTarget.killed = killed;
-        impact.targets.push_back(impactTarget);
-        if (impact.targets.size() >= kSkillImpactMaxTargets) {
-            break; // 指令三十/八十五：硬上限 16
+        if (dealsDamage) {
+            SkillImpactTarget impactTarget;
+            impactTarget.entityType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+            impactTarget.entityId = target->EntityId();
+            impactTarget.damage = damage;
+            impactTarget.hpAfter = target->CurrentHp();
+            impactTarget.maxHp = target->MaxHp();
+            impactTarget.killed = killed;
+            impact.targets.push_back(impactTarget);
+            if (impact.targets.size() >= kSkillImpactMaxTargets) {
+                break; // 指令三十/八十五：硬上限 16
+            }
         }
 
         // 指令五十三：CombatEvent 继续复用阶段14 广播范围（目标怪观察者 ∪ 攻击者）。
@@ -1864,24 +1897,38 @@ void WorldServer::ResolveAndApplySkillDamage(const std::shared_ptr<PlayerSession
             MergeReceiver(receivers, characterId);
         }
 
-        CombatEventPayload event;
-        event.eventId = m_nextCombatEventId++; // 指令十三：单调 eventId
-        event.attackerType = static_cast<std::uint8_t>(CombatEntityType::Player);
-        event.attackerId = caster->CharacterId();
-        event.targetType = static_cast<std::uint8_t>(CombatEntityType::Monster);
-        event.targetId = target->EntityId();
-        event.damage = damage;
-        event.targetHpAfter = target->CurrentHp();
-        event.targetMaxHp = target->MaxHp();
-        event.killed = killed;
-        event.serverTime = ServerTimeMs();
-        // 指令三十二/一百二十四：技能伤害来源（sourceType=Skill, sourceId=skillId）。
-        event.sourceType = static_cast<std::uint8_t>(CombatSource::Skill);
-        event.sourceId = skill.skillId;
-        BroadcastCombatEvent(event, combatReceivers);
-        LOG_INFO("[Combat] Skill " + std::to_string(skill.skillId) + " hit Monster #" +
-                 std::to_string(target->EntityId()) + " for " + std::to_string(damage) +
-                 " (hp=" + std::to_string(target->CurrentHp()) + ")");
+        if (dealsDamage) {
+            CombatEventPayload event;
+            event.eventId = m_nextCombatEventId++; // 指令十三：单调 eventId
+            event.attackerType = static_cast<std::uint8_t>(CombatEntityType::Player);
+            event.attackerId = caster->CharacterId();
+            event.targetType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+            event.targetId = target->EntityId();
+            event.damage = damage;
+            event.targetHpAfter = target->CurrentHp();
+            event.targetMaxHp = target->MaxHp();
+            event.killed = killed;
+            event.serverTime = ServerTimeMs();
+            // 指令三十二/一百二十四：技能伤害来源（sourceType=Skill, sourceId=skillId）。
+            event.sourceType = static_cast<std::uint8_t>(CombatSource::Skill);
+            event.sourceId = skill.skillId;
+            BroadcastCombatEvent(event, combatReceivers);
+            LOG_INFO("[Combat] Skill " + std::to_string(skill.skillId) + " hit Monster #" +
+                     std::to_string(target->EntityId()) + " for " + std::to_string(damage) +
+                     " (hp=" + std::to_string(target->CurrentHp()) + ")");
+        }
+
+        // 阶段16 指令六十九：目标未死 -> 施加技能关联的状态效果。
+        if (skill.applyStatusEffectId != 0 && !killed) {
+            ApplySkillStatus(caster, skill, static_cast<std::uint8_t>(CombatEntityType::Monster),
+                             target->EntityId(), combatReceivers);
+        }
+    }
+
+    // 阶段16 指令十九：Self 技能（Battle Focus）——状态施加给施法者本人。
+    if (skill.targetType == SkillTargetType::Self && skill.applyStatusEffectId != 0) {
+        ApplySkillStatus(caster, skill, static_cast<std::uint8_t>(CombatEntityType::Player),
+                         caster->CharacterId(), receivers);
     }
 
     // 指令八十三：Impact 在 CombatEvent 之后、MonsterDeath 之前发送（测试一致）。
@@ -2043,6 +2090,435 @@ void WorldServer::SendSkillImpactEvent(const std::vector<std::uint64_t>& receive
             SendPacketToPlayer(player, packet);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段16：状态效果编排（Status Effect Core V0.16）
+// WorldServer 只负责编排与广播（指令一百五十一）：策略在 StatusEffectService，
+// 定义在 StatusEffectRegistry，容器在 StatusEffectContainer。
+// ---------------------------------------------------------------------------
+
+std::vector<std::uint64_t> WorldServer::MonsterStatusReceivers(
+    std::uint64_t monsterEntityId, std::uint64_t sourceCharacterId) const {
+    // 指令五十七：Monster 状态 -> 当前能看到 Monster 的玩家 + 若 source 是玩家则
+    // source 本人（去重，不全世界广播）。
+    std::vector<std::uint64_t> receivers;
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->VisibleMonsters().count(monsterEntityId) != 0) {
+            MergeReceiver(receivers, observer->CharacterId());
+        }
+    }
+    if (sourceCharacterId != 0) {
+        MergeReceiver(receivers, sourceCharacterId);
+    }
+    return receivers;
+}
+
+std::vector<std::uint64_t> WorldServer::PlayerStatusReceivers(std::uint64_t characterId) const {
+    // 指令五十七：Player 状态 -> 本人 + 能看到该玩家的玩家。
+    std::vector<std::uint64_t> receivers;
+    receivers.push_back(characterId);
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->CharacterId() != characterId &&
+            observer->VisiblePlayers().count(characterId) != 0) {
+            MergeReceiver(receivers, observer->CharacterId());
+        }
+    }
+    return receivers;
+}
+
+StatusApplyOutcome WorldServer::ApplyStatusToTarget(std::uint8_t targetType,
+                                                    std::uint64_t targetEntityId,
+                                                    StatusEffectId effectId, std::uint8_t stacks,
+                                                    std::uint8_t sourceType,
+                                                    std::uint64_t sourceEntityId,
+                                                    std::uint32_t sourceSkillId) {
+    // 阶段16：统一施加入口（技能命中 / 测试白盒）。解析目标 -> 校验 -> 策略应用 ->
+    // 派生属性重算 -> 广播 Applied/Updated（指令十七：Client 不能施加）。
+    const auto now = std::chrono::steady_clock::now();
+    StatusApplyContext context;
+    context.effectId = effectId;
+    context.sourceType = sourceType;
+    context.sourceEntityId = sourceEntityId;
+    context.sourceSkillId = sourceSkillId;
+    context.targetType = targetType;
+    context.targetEntityId = targetEntityId;
+
+    std::shared_ptr<MonsterEntity> monster;
+    std::shared_ptr<PlayerSession> player;
+    if (targetType == static_cast<std::uint8_t>(CombatEntityType::Monster)) {
+        monster = m_monsters.FindMonster(targetEntityId);
+        context.targetValid = monster != nullptr;
+        context.targetAlive = monster != nullptr && monster->Alive();
+    } else {
+        player = m_players.FindByCharacter(targetEntityId);
+        context.targetValid = player != nullptr;
+        context.targetAlive = player != nullptr && player->Alive();
+    }
+
+    StatusEffectContainer& container =
+        targetType == static_cast<std::uint8_t>(CombatEntityType::Monster)
+            ? (monster ? monster->StatusEffects() : m_detachedStatusContainer)
+            : (player ? player->StatusEffects() : m_detachedStatusContainer);
+    StatusApplyOutcome outcome =
+        ApplyEffect(container, m_statusRegistry, context, m_nextStatusInstanceId++, now);
+    if (outcome.result == StatusApplyResult::Applied ||
+        outcome.result == StatusApplyResult::Refreshed ||
+        outcome.result == StatusApplyResult::StackAdded ||
+        outcome.result == StatusApplyResult::AtMaxStacksRefreshed) {
+        RecalculateTargetDerivedStats(static_cast<CombatEntityType>(targetType), targetEntityId);
+        if (outcome.result == StatusApplyResult::Applied) {
+            const auto* definition = m_statusRegistry.FindEffect(effectId);
+            SendStatusApplied(MonsterOrPlayerStatusReceivers(targetType, targetEntityId,
+                                                             sourceType, sourceEntityId),
+                              *outcome.effect, definition ? definition->durationMs : 0u);
+        } else {
+            SendStatusUpdated(MonsterOrPlayerStatusReceivers(targetType, targetEntityId,
+                                                             sourceType, sourceEntityId),
+                              *outcome.effect);
+        }
+        LOG_INFO("[Status] effect " + std::to_string(effectId) + " x" +
+                 std::to_string(outcome.effect->Stacks()) + " on target " +
+                 std::to_string(targetEntityId) + " -> " +
+                 StatusApplyResultName(static_cast<std::uint8_t>(outcome.result)));
+    }
+    return outcome;
+}
+
+std::vector<std::uint64_t> WorldServer::MonsterOrPlayerStatusReceivers(std::uint8_t targetType,
+                                                                       std::uint64_t targetEntityId,
+                                                                       std::uint8_t sourceType,
+                                                                       std::uint64_t sourceEntityId) {
+    if (targetType == static_cast<std::uint8_t>(CombatEntityType::Monster)) {
+        // 指令五十七：source 为玩家时包含 source 本人。
+        return MonsterStatusReceivers(targetEntityId,
+                                      sourceType == static_cast<std::uint8_t>(
+                                                        CombatEntityType::Player)
+                                          ? sourceEntityId
+                                          : 0);
+    }
+    return PlayerStatusReceivers(targetEntityId);
+}
+
+void WorldServer::ApplySkillStatus(const std::shared_ptr<PlayerSession>& caster,
+                                   const SkillDefinition& skill, std::uint8_t targetType,
+                                   std::uint64_t targetEntityId,
+                                   const std::vector<std::uint64_t>& combatReceivers) {
+    // 阶段16 指令十八：技能命中 -> 施加 applyStatusEffectId（applyStatusStacks 层，
+    // 逐次应用以支持 stacks>1 的定义扩展）。
+    (void)combatReceivers; // 广播范围由 MonsterOrPlayerStatusReceivers 统一决定
+    for (std::uint8_t i = 0; i < skill.applyStatusStacks; ++i) {
+        ApplyStatusToTarget(targetType, targetEntityId, skill.applyStatusEffectId, 1,
+                            static_cast<std::uint8_t>(CombatEntityType::Player),
+                            caster->CharacterId(), skill.skillId);
+    }
+}
+
+void WorldServer::RecalculateTargetDerivedStats(CombatEntityType targetType,
+                                                std::uint64_t targetEntityId) {
+    // 阶段16 指令二十五：仅在状态 Applied/stack 变化/Removed/Expired 时重算。
+    if (targetType == CombatEntityType::Monster) {
+        auto monster = m_monsters.FindMonster(targetEntityId);
+        if (monster) {
+            const auto stats = RecalculateDerivedStats(monster->BaseAttackPower(),
+                                                       monster->BaseDefense(),
+                                                       monster->BaseMoveSpeed(),
+                                                       monster->StatusEffects(), m_statusRegistry);
+            monster->SetEffectiveCombatStats(stats.attackPower, stats.defense, stats.moveSpeed);
+        }
+        return;
+    }
+    auto player = m_players.FindByCharacter(targetEntityId);
+    if (player) {
+        const auto stats =
+            RecalculateDerivedStats(player->BaseAttackPower(), player->BaseDefense(),
+                                    player->BaseMoveSpeed(), player->StatusEffects(),
+                                    m_statusRegistry);
+        player->SetEffectiveCombatStats(stats.attackPower, stats.defense, stats.moveSpeed);
+    }
+}
+
+void WorldServer::ScheduleStatusTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_statusTimer.expires_after(std::chrono::milliseconds(m_config.statusTickMs));
+    auto self = shared_from_this();
+    m_statusTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->RunStatusTick();
+        self->ScheduleStatusTick();
+    });
+}
+
+void WorldServer::RunStatusTick() {
+    // 阶段16 指令四十/四十一：100ms 统一扫描在线 Player + 活着 Monster 的状态容器
+    //（不建 per-status Timer）；DOT Tick -> CombatEvent -> 死亡 -> 清状态。
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        if (player->StatusEffects().Empty()) {
+            continue;
+        }
+        // 阶段16：玩家当前无 DOT 类状态（Battle Focus 无 Tick）；保留过期路径。
+        const auto expired = ExpireEffects(player->StatusEffects(), now);
+        for (const auto& effect : expired) {
+            RecalculateTargetDerivedStats(CombatEntityType::Player, player->CharacterId());
+            SendStatusRemoved(PlayerStatusReceivers(player->CharacterId()), effect,
+                              StatusRemovedReason::Expired);
+            LOG_INFO("[Status] effect " + std::to_string(effect.EffectId()) +
+                     " expired on player #" + std::to_string(player->CharacterId()));
+        }
+    }
+    for (const auto& monster : m_monsters.SnapshotMonsters()) {
+        if (!monster->Alive() || monster->StatusEffects().Empty()) {
+            continue;
+        }
+        auto onDamage = [this](const CombatEventPayload& event,
+                               const std::vector<std::uint64_t>& receivers) {
+            BroadcastCombatEvent(event, receivers);
+        };
+        auto onKilled = [this, &monster](StatusEffectId effectId, std::uint64_t killerId) {
+            (void)effectId;
+            // 指令三十七/七十一：DOT 击杀复用 KillMonster，killer = 原始施加者。
+            std::vector<std::uint64_t> receivers =
+                MonsterStatusReceivers(monster->EntityId(), killerId);
+            KillMonster(monster, killerId, receivers);
+        };
+        TickStatusContainer(monster->StatusEffects(), CombatEntityType::Monster,
+                            monster->EntityId(), onDamage, onKilled, now);
+        const auto expired = ExpireEffects(monster->StatusEffects(), now);
+        for (const auto& effect : expired) {
+            RecalculateTargetDerivedStats(CombatEntityType::Monster, monster->EntityId());
+            SendStatusRemoved(MonsterStatusReceivers(monster->EntityId(), 0), effect,
+                              StatusRemovedReason::Expired);
+        }
+    }
+}
+
+void WorldServer::TickStatusContainer(
+    StatusEffectContainer& container, CombatEntityType targetType, std::uint64_t targetEntityId,
+    const std::function<void(const CombatEventPayload&,
+                             const std::vector<std::uint64_t>&)>& onDamage,
+    const std::function<void(StatusEffectId, std::uint64_t)>& onKilled,
+    std::chrono::steady_clock::time_point now) {
+    // 指令四十二/四十三：DOT due-tick 结算（每跳独立 CombatEvent）；死亡即中断。
+    for (auto& [effectId, effect] : container.All()) {
+        const StatusEffectDefinition* definition = m_statusRegistry.FindEffect(effectId);
+        if (!definition) {
+            continue;
+        }
+        const std::uint32_t ticks = TickEffect(effect, *definition, now);
+        if (ticks == 0) {
+            continue;
+        }
+        const std::uint32_t damage = ComputeDotDamage(*definition, effect.Stacks());
+        if (damage == 0) {
+            continue;
+        }
+        for (std::uint32_t tick = 0; tick < ticks; ++tick) {
+            // 阶段16：DOT 目标仅 Monster（Player 无 DOT 来源）。
+            if (targetType != CombatEntityType::Monster) {
+                continue;
+            }
+            auto monster = m_monsters.FindMonster(targetEntityId);
+            if (!monster || !monster->Alive()) {
+                return; // 已死亡/移除：停止后续 Tick
+            }
+            const bool killed = monster->ApplyDamage(damage);
+            CombatEventPayload event;
+            event.eventId = m_nextCombatEventId++;
+            event.attackerType = effect.SourceType();
+            event.attackerId = effect.SourceEntityId(); // 指令七十一：原始施加者
+            event.targetType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+            event.targetId = targetEntityId;
+            event.damage = damage;
+            event.targetHpAfter = monster->CurrentHp();
+            event.targetMaxHp = monster->MaxHp();
+            event.killed = killed;
+            event.serverTime = ServerTimeMs();
+            // 指令三十六/一百三十：DOT 来源（sourceType=StatusEffect, sourceId=effectId）。
+            event.sourceType = static_cast<std::uint8_t>(CombatSource::StatusEffect);
+            event.sourceId = effectId;
+            std::vector<std::uint64_t> receivers =
+                MonsterStatusReceivers(targetEntityId, effect.SourceEntityId());
+            onDamage(event, receivers);
+            LOG_INFO("[Combat] DOT " + std::to_string(effectId) + " hit Monster #" +
+                     std::to_string(targetEntityId) + " for " + std::to_string(damage) +
+                     " (hp=" + std::to_string(monster->CurrentHp()) + ")");
+            if (killed) {
+                onKilled(effectId, effect.SourceEntityId());
+                return; // 死亡后立即清状态并停止本容器 Tick
+            }
+        }
+    }
+}
+
+void WorldServer::ScheduleStatusSnapshotTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_statusSnapshotTimer.expires_after(
+        std::chrono::milliseconds(m_config.statusSnapshotIntervalMs));
+    auto self = shared_from_this();
+    m_statusSnapshotTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->SendStatusSnapshots();
+        self->ScheduleStatusSnapshotTick();
+    });
+}
+
+void WorldServer::SendStatusSnapshots() {
+    // 阶段16 指令五十九/六十：每 2s 对每个玩家发自身 + 可见玩家 + 可见怪物的状态
+    // 快照；绝不发全世界状态。
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        SendStatusSnapshotFor(player, CombatEntityType::Player, player->CharacterId(),
+                              player->StatusEffects(), now);
+        for (const auto remoteId : player->VisiblePlayers()) {
+            const auto remote = m_players.FindByCharacter(remoteId);
+            if (remote) {
+                SendStatusSnapshotFor(player, CombatEntityType::Player, remoteId,
+                                      remote->StatusEffects(), now);
+            }
+        }
+        for (const auto entityId : player->VisibleMonsters()) {
+            const auto monster = m_monsters.FindMonster(entityId);
+            if (monster) {
+                SendStatusSnapshotFor(player, CombatEntityType::Monster, entityId,
+                                      monster->StatusEffects(), now);
+            }
+        }
+    }
+}
+
+void WorldServer::SendStatusSnapshotFor(const std::shared_ptr<PlayerSession>& receiver,
+                                        CombatEntityType targetType, std::uint64_t targetEntityId,
+                                        const StatusEffectContainer& container,
+                                        std::chrono::steady_clock::time_point now) {
+    StatusEffectSnapshotPayload payload;
+    payload.targetType = static_cast<std::uint8_t>(targetType);
+    payload.targetEntityId = targetEntityId;
+    payload.serverTime = ServerTimeMs();
+    for (const auto* effect : container.Snapshot()) {
+        if (payload.effects.size() >= kStatusEffectMaxSnapshotCount) {
+            break; // 指令五十六：上限 32
+        }
+        StatusEffectSnapshotEntry entry;
+        entry.instanceId = effect->InstanceId();
+        entry.effectId = effect->EffectId();
+        entry.stacks = effect->Stacks();
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(effect->ExpireTime() - now);
+        entry.remainingMs = remaining.count() > 0 ? static_cast<std::uint32_t>(remaining.count())
+                                                  : 0u;
+        payload.effects.push_back(entry);
+    }
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::StatusEffectSnapshot);
+    if (EncodeStatusEffectSnapshot(payload, packet.payload)) {
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
+void WorldServer::SendStatusApplied(const std::vector<std::uint64_t>& receivers,
+                                    const ActiveStatusEffect& effect, std::uint32_t durationMs) {
+    StatusEffectAppliedPayload payload;
+    payload.instanceId = effect.InstanceId();
+    payload.effectId = effect.EffectId();
+    payload.targetType = effect.TargetType();
+    payload.targetEntityId = effect.TargetEntityId();
+    payload.sourceType = effect.SourceType();
+    payload.sourceEntityId = effect.SourceEntityId();
+    payload.sourceSkillId = effect.SourceSkillId();
+    payload.stacks = effect.Stacks();
+    payload.durationMs = durationMs;
+    payload.remainingMs = durationMs;
+    payload.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::StatusEffectApplied);
+    if (EncodeStatusEffectApplied(payload, packet.payload)) {
+        for (const auto characterId : receivers) {
+            auto player = m_players.FindByCharacter(characterId);
+            if (player) {
+                SendPacketToPlayer(player, packet);
+            }
+        }
+    }
+}
+
+void WorldServer::SendStatusUpdated(const std::vector<std::uint64_t>& receivers,
+                                    const ActiveStatusEffect& effect) {
+    // 指令五十三：Updated 携带服务器权威 remainingMs。
+    const auto now = std::chrono::steady_clock::now();
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(effect.ExpireTime() - now);
+    StatusEffectUpdatedPayload payload;
+    payload.instanceId = effect.InstanceId();
+    payload.effectId = effect.EffectId();
+    payload.targetType = effect.TargetType();
+    payload.targetEntityId = effect.TargetEntityId();
+    payload.stacks = effect.Stacks();
+    payload.remainingMs =
+        remaining.count() > 0 ? static_cast<std::uint32_t>(remaining.count()) : 0u;
+    payload.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::StatusEffectUpdated);
+    if (EncodeStatusEffectUpdated(payload, packet.payload)) {
+        for (const auto characterId : receivers) {
+            auto player = m_players.FindByCharacter(characterId);
+            if (player) {
+                SendPacketToPlayer(player, packet);
+            }
+        }
+    }
+}
+
+void WorldServer::SendStatusRemoved(const std::vector<std::uint64_t>& receivers,
+                                    const ActiveStatusEffect& effect,
+                                    StatusRemovedReason reason) {
+    StatusEffectRemovedPayload payload;
+    payload.instanceId = effect.InstanceId();
+    payload.effectId = effect.EffectId();
+    payload.targetType = effect.TargetType();
+    payload.targetEntityId = effect.TargetEntityId();
+    payload.reason = static_cast<std::uint8_t>(reason);
+    payload.serverTime = ServerTimeMs();
+    SendStatusRemovedToPayload(receivers, payload);
+}
+
+void WorldServer::SendStatusRemovedToPayload(const std::vector<std::uint64_t>& receivers,
+                                             const StatusEffectRemovedPayload& payload) {
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::StatusEffectRemoved);
+    if (EncodeStatusEffectRemoved(payload, packet.payload)) {
+        for (const auto characterId : receivers) {
+            auto player = m_players.FindByCharacter(characterId);
+            if (player) {
+                SendPacketToPlayer(player, packet);
+            }
+        }
+    }
+}
+
+void WorldServer::ClearStatusOnDeath(CombatEntityType targetType, std::uint64_t targetEntityId,
+                                     StatusEffectContainer& container,
+                                     const std::vector<std::uint64_t>& receivers) {
+    // 阶段16 指令三十八/三十九/八十：死亡 -> 逐个 StatusRemoved(TargetDied) -> 清空。
+    if (container.Empty()) {
+        return;
+    }
+    for (const auto* effect : container.Snapshot()) {
+        SendStatusRemoved(receivers, *effect, StatusRemovedReason::TargetDied);
+    }
+    container.Clear();
+    (void)targetType;
+    (void)targetEntityId;
+    LOG_INFO("[Status] target " + std::to_string(targetEntityId) +
+             " died -> status cleared");
 }
 
 void WorldServer::SendMonsterSpawn(const std::shared_ptr<PlayerSession>& receiver,

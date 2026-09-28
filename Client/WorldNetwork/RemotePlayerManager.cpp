@@ -70,6 +70,40 @@ void RemotePlayerManager::ApplyCastState(std::uint64_t characterId, bool casting
     }
 }
 
+// ---------------------------------------------------------------------------
+// 阶段16 指令六十二：状态事件转发（未知 characterId 忽略）
+// ---------------------------------------------------------------------------
+
+void RemotePlayerManager::ApplyStatus(std::uint64_t characterId, const RemoteStatusEffect& effect) {
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.StatusEffects().Apply(effect);
+    }
+}
+
+void RemotePlayerManager::UpdateStatus(std::uint64_t characterId, std::uint64_t instanceId,
+                                       std::uint8_t stacks, std::uint32_t remainingMs) {
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.StatusEffects().Update(instanceId, stacks, remainingMs);
+    }
+}
+
+void RemotePlayerManager::RemoveStatus(std::uint64_t characterId, std::uint64_t instanceId) {
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.StatusEffects().Remove(instanceId);
+    }
+}
+
+void RemotePlayerManager::SnapshotStatus(std::uint64_t characterId,
+                                         const std::vector<RemoteStatusEffect>& effects) {
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.StatusEffects().SnapshotReplace(effects);
+    }
+}
+
 const RemotePlayerEntity* RemotePlayerManager::Find(std::uint64_t characterId) const {
     const auto it = m_players.find(characterId);
     return it != m_players.end() ? &it->second : nullptr;

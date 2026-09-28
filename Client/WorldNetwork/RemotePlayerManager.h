@@ -32,6 +32,12 @@ public:
     // 阶段15 指令五十七：远程玩家技能表现状态（未知 characterId 忽略）。
     void ApplyCastState(std::uint64_t characterId, bool casting, std::uint32_t skillId,
                         std::uint64_t startServerTime, std::uint32_t durationMs);
+    // 阶段16 指令六十二：状态事件转发（未知 characterId 忽略）。
+    void ApplyStatus(std::uint64_t characterId, const RemoteStatusEffect& effect);
+    void UpdateStatus(std::uint64_t characterId, std::uint64_t instanceId, std::uint8_t stacks,
+                      std::uint32_t remainingMs);
+    void RemoveStatus(std::uint64_t characterId, std::uint64_t instanceId);
+    void SnapshotStatus(std::uint64_t characterId, const std::vector<RemoteStatusEffect>& effects);
     // 指令三十七：每帧插值（主线程）。
     void Update(float deltaTime);
 

@@ -409,6 +409,105 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_localCurrentMana = event.currentMana;
             m_localMaxMana = event.maxManaVal;
             break;
+        // ------------------------------------------------------------------
+        // 阶段16 指令六十四/六十五：状态事件路由（本地/远程玩家/远程怪物）
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::StatusAppliedEvent:
+        case WorldNetworkEvent::Type::StatusUpdatedEvent:
+        case WorldNetworkEvent::Type::StatusRemovedEvent:
+        case WorldNetworkEvent::Type::StatusSnapshotEvent:
+            HandleStatusEvent(event);
+            break;
+    }
+}
+
+void WorldClientController::HandleStatusEvent(const WorldNetworkEvent& event) {
+    // 路由：目标 = 本地玩家 -> m_localStatusEffects；远程玩家/怪物 -> 对应容器。
+    // Client 只展示（指令六十五）：不由持续时间移除，Remove/Snapshot 才变更删除。
+    const bool isSelf = event.status.targetType ==
+                            static_cast<std::uint8_t>(legend::world::CombatEntityType::Player) &&
+                        event.status.targetEntityId == m_characterId;
+    const bool isMonster =
+        event.status.targetType ==
+        static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster);
+
+    switch (event.type) {
+        case WorldNetworkEvent::Type::StatusAppliedEvent: {
+            RemoteStatusEffect effect;
+            effect.instanceId = event.status.instanceId;
+            effect.effectId = event.status.effectId;
+            effect.stacks = event.status.stacks;
+            effect.remainingMs = event.status.remainingMs;
+            effect.durationMs = event.status.durationMs;
+            effect.sourceEntityId = event.status.sourceEntityId;
+            if (isSelf) {
+                m_localStatusEffects.Apply(effect);
+            } else if (isMonster) {
+                m_remoteMonsters.ApplyStatus(event.status.targetEntityId, effect);
+            } else {
+                m_remotePlayers.ApplyStatus(event.status.targetEntityId, effect);
+            }
+            LOG_INFO("[Status] effect " + std::to_string(event.status.effectId) + " x" +
+                     std::to_string(event.status.stacks) + " applied to target #" +
+                     std::to_string(event.status.targetEntityId));
+            break;
+        }
+        case WorldNetworkEvent::Type::StatusUpdatedEvent:
+            // 指令一百二十四：未知 instanceId 忽略，不创建幽灵状态。
+            if (isSelf) {
+                m_localStatusEffects.Update(event.status.instanceId, event.status.stacks,
+                                            event.status.remainingMs);
+            } else if (isMonster) {
+                m_remoteMonsters.UpdateStatus(event.status.targetEntityId,
+                                              event.status.instanceId, event.status.stacks,
+                                              event.status.remainingMs);
+            } else {
+                m_remotePlayers.UpdateStatus(event.status.targetEntityId,
+                                             event.status.instanceId, event.status.stacks,
+                                             event.status.remainingMs);
+            }
+            LOG_INFO("[Status] effect " + std::to_string(event.status.effectId) + " updated on #" +
+                     std::to_string(event.status.targetEntityId) + " x" +
+                     std::to_string(event.status.stacks));
+            break;
+        case WorldNetworkEvent::Type::StatusRemovedEvent:
+            // 指令一百二十五：未知 instanceId 忽略，不 Crash。
+            if (isSelf) {
+                m_localStatusEffects.Remove(event.status.instanceId);
+            } else if (isMonster) {
+                m_remoteMonsters.RemoveStatus(event.status.targetEntityId,
+                                              event.status.instanceId);
+            } else {
+                m_remotePlayers.RemoveStatus(event.status.targetEntityId,
+                                             event.status.instanceId);
+            }
+            LOG_INFO("[Status] effect " + std::to_string(event.status.effectId) + " removed (" +
+                     std::to_string(static_cast<int>(event.status.reason)) + ") from #" +
+                     std::to_string(event.status.targetEntityId));
+            break;
+        case WorldNetworkEvent::Type::StatusSnapshotEvent: {
+            // 指令一百二十六：Snapshot 以服务器列表为准（多余删除、缺少创建）。
+            std::vector<RemoteStatusEffect> effects;
+            effects.reserve(event.status.snapshotEffects.size());
+            for (const auto& entry : event.status.snapshotEffects) {
+                RemoteStatusEffect effect;
+                effect.instanceId = entry.instanceId;
+                effect.effectId = entry.effectId;
+                effect.stacks = entry.stacks;
+                effect.remainingMs = entry.remainingMs;
+                effects.push_back(effect);
+            }
+            if (isSelf) {
+                m_localStatusEffects.SnapshotReplace(effects);
+            } else if (isMonster) {
+                m_remoteMonsters.SnapshotStatus(event.status.targetEntityId, effects);
+            } else {
+                m_remotePlayers.SnapshotStatus(event.status.targetEntityId, effects);
+            }
+            break;
+        }
+        default:
+            break;
     }
 }
 

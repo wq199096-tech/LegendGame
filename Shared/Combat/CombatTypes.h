@@ -52,9 +52,11 @@ inline const char* CombatResultCodeName(std::uint8_t code) {
 }
 
 // 阶段15 指令三十二：CombatEvent 伤害来源（普通攻击=1 / 技能=2）。
+// 阶段16 指令三十六：StatusEffect=3（DOT 伤害，sourceId=effectId）。
 enum class CombatSource : std::uint8_t {
     BasicAttack = 1,
     Skill = 2,
+    StatusEffect = 3,
 };
 
 // 指令四：玩家固定基础战斗属性（阶段14 全体一致，不做装备/成长加成）。

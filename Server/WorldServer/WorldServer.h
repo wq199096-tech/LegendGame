@@ -12,6 +12,8 @@
 #include "Server/WorldServer/Monster/MonsterSpatialGrid.h"
 #include "Server/WorldServer/Skill/SkillRegistry.h"
 #include "Server/WorldServer/Skill/SkillService.h"
+#include "Server/WorldServer/Status/StatusEffectRegistry.h"
+#include "Server/WorldServer/Status/StatusEffectService.h"
 #include "Server/WorldServer/WorldManager.h"
 #include "Server/WorldServer/WorldMapManager.h"
 #include "Server/WorldServer/WorldSession.h"
@@ -21,6 +23,8 @@
 #include "Shared/Network/MessageId.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
+#include "Shared/Status/StatusEffectProtocol.h"
+#include "Shared/Status/StatusEffectTypes.h"
 #include "Shared/World/WorldError.h"
 
 #include <asio.hpp>
@@ -70,6 +74,10 @@ public:
         int skillTickMs = 50;
         // 阶段15 指令六十七：ManaSnapshot 周期（1s，发给玩家本人）
         int manaSnapshotIntervalMs = 1000;
+        // 阶段16 指令四十：Status Tick 100ms（统一扫描，不每状态一个 Timer）
+        int statusTickMs = 100;
+        // 阶段16 指令五十九：状态 Snapshot 纠偏周期（2s，只发可见实体）
+        int statusSnapshotIntervalMs = 2000;
     };
 
     struct Hooks {
@@ -100,8 +108,53 @@ public:
     }
     // 阶段15：施法中的玩家数（测试/运维用）。
     std::size_t CastingPlayerCount() const;
-    // 阶段15：测试/布景辅助——移动怪物（含 SpatialGrid cell 更新；测试确定性布景用）。
+    // 阶段15：测试辅助——移动怪物（含 SpatialGrid cell 更新；测试确定性布景用）。
     bool MoveMonsterTo(std::uint64_t entityId, float x, float y);
+
+    // 阶段16：状态效果（指令十六~八十三）
+    // 施加（技能命中/测试白盒共用；Client 不能直接施加，指令十七）。
+    StatusApplyOutcome ApplyStatusToTarget(std::uint8_t targetType, std::uint64_t targetEntityId,
+                                           StatusEffectId effectId, std::uint8_t stacks,
+                                           std::uint8_t sourceType, std::uint64_t sourceEntityId,
+                                           std::uint32_t sourceSkillId);
+    // 技能命中后的状态施加（指令六十九：SkillImpact -> CombatEvent -> Status）。
+    void ApplySkillStatus(const std::shared_ptr<PlayerSession>& caster,
+                          const SkillDefinition& skill, std::uint8_t targetType,
+                          std::uint64_t targetEntityId,
+                          const std::vector<std::uint64_t>& combatReceivers);
+    void ScheduleStatusTick();
+    void RunStatusTick();
+    void TickStatusContainer(StatusEffectContainer& container, CombatEntityType targetType,
+                             std::uint64_t targetEntityId,
+                             const std::function<void(const CombatEventPayload&,
+                                                      const std::vector<std::uint64_t>&)>& onDamage,
+                             const std::function<void(StatusEffectId, std::uint64_t)>& onKilled,
+                             std::chrono::steady_clock::time_point now);
+    void ScheduleStatusSnapshotTick();
+    void SendStatusSnapshots();
+    void SendStatusSnapshotFor(const std::shared_ptr<PlayerSession>& receiver,
+                               CombatEntityType targetType, std::uint64_t targetEntityId,
+                               const StatusEffectContainer& container,
+                               std::chrono::steady_clock::time_point now);
+    void SendStatusApplied(const std::vector<std::uint64_t>& receivers,
+                           const ActiveStatusEffect& effect, std::uint32_t durationMs);
+    void SendStatusUpdated(const std::vector<std::uint64_t>& receivers,
+                           const ActiveStatusEffect& effect);
+    void SendStatusRemoved(const std::vector<std::uint64_t>& receivers,
+                           const ActiveStatusEffect& effect, StatusRemovedReason reason);
+    void ClearStatusOnDeath(CombatEntityType targetType, std::uint64_t targetEntityId,
+                            StatusEffectContainer& container,
+                            const std::vector<std::uint64_t>& receivers);
+    std::vector<std::uint64_t> MonsterStatusReceivers(std::uint64_t monsterEntityId,
+                                                      std::uint64_t sourceCharacterId) const;
+    std::vector<std::uint64_t> PlayerStatusReceivers(std::uint64_t characterId) const;
+    std::vector<std::uint64_t> MonsterOrPlayerStatusReceivers(std::uint8_t targetType,
+                                                              std::uint64_t targetEntityId,
+                                                              std::uint8_t sourceType,
+                                                              std::uint64_t sourceEntityId);
+    void RecalculateTargetDerivedStats(CombatEntityType targetType, std::uint64_t targetEntityId);
+    void SendStatusRemovedToPayload(const std::vector<std::uint64_t>& receivers,
+                                    const StatusEffectRemovedPayload& payload);
 
 private:
     struct PendingTicket {
@@ -263,6 +316,11 @@ private:
     SkillRegistry m_skillRegistry;
     std::uint64_t m_nextCastId = 1;
 
+    // 阶段16：状态效果（指令十三：instanceId 单调；runtime-only 指令七十九）
+    StatusEffectRegistry m_statusRegistry;
+    std::uint64_t m_nextStatusInstanceId = 1;
+    StatusEffectContainer m_detachedStatusContainer; // 目标已失效时 ApplyEffect 的占位容器
+
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;
     legend::account::DbWorker m_dbWorker;
@@ -277,6 +335,8 @@ private:
     asio::steady_timer m_healthTimer;     // 阶段14 指令六十八：1s HP 纠偏，Stop 时 cancel
     asio::steady_timer m_skillTimer;      // 阶段15 指令七十八：Skill Tick 50ms，Stop 时 cancel
     asio::steady_timer m_manaTimer;       // 阶段15 指令六十七：1s Mana 快照，Stop 时 cancel
+    asio::steady_timer m_statusTimer;     // 阶段16 指令四十：Status Tick 100ms，Stop 时 cancel
+    asio::steady_timer m_statusSnapshotTimer; // 阶段16 指令五十九：2s 状态快照，Stop 时 cancel
 
     std::uint64_t m_nextRequestId = 1; // 指令七十三：单调增长
     Hooks m_hooks;

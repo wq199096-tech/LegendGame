@@ -29,6 +29,12 @@ public:
     // 阶段14 指令六十八：HealthSnapshot 纠偏（已知实体直接覆盖）。
     void ApplyHealthSnapshot(std::uint64_t entityId, std::uint32_t currentHp, std::uint32_t maxHp,
                              bool alive);
+    // 阶段16 指令六十三：状态事件转发（未知实体忽略）。
+    void ApplyStatus(std::uint64_t entityId, const RemoteStatusEffect& effect);
+    void UpdateStatus(std::uint64_t entityId, std::uint64_t instanceId, std::uint8_t stacks,
+                      std::uint32_t remainingMs);
+    void RemoveStatus(std::uint64_t entityId, std::uint64_t instanceId);
+    void SnapshotStatus(std::uint64_t entityId, const std::vector<RemoteStatusEffect>& effects);
     // 指令五十三：每帧插值（主线程）。
     void Update(float deltaTime);
 
