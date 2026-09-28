@@ -2,6 +2,7 @@
 
 #include "Client/WorldNetwork/RemotePlayerEntity.h"
 
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/World/WorldProtocol.h"
 
 #include <cstdint>
@@ -20,6 +21,14 @@ public:
     // 指令三十（接收侧）/四十八/四十九：未知 characterId 的 snapshot 丢弃；
     // Despawn 后到达的旧 snapshot 因实体已删除而自然忽略。
     void HandleBatch(const world::RemotePlayerBatchSnapshotPayload& batch);
+    // 阶段14 指令六十五：targetType=Player 的 CombatEvent -> 远程玩家 HP 更新。
+    void HandleCombatEvent(std::uint8_t targetType, std::uint64_t targetId,
+                           std::uint32_t targetHpAfter, std::uint32_t targetMaxHp, bool killed);
+    // 阶段14 指令七十三：PlayerDeath -> 对应远程玩家 alive=false。
+    void HandleDeath(std::uint64_t characterId);
+    // 阶段14 指令六十八：HealthSnapshot 纠偏（已知实体直接覆盖）。
+    void ApplyHealthSnapshot(std::uint64_t characterId, std::uint32_t currentHp,
+                             std::uint32_t maxHp, bool alive);
     // 指令三十七：每帧插值（主线程）。
     void Update(float deltaTime);
 

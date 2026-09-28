@@ -18,13 +18,21 @@ struct MonsterDefinition {
     float patrolRadius = 0.0f;     // Patrol 目标点距 spawn 上限（指令三十三）
     float collisionRadius = 0.0f;  // 预留（阶段13 无碰撞，指令四十八）
     std::uint32_t modelId = 0;     // 预留视觉 ID（指令四）
+    // 阶段14 指令五：战斗属性
+    std::uint32_t maxHp = 0;           // 满血
+    std::uint32_t attackPower = 0;     // 攻击力
+    std::uint32_t defense = 0;         // 防御力
+    float attackRange = 0.0f;          // 普通攻击距离
+    float attackCooldownSeconds = 0.0f; // 攻击冷却
 };
 
 // 指令二：Training Slime 基础配置。
 // level=1 / moveSpeed=80 / aggroRadius=350 / leashRadius=600 / patrolRadius=180。
+// 阶段14 指令五：maxHp=80 / attackPower=10 / defense=2 / attackRange=60 / attackCooldown=1.2s。
 // （name 为 std::string：运行期常量而非 constexpr。）
 inline const MonsterDefinition kTrainingSlimeDefinition{
     kTrainingSlimeTypeId, kTrainingSlimeName, 1, 80.0f, 350.0f, 600.0f, 180.0f, 24.0f, 1,
+    80u, 10u, 2u, 60.0f, 1.2f,
 };
 
 // 按 typeId 查找定义（阶段13 只注册 Training Slime，指令五）。

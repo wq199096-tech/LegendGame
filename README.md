@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Server-authoritative Monster & AI Core V0.13**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Server-authoritative Combat & Damage Core V0.14**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -145,6 +145,43 @@ Login 链路断开时已在线玩家不受影响，WorldServer 自动重连。
   F12 增加 monsters=N / mbatch=M
 - **双开验收**：两个 Client 进入同一地图可见附近 Training Slime；怪物 Idle→Patrol，玩家靠近
   Chase，玩家跑远 Returning 回出生点 Idle；两个 Client 看到同一怪物位置与状态一致
+
+**服务器权威战斗与伤害（阶段14：Server-authoritative Combat & Damage Core V0.14）**：
+
+- **战斗 100% WorldServer 权威**：Client 只发"我想攻击谁"（PlayerAttackRequest 只含
+  requestId/targetEntityType/targetEntityId），禁止传攻击坐标/hitbox/damage；伤害/命中/扣血/
+  死亡全部由服务器决定；Client 不做本地伤害预测（按 Space 不先扣血，等 CombatEvent）
+- **CombatService / DamageCalculator**（`Server/WorldServer/Combat/`）：纯函数验证链
+  （AttackerDead → NotInWorld → TargetDead → InvalidTarget(不可见) → DifferentMap →
+  OutOfRange → Cooldown）；伤害公式 `damage = max(1, attackPower - defense)`，不随机不暴击
+- **Player 战斗属性（固定默认）**：maxHp=100 / attackPower=20 / defense=5 / attackRange=100 /
+  attackCooldown=0.8s；**Training Slime 战斗属性**：maxHp=80 / attackPower=10 / defense=2 /
+  attackRange=60 / attackCooldown=1.2s（玩家打史莱姆 18/次，史莱姆打玩家 5/次）
+- **攻击验证细节**：目标必须在攻击者 visibleMonsters（防远程作弊，AOI 离开立即失效）；
+  每玩家最近 64 个攻击 requestId 防网络重放（重复 → DuplicateRequest 只扣一次血）；
+  冷却用 WorldServer steady_clock（Client 时间不可信）；连续 100 连发仍受 CD 限制；
+  targetType=Player 阶段14 一律 InvalidTarget（不做 PvP，禁止 Monster 互打）
+- **CombatEvent 广播**：eventId 为服务器单调 uint64（客户端每实体 lastCombatEventId
+  乱序旧包忽略）；广播范围 = 目标怪观察者 ∪ 攻击者本人（怪物攻击玩家 = 受害者观察者 ∪
+  受害者本人），去重、不全世界广播；EntityHealthSnapshot 每 1s 纠偏（单条）
+- **Monster AI 扩展**：Chase 距目标 <= attackRange(60) 停止移动（不贴脸穿模），由 AI Tick
+  触发普通攻击（1.2s CD）；杀死玩家 → target 清空 Returning；目标死亡/断线 → Returning
+- **死亡生命周期**：怪 HP<=0 → alive=false / state=Dead / AI 停止 / MonsterDeath 广播 →
+  3 秒后统一 AI Tick 清理（不建 per-monster timer）→ MonsterDespawn(Removed)；
+  **不 Respawn（杀一只少一只）**；玩家 HP<=0 → alive=false / PlayerDeath 广播 / 不自动复活 /
+  MoveInput 服务器忽略；战斗状态（玩家/怪物 HP）不持久化，重启恢复满血
+- **协议**：PlayerAttackRequest=250 / PlayerAttackResponse=251 / CombatEvent=252 /
+  EntityHealthSnapshot=253 / MonsterDeath=254 / PlayerDeath=256（255 已被 ErrorResponse 占用）；
+  MonsterSpawn/PlayerSpawn/EnterWorldResponse/MonsterSnapshotEntry 增加 currentHp/maxHp/alive；
+  World 协议版本 1 → 2；所有 Decode 严格 IsValid && Remaining==0
+- **客户端**：Space = Debug 攻击最近可见存活怪（服务器重新验证）；F12 增加 PlayerHP/Alive/
+  前 4 只怪 HP；死亡实体 Debug Quad 变灰（不做死亡动画资源）；RemoteMonster/RemotePlayer
+  实体携带 HP（CombatEvent/HealthSnapshot 更新）；`[Combat] Player #X hit Monster #Y for Z` 日志
+- **明确不做**（后续阶段）：No Skills / No Magic / No Projectile / No Critical / No Dodge /
+  No Block / No Equipment bonus / No Buff / No DOT / No Threat list / No PvP / No Drop /
+  No Loot / No EXP / No Level up / No Respawn / No Boss / No Hit VFX / No Floating damage UI
+- **验收**：LegendWorldTests 165 Check 全绿（DamageFormula/攻击链/距离/冷却/重放/刷包/
+  击杀/死亡广播/清理/多客户端复制/断线/持久化边界等）；双 Client 同区域看到相同 HP 变化
 
 **Account Database（SQLite3）**：
 

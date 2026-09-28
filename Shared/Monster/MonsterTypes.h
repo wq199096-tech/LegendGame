@@ -33,12 +33,14 @@ inline constexpr float kMonsterIdleDurationSeconds = 2.0f;
 // 怪物 AOI（指令二十三）：与玩家一致。
 // EnterRadius=600 / LeaveRadius=700 复用 kAoiEnterRadius / kAoiLeaveRadius。
 
-// 阶段13 指令八：MonsterState（指令九：禁止 Attack/Cast/Hit/Dead）。
+// 阶段13 指令八：MonsterState。
+// 阶段14 指令五十二/五十三：正式加入 Dead（阶段13 曾禁止）。
 enum class MonsterState : std::uint8_t {
     Idle = 0,
     Patrol = 1,
     Chase = 2,
     Returning = 3,
+    Dead = 4,
 };
 
 inline const char* MonsterStateName(std::uint8_t state) {
@@ -47,6 +49,7 @@ inline const char* MonsterStateName(std::uint8_t state) {
         case MonsterState::Patrol: return "Patrol";
         case MonsterState::Chase: return "Chase";
         case MonsterState::Returning: return "Returning";
+        case MonsterState::Dead: return "Dead";
     }
     return "Unknown";
 }

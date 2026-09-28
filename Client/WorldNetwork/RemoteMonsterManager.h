@@ -2,6 +2,7 @@
 
 #include "Client/WorldNetwork/RemoteMonsterEntity.h"
 
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
 
 #include <cstdint>
@@ -20,6 +21,14 @@ public:
     // 指令六十一/六十二：未知 entityId 的 snapshot 丢弃；Despawn 后旧 snapshot 因实体
     // 已删除而自然忽略。
     void HandleBatch(const world::MonsterBatchSnapshotPayload& batch);
+    // 阶段14 指令六十五：CombatEvent -> 目标怪物 HP 更新（targetType=Monster 才处理）。
+    void HandleCombatEvent(std::uint64_t eventId, std::uint8_t targetType,
+                           std::uint64_t targetId, std::uint32_t targetHpAfter, bool killed);
+    // 阶段14 指令七十二：MonsterDeath -> alive=false（保留实体直到 Despawn）。
+    void HandleDeath(std::uint64_t entityId);
+    // 阶段14 指令六十八：HealthSnapshot 纠偏（已知实体直接覆盖）。
+    void ApplyHealthSnapshot(std::uint64_t entityId, std::uint32_t currentHp, std::uint32_t maxHp,
+                             bool alive);
     // 指令五十三：每帧插值（主线程）。
     void Update(float deltaTime);
 

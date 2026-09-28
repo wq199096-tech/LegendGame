@@ -3,6 +3,8 @@
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
 
+#include "Shared/Combat/CombatProtocol.h"
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/MessageId.h"
@@ -55,6 +57,12 @@ struct WorldNetworkEvent {
         MonsterSpawn,
         MonsterDespawn,
         MonsterBatchSnapshot,
+        // 阶段14 指令六十二：服务器权威战斗事件
+        AttackResponse,
+        CombatEvent,
+        HealthSnapshot,
+        MonsterDeath,
+        PlayerDeath,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -85,6 +93,26 @@ struct WorldNetworkEvent {
     std::uint32_t monsterTypeId = 0;
     std::uint8_t monsterState = 0;
     std::vector<world::MonsterSnapshotEntry> monsterBatch;
+
+    // 阶段14：Combat 事件字段（指令六十二；EnterWorldResponse/PlayerSpawn/
+    // MonsterSpawn 复用 currentHp/maxHp/alive）
+    bool success = false;           // AttackResponse
+    std::uint8_t resultCode = 0;    // AttackResponse（CombatResultCode）
+    std::uint64_t targetEntityId = 0; // AttackResponse
+    std::uint64_t eventId = 0;      // CombatEvent
+    std::uint8_t attackerType = 0;  // CombatEvent / PlayerDeath(killerType)
+    std::uint64_t attackerId = 0;   // CombatEvent / PlayerDeath(killerId)
+    std::uint8_t targetType = 0;    // CombatEvent
+    std::uint64_t targetId = 0;     // CombatEvent
+    std::uint32_t damage = 0;       // CombatEvent
+    std::uint32_t targetHpAfter = 0; // CombatEvent
+    std::uint32_t targetMaxHp = 0;  // CombatEvent
+    bool killed = false;            // CombatEvent
+    std::uint8_t entityType = 0;    // HealthSnapshot（CombatEntityType）
+    std::uint64_t entityId = 0;     // HealthSnapshot
+    std::uint32_t currentHp = 0;    // HealthSnapshot
+    std::uint32_t maxHp = 0;        // HealthSnapshot
+    bool alive = true;              // HealthSnapshot
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -118,6 +146,10 @@ public:
     void SendEnterWorld(const std::string& selectionTicket);
     void SendMoveInput(std::uint32_t inputSequence, float directionX, float directionY,
                        float deltaTime);
+    // 阶段14 指令五十九/六十一：Debug 攻击——只发"我想攻击谁"
+    //（禁止传坐标/hitbox/damage，指令三；服务器重新验证，指令六十）。
+    void SendAttack(std::uint64_t requestId, std::uint8_t targetEntityType,
+                    std::uint64_t targetEntityId);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);

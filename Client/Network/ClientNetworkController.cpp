@@ -300,6 +300,29 @@ std::string ClientNetworkController::WorldStatusText() const {
     text += std::to_string(m_world.RemoteMonsters().Count());
     text += " mbatch=";
     text += std::to_string(m_world.LastMonsterBatchSize());
+    // 阶段14 指令七十一：F12 增加本地 PlayerHP / Alive。
+    text += " hp=";
+    text += std::to_string(m_world.LocalCurrentHp());
+    text += "/";
+    text += std::to_string(m_world.LocalMaxHp());
+    text += " alive=";
+    text += m_world.LocalAlive() ? "1" : "0";
+    // 阶段14 指令七十：前 4 只怪 HP current/max（不做正式血条 UI）。
+    if (m_world.RemoteMonsters().Count() > 0) {
+        text += " mHP[";
+        int listed = 0;
+        for (const auto& [id, monster] : m_world.RemoteMonsters().All()) {
+            if (listed++ >= 4) {
+                break;
+            }
+            if (listed > 1) {
+                text += ",";
+            }
+            text += "#" + std::to_string(id) + " " + std::to_string(monster.CurrentHp()) + "/" +
+                    std::to_string(monster.MaxHp()) + (monster.Alive() ? "" : "D");
+        }
+        text += "]";
+    }
     // 阶段12 指令四十四：Debug 列出前 4 个远程玩家名（无世界内文字渲染器，
     // 名字随 F12 面板显示；正式头顶 UI 后续单独阶段）。
     if (m_world.RemotePlayers().Count() > 0) {

@@ -32,6 +32,15 @@ public:
     bool IsMoving() const { return m_moving; }
     bool Active() const { return m_active; }
     std::uint64_t LastSnapshotServerTime() const { return m_lastSnapshotServerTime; }
+    // 阶段14 指令六十四：远程玩家 HP（CombatEvent/HealthSnapshot 更新，指令六十五）。
+    std::uint32_t CurrentHp() const { return m_currentHp; }
+    std::uint32_t MaxHp() const { return m_maxHp; }
+    bool Alive() const { return m_alive; }
+    void ApplyHealth(std::uint32_t currentHp, std::uint32_t maxHp, bool alive) {
+        m_currentHp = currentHp;
+        m_maxHp = maxHp;
+        m_alive = alive;
+    }
 
 private:
     std::uint64_t m_characterId = 0;
@@ -47,6 +56,10 @@ private:
     std::uint64_t m_lastSnapshotServerTime = 0;
     bool m_moving = false;
     bool m_active = false;
+    // 阶段14 指令六十四：HP 状态。
+    std::uint32_t m_currentHp = 100;
+    std::uint32_t m_maxHp = 100;
+    bool m_alive = true;
 };
 
 } // namespace legend::client

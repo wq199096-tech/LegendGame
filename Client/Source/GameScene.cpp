@@ -398,6 +398,35 @@ void GameScene::Update(float deltaTime) {
         LOG_INFO(m_progressionDebug ? "Progression/Loot debug: enabled (F5)"
                                     : "Progression/Loot debug: disabled (F5)");
     }
+    // ---- 阶段14 指令五十九/六十/九十：Space = Debug 攻击最近可见 alive Monster ----
+    // Client 只发目标（SendAttack），伤害/距离/冷却全部服务器验证（指令一/三/六十）；
+    // 按下时不做本地预测扣血（指令六十六，等 CombatEvent）。
+    if (input.IsKeyPressed(SDL_SCANCODE_SPACE) && m_networkController != nullptr &&
+        m_networkController->World().IsWorldReady()) {
+        auto& world = m_networkController->World();
+        const float selfX = world.ServerPositionX();
+        const float selfY = world.ServerPositionY();
+        std::uint64_t bestId = 0;
+        float bestDistSq = 0.0f;
+        for (const auto& [entityId, monster] : world.RemoteMonsters().All()) {
+            if (!monster.Alive()) {
+                continue; // 指令九十：最近目标选择忽略 alive=false
+            }
+            const float dx = monster.ServerX() - selfX;
+            const float dy = monster.ServerY() - selfY;
+            const float distSq = dx * dx + dy * dy;
+            if (bestId == 0 || distSq < bestDistSq) {
+                bestId = entityId;
+                bestDistSq = distSq;
+            }
+        }
+        if (bestId != 0) {
+            world.SendAttack(bestId);
+            LOG_INFO("[Combat] Space -> attack Monster #" + std::to_string(bestId));
+        } else {
+            LOG_INFO("[Combat] Space -> no visible alive monster.");
+        }
+    }
     if (input.IsKeyPressed(SDL_SCANCODE_F6)) {
         m_equipmentDebug = !m_equipmentDebug;
         LOG_INFO(m_equipmentDebug ? "Equipment debug: enabled (F6)"
@@ -678,10 +707,15 @@ void GameScene::DrawRemotePlayers(legend::render::SpriteBatch& batch) {
     const auto& remotes = m_networkController->World().RemotePlayers().All();
     for (const auto& [characterId, remote] : remotes) {
         const legend::math::Vector2 feet(remote.RenderX(), remote.RenderY());
-        // 身体 48x64（中心在 feet 上方 32）
-        const legend::math::Color bodyColor = remote.IsMoving()
-                                                  ? legend::math::Color(0.35f, 0.95f, 0.45f, 0.95f)
-                                                  : legend::math::Color(0.20f, 0.55f, 0.30f, 0.95f);
+        // 身体 48x64（中心在 feet 上方 32）；阶段14 指令七十四：死亡变灰。
+        legend::math::Color bodyColor(0.35f, 0.95f, 0.45f, 0.95f);
+        if (!remote.Alive()) {
+            bodyColor = legend::math::Color(0.45f, 0.45f, 0.45f, 0.90f); // Dead 灰
+        } else {
+            bodyColor = remote.IsMoving()
+                            ? legend::math::Color(0.35f, 0.95f, 0.45f, 0.95f)
+                            : legend::math::Color(0.20f, 0.55f, 0.30f, 0.95f);
+        }
         batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -32.0f),
                        {48.0f / 64.0f, 64.0f / 64.0f}, 0.0f, bodyColor);
         // 头顶白色小方块标记（远程玩家标识）
@@ -701,8 +735,12 @@ void GameScene::DrawRemoteMonsters(legend::render::SpriteBatch& batch) {
     const auto& monsters = m_networkController->World().RemoteMonsters().All();
     for (const auto& [entityId, monster] : monsters) {
         const legend::math::Vector2 feet(monster.RenderX(), monster.RenderY());
+        // 阶段14 指令七十四：死亡实体变灰（不做死亡动画资源）。
         legend::math::Color bodyColor(0.85f, 0.25f, 0.20f, 0.95f); // Idle 暗红
-        if (monster.State() == static_cast<std::uint8_t>(legend::world::MonsterState::Patrol)) {
+        if (!monster.Alive()) {
+            bodyColor = legend::math::Color(0.45f, 0.45f, 0.45f, 0.90f); // Dead 灰
+        } else if (monster.State() ==
+                   static_cast<std::uint8_t>(legend::world::MonsterState::Patrol)) {
             bodyColor = legend::math::Color(0.95f, 0.55f, 0.15f, 0.95f); // Patrol 橙
         } else if (monster.State() ==
                    static_cast<std::uint8_t>(legend::world::MonsterState::Chase)) {

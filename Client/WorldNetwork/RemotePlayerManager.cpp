@@ -29,6 +29,37 @@ void RemotePlayerManager::Update(float deltaTime) {
     }
 }
 
+void RemotePlayerManager::HandleCombatEvent(std::uint8_t targetType, std::uint64_t targetId,
+                                            std::uint32_t targetHpAfter, std::uint32_t targetMaxHp,
+                                            bool killed) {
+    // 阶段14 指令六十五：targetType=Player 的 CombatEvent -> 远程玩家 HP 更新。
+    if (targetType != static_cast<std::uint8_t>(legend::world::CombatEntityType::Player)) {
+        return;
+    }
+    const auto it = m_players.find(targetId);
+    if (it == m_players.end()) {
+        return;
+    }
+    it->second.ApplyHealth(targetHpAfter, targetMaxHp, !killed);
+}
+
+void RemotePlayerManager::HandleDeath(std::uint64_t characterId) {
+    // 阶段14 指令七十三：PlayerDeath -> 对应远程玩家 alive=false。
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.ApplyHealth(0, it->second.MaxHp(), false);
+    }
+}
+
+void RemotePlayerManager::ApplyHealthSnapshot(std::uint64_t characterId, std::uint32_t currentHp,
+                                              std::uint32_t maxHp, bool alive) {
+    // 阶段14 指令六十八：1s 纠偏（权威覆盖）。
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.ApplyHealth(currentHp, maxHp, alive);
+    }
+}
+
 const RemotePlayerEntity* RemotePlayerManager::Find(std::uint64_t characterId) const {
     const auto it = m_players.find(characterId);
     return it != m_players.end() ? &it->second : nullptr;

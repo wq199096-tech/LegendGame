@@ -35,6 +35,8 @@ public:
     }
     // 指令三十四：WorldReady 后发送移动输入（方向，禁止绝对坐标）。
     void SendMoveInput(float directionX, float directionY, float deltaTime);
+    // 阶段14 指令五十九/六十一：Debug 攻击——只发目标（服务器重新验证）。
+    void SendAttack(std::uint64_t targetEntityId);
     void Disconnect();
 
     WorldFlowState State() const { return m_state; }
@@ -42,6 +44,11 @@ public:
     std::uint64_t WorldConnectionId() const { return m_client->ServerConnectionId(); }
     std::uint64_t CharacterId() const { return m_characterId; }
     std::uint16_t MapId() const { return m_mapId; }
+    // 阶段14 指令六十五/七十一：本地玩家 HP（服务器权威事件驱动维护）。
+    std::uint32_t LocalCurrentHp() const { return m_localCurrentHp; }
+    std::uint32_t LocalMaxHp() const { return m_localMaxHp; }
+    bool LocalAlive() const { return m_localAlive; }
+    std::uint64_t LastAttackRequestId() const { return m_lastAttackRequestId; }
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -76,6 +83,12 @@ private:
     std::uint32_t m_lastSentSequence = 0;
     std::uint16_t m_lastErrorCode = 0;
     std::string m_lastError;
+    // 阶段14：本地玩家 HP（服务器权威：EnterWorldSuccess 初始化，CombatEvent/
+    // HealthSnapshot/PlayerDeath 更新）。
+    std::uint32_t m_localCurrentHp = 100;
+    std::uint32_t m_localMaxHp = 100;
+    bool m_localAlive = true;
+    std::uint64_t m_lastAttackRequestId = 0;
 };
 
 } // namespace legend::client

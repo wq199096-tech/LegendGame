@@ -124,6 +124,24 @@ void WorldNetworkClient::SendMoveInput(std::uint32_t inputSequence, float direct
     }
 }
 
+void WorldNetworkClient::SendAttack(std::uint64_t requestId, std::uint8_t targetEntityType,
+                                    std::uint64_t targetEntityId) {
+    // 阶段14 指令五十九/六十一：Client 只发目标（requestId/type/id），
+    // 不发攻击起点/终点/hitbox/damage（指令三）。
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::PlayerAttackRequestPayload request;
+    request.requestId = requestId;
+    request.targetEntityType = targetEntityType;
+    request.targetEntityId = targetEntityId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::PlayerAttackRequest);
+    if (world::EncodePlayerAttackRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
 void WorldNetworkClient::PollEvents(std::deque<WorldNetworkEvent>& out) {
     std::lock_guard<std::mutex> lock(m_eventMutex);
     while (!m_events.empty()) {
@@ -248,6 +266,10 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.mapId = response.mapId;
             event.positionX = response.positionX;
             event.positionY = response.positionY;
+            // 阶段14 指令十七：进入世界返回玩家 HP
+            event.currentHp = response.currentHp;
+            event.maxHp = response.maxHp;
+            event.alive = response.alive;
             event.errorCode = response.errorCode;
             event.message = response.message;
             PushEvent(std::move(event));
@@ -291,6 +313,10 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.positionX = spawn.positionX;
             event.positionY = spawn.positionY;
             event.serverTime = spawn.serverTime;
+            // 阶段14 指令十六：PlayerSpawn 携带 HP
+            event.currentHp = spawn.currentHp;
+            event.maxHp = spawn.maxHp;
+            event.alive = spawn.alive;
             PushEvent(std::move(event));
             return;
         }
@@ -361,6 +387,10 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.positionX = spawn.positionX;
             event.positionY = spawn.positionY;
             event.serverTime = spawn.serverTime;
+            // 阶段14 指令十五：MonsterSpawn 携带 HP
+            event.currentHp = spawn.currentHp;
+            event.maxHp = spawn.maxHp;
+            event.alive = spawn.alive;
             PushEvent(std::move(event));
             return;
         }
@@ -389,6 +419,98 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.type = WorldNetworkEvent::Type::MonsterBatchSnapshot;
             event.serverTime = batch.serverTime;
             event.monsterBatch = std::move(batch.monsters);
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // 阶段14 指令六十二：服务器权威战斗事件（AttackResponse/CombatEvent/
+        // HealthSnapshot/MonsterDeath/PlayerDeath）
+        // ------------------------------------------------------------------
+        case MessageId::PlayerAttackResponse: {
+            world::PlayerAttackResponsePayload response;
+            std::string decodeError;
+            if (!world::DecodePlayerAttackResponse(packet.payload.data(), packet.payload.size(),
+                                                   response, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::AttackResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.resultCode = response.resultCode;
+            event.targetEntityId = response.targetEntityId;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::CombatEvent: {
+            world::CombatEventPayload payload;
+            std::string decodeError;
+            if (!world::DecodeCombatEvent(packet.payload.data(), packet.payload.size(), payload,
+                                          decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::CombatEvent;
+            event.eventId = payload.eventId;
+            event.attackerType = payload.attackerType;
+            event.attackerId = payload.attackerId;
+            event.targetType = payload.targetType;
+            event.targetId = payload.targetId;
+            event.damage = payload.damage;
+            event.targetHpAfter = payload.targetHpAfter;
+            event.targetMaxHp = payload.targetMaxHp;
+            event.killed = payload.killed;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::EntityHealthSnapshot: {
+            world::EntityHealthSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeEntityHealthSnapshot(packet.payload.data(), packet.payload.size(),
+                                                   payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::HealthSnapshot;
+            event.entityType = payload.entityType;
+            event.entityId = payload.entityId;
+            event.currentHp = payload.currentHp;
+            event.maxHp = payload.maxHp;
+            event.alive = payload.alive;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::MonsterDeath: {
+            world::MonsterDeathPayload payload;
+            std::string decodeError;
+            if (!world::DecodeMonsterDeath(packet.payload.data(), packet.payload.size(), payload,
+                                           decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::MonsterDeath;
+            event.monsterEntityId = payload.entityId;
+            event.characterId = payload.killerCharacterId;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::PlayerDeath: {
+            world::PlayerDeathPayload payload;
+            std::string decodeError;
+            if (!world::DecodePlayerDeath(packet.payload.data(), packet.payload.size(), payload,
+                                          decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PlayerDeath;
+            event.characterId = payload.characterId;
+            event.attackerType = payload.killerType;
+            event.attackerId = payload.killerId;
+            event.serverTime = payload.serverTime;
             PushEvent(std::move(event));
             return;
         }

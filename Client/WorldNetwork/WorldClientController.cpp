@@ -1,6 +1,7 @@
 #include "Client/WorldNetwork/WorldClientController.h"
 
 #include "Engine/Debug/Logger.h"
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/World/WorldError.h"
 
 namespace legend::client {
@@ -45,6 +46,17 @@ void WorldClientController::SendMoveInput(float directionX, float directionY, fl
         return;
     }
     m_client->SendMoveInput(++m_lastSentSequence, directionX, directionY, deltaTime);
+}
+
+void WorldClientController::SendAttack(std::uint64_t targetEntityId) {
+    // 阶段14 指令五十九/六十一：Space 攻击——只发"最近可见怪 entityId"（由调用方
+    // 选择，服务器重新验证）；requestId 单调递增，服务器防重放。
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_client->SendAttack(++m_lastAttackRequestId,
+                         static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster),
+                         targetEntityId);
 }
 
 void WorldClientController::Disconnect() {
@@ -97,6 +109,10 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_lastRemoteBatchSize = 0;
             m_remoteMonsters.Clear(); // 阶段13：新世界会话不残留上次远程怪物
             m_lastMonsterBatchSize = 0;
+            // 阶段14 指令十七/六十五：本地玩家 HP 初始化（服务器权威值）。
+            m_localCurrentHp = event.currentHp;
+            m_localMaxHp = event.maxHp;
+            m_localAlive = event.alive;
             SetState(WorldFlowState::WorldReady);
             LOG_INFO("[World] EnterWorld success character=" + event.characterName + " (#" +
                      std::to_string(event.characterId) + ") map=" + std::to_string(event.mapId) +
@@ -132,6 +148,10 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             spawn.positionX = event.positionX;
             spawn.positionY = event.positionY;
             spawn.serverTime = event.serverTime;
+            // 阶段14 指令十六：PlayerSpawn HP
+            spawn.currentHp = event.currentHp;
+            spawn.maxHp = event.maxHp;
+            spawn.alive = event.alive;
             m_remotePlayers.HandleSpawn(spawn);
             LOG_DEBUG("[World] PlayerSpawn #" + std::to_string(event.characterId) + " " +
                       event.characterName);
@@ -166,6 +186,10 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             spawn.positionY = event.positionY;
             spawn.state = event.monsterState;
             spawn.serverTime = event.serverTime;
+            // 阶段14 指令十五：MonsterSpawn HP
+            spawn.currentHp = event.currentHp;
+            spawn.maxHp = event.maxHp;
+            spawn.alive = event.alive;
             m_remoteMonsters.HandleSpawn(spawn);
             LOG_DEBUG("[World] MonsterSpawn #" + std::to_string(event.monsterEntityId) + " " +
                       event.characterName);
@@ -185,6 +209,90 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_lastMonsterBatchSize = static_cast<std::uint32_t>(batch.monsters.size());
             break;
         }
+        // ------------------------------------------------------------------
+        // 阶段14 指令六十二~七十三：服务器权威战斗事件
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::AttackResponse:
+            // 指令十一：请求回执（真正伤害走 CombatEvent）。
+            LOG_DEBUG("[Combat] AttackResponse requestId=" + std::to_string(event.requestId) +
+                      " success=" + (event.success ? "true" : "false") + " code=" +
+                      std::string(legend::world::CombatResultCodeName(event.resultCode)));
+            break;
+        case WorldNetworkEvent::Type::CombatEvent: {
+            // 指令六十五：按目标类型分发 HP 更新（不做客户端预测，指令六十六）。
+            if (event.targetType ==
+                static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster)) {
+                m_remoteMonsters.HandleCombatEvent(event.eventId, event.targetType, event.targetId,
+                                                   event.targetHpAfter, event.killed);
+            } else if (event.targetId == m_characterId) {
+                // 本地玩家 HP（指令六十五：由 WorldClientController 维护）。
+                m_localCurrentHp = event.targetHpAfter;
+                m_localMaxHp = event.targetMaxHp;
+                if (event.killed) {
+                    m_localAlive = false;
+                }
+            } else {
+                m_remotePlayers.HandleCombatEvent(event.targetType, event.targetId,
+                                                  event.targetHpAfter, event.targetMaxHp,
+                                                  event.killed);
+            }
+            // 指令七十五：攻击表现——Debug 日志（不做正式特效）。
+            const bool playerAttacker =
+                event.attackerType == static_cast<std::uint8_t>(legend::world::CombatEntityType::Player);
+            LOG_INFO(std::string("[Combat] ") +
+                     (playerAttacker ? "Player #" : "Monster #") +
+                     std::to_string(event.attackerId) + " hit " +
+                     (event.targetType ==
+                              static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster)
+                          ? "Monster #"
+                          : "Player #") +
+                     std::to_string(event.targetId) + " for " + std::to_string(event.damage) +
+                     (event.killed ? " (killed)" : ""));
+            break;
+        }
+        case WorldNetworkEvent::Type::HealthSnapshot:
+            // 指令六十八：1s 纠偏——本地/远程实体 HP 校正。
+            if (event.entityType ==
+                    static_cast<std::uint8_t>(legend::world::CombatEntityType::Player) &&
+                event.entityId == m_characterId) {
+                m_localCurrentHp = event.currentHp;
+                m_localMaxHp = event.maxHp;
+                m_localAlive = event.alive;
+            } else if (event.entityType ==
+                       static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster)) {
+                const auto* monster = m_remoteMonsters.Find(event.entityId);
+                if (monster != nullptr) {
+                    // HealthSnapshot 不带 eventId，直接覆盖（权威纠偏）。
+                    m_remoteMonsters.ApplyHealthSnapshot(event.entityId, event.currentHp,
+                                                         event.maxHp, event.alive);
+                }
+            } else {
+                const auto* remote = m_remotePlayers.Find(event.entityId);
+                if (remote != nullptr) {
+                    m_remotePlayers.ApplyHealthSnapshot(event.entityId, event.currentHp,
+                                                        event.maxHp, event.alive);
+                }
+            }
+            break;
+        case WorldNetworkEvent::Type::MonsterDeath:
+            // 指令七十二：RemoteMonsterEntity alive=false，保留直到 Despawn。
+            m_remoteMonsters.HandleDeath(event.monsterEntityId);
+            LOG_INFO("[Combat] Monster #" + std::to_string(event.monsterEntityId) +
+                     " killed by player #" + std::to_string(event.characterId));
+            break;
+        case WorldNetworkEvent::Type::PlayerDeath:
+            // 指令七十三：本地玩家 alive=false；远程玩家 alive=false。
+            if (event.characterId == m_characterId) {
+                m_localAlive = false;
+                m_localCurrentHp = 0;
+                LOG_INFO("[Combat] You died (killer type=" +
+                         std::to_string(static_cast<int>(event.attackerType)) + " id=" +
+                         std::to_string(event.attackerId) + ")");
+            } else {
+                m_remotePlayers.HandleDeath(event.characterId);
+                LOG_INFO("[Combat] Player #" + std::to_string(event.characterId) + " died.");
+            }
+            break;
         case WorldNetworkEvent::Type::ProtocolError:
             LOG_WARN("[World] Protocol error: " + event.message);
             m_lastError = event.message;

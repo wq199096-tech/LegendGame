@@ -2,6 +2,10 @@
 
 #include "Engine/Debug/Logger.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
+#include "Server/WorldServer/Combat/CombatService.h"
+#include "Server/WorldServer/Combat/DamageCalculator.h"
+#include "Shared/Combat/CombatProtocol.h"
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/ByteReader.h"
@@ -50,7 +54,8 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_saveTimer(service.Io()),
       m_idleTimer(service.Io()),
       m_aoiTimer(service.Io()),
-      m_monsterAiTimer(service.Io()) {}
+      m_monsterAiTimer(service.Io()),
+      m_healthTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -86,6 +91,7 @@ bool WorldServer::Start(std::string& error) {
     ScheduleAoiTick(); // 阶段12 指令六十九：AOI tick 200ms
     SpawnInitialMonsters();   // 阶段13 指令十五/十六：固定 20 只 Training Slime
     ScheduleMonsterAiTick();  // 阶段13 指令三十：AI tick 200ms
+    ScheduleHealthSnapshotTick(); // 阶段14 指令六十八：HP 纠偏 1s
     return true;
 }
 
@@ -99,10 +105,12 @@ void WorldServer::Stop() {
     m_idleTimer.cancel();
     m_aoiTimer.cancel();        // 指令六十九：Stop 时 cancel AOI tick
     m_monsterAiTimer.cancel();  // 阶段13 指令六十五：停止 AI Timer
+    m_healthTimer.cancel();     // 阶段14：停止 HP 纠偏 timer
     // 阶段13 指令六十五/六十六：清 Monster（runtime only，无持久化）。
     m_monsters.Clear();
     m_monsterGrid = MonsterSpatialGrid{};
     m_nextMonsterEntityId = 1; // 指令六十七：重启 entityId 允许重新开始
+    m_nextCombatEventId = 1;   // 阶段14：eventId 同步复位
     m_loginClient->Cancel();
     if (m_loginConnection) {
         m_loginConnection->Close();
@@ -171,9 +179,13 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
         return;
     }
     // 握手完成后允许的其它消息
-    if (session->State() == WorldSessionState::InWorld &&
-        static_cast<MessageId>(packet.header.messageId) == MessageId::PlayerMoveInput) {
-        HandleMoveInput(connectionId, packet);
+    const auto messageId = static_cast<MessageId>(packet.header.messageId);
+    if (session->State() == WorldSessionState::InWorld) {
+        if (messageId == MessageId::PlayerMoveInput) {
+            HandleMoveInput(connectionId, packet);
+        } else if (messageId == MessageId::PlayerAttackRequest) {
+            HandlePlayerAttack(connectionId, packet); // 阶段14 指令三十九
+        }
     }
 }
 
@@ -553,6 +565,10 @@ void WorldServer::SendEnterWorldSuccess(std::uint64_t connectionId, std::uint64_
     out.positionX = player->PositionX();
     out.positionY = player->PositionY();
     out.serverTime = ServerTimeMs();
+    // 阶段14 指令十七：进入世界返回玩家 HP（默认满血，不持久化）。
+    out.currentHp = player->CurrentHp();
+    out.maxHp = player->MaxHp();
+    out.alive = player->Alive();
     out.errorCode = static_cast<std::uint16_t>(WorldErrorCode::None);
     out.message = "ok";
     Packet packet;
@@ -602,6 +618,10 @@ void WorldServer::HandleMoveInput(std::uint64_t connectionId, const Packet& pack
     }
     auto player = m_players.FindByConnection(connectionId);
     if (!player) {
+        return;
+    }
+    // 阶段14 指令五十八：死亡玩家 MoveInput 直接忽略（位置不变）。
+    if (!player->Alive()) {
         return;
     }
     if (WorldMapManager::ApplyMoveInput(*player, input.inputSequence, input.directionX,
@@ -893,6 +913,10 @@ void WorldServer::SendPlayerSpawn(const std::shared_ptr<PlayerSession>& receiver
     payload.positionX = target->PositionX();
     payload.positionY = target->PositionY();
     payload.serverTime = ServerTimeMs();
+    // 阶段14 指令十六：PlayerSpawn 携带 HP。
+    payload.currentHp = target->CurrentHp();
+    payload.maxHp = target->MaxHp();
+    payload.alive = target->Alive();
     Packet out;
     out.header.messageId = static_cast<std::uint16_t>(MessageId::PlayerSpawn);
     if (EncodePlayerSpawn(payload, out.payload)) {
@@ -984,6 +1008,8 @@ void WorldServer::SpawnInitialMonsters() {
         auto monster = std::make_shared<MonsterEntity>(m_nextMonsterEntityId++,
                                                        definition->monsterTypeId, kDefaultMapId,
                                                        point.x, point.y, definition->moveSpeed);
+        // 阶段14 指令五/六：战斗属性初始化（满血）。
+        monster->InitializeCombat(definition->maxHp);
         if (!m_monsters.SpawnMonster(monster)) {
             LOG_WARN("[World] Monster spawn duplicate entityId=" +
                      std::to_string(monster->EntityId()));
@@ -1017,10 +1043,88 @@ void WorldServer::RunMonsterAiTick() {
     if (!definition) {
         return;
     }
+    // 阶段14 指令五十四/七十七：死亡 3 秒后清理（统一 AI tick 检查 deadSince，
+    // 不建 per-monster timer）；RemoveMonster 会广播 MonsterDespawn(Removed)。
+    CleanupDeadMonsters();
     const float dt = static_cast<float>(m_config.monsterAiTickMs) / 1000.0f; // server tick dt
     for (const auto& monster : m_monsters.SnapshotMonsters()) {
         StepMonsterAi(*monster, *definition, dt, m_spatialGrid, m_players);
         m_monsterGrid.UpdateMonsterCell(monster); // AI 移动后重挂 cell
+        // 阶段14 指令四十三/四十五：进入攻击范围后由 AI tick 触发普通攻击。
+        TryMonsterAttack(monster, *definition);
+    }
+}
+
+void WorldServer::CleanupDeadMonsters() {
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<std::uint64_t> expired;
+    for (const auto& monster : m_monsters.SnapshotMonsters()) {
+        if (!monster->Alive() &&
+            std::chrono::duration<float>(now - monster->DeadSince()).count() >=
+                kMonsterDeathCleanupSeconds) {
+            expired.push_back(monster->EntityId());
+        }
+    }
+    for (const auto entityId : expired) {
+        RemoveMonster(entityId); // 广播 MonsterDespawn(Removed)
+    }
+}
+
+void WorldServer::TryMonsterAttack(const std::shared_ptr<MonsterEntity>& monster,
+                                   const MonsterDefinition& definition) {
+    // 阶段14 指令四十三/四十五/四十六：AI tick 触发的普通攻击（不是 Client 请求）。
+    // 前置：怪物存活且在 Chase；StepMonsterAi 已把死亡/离线/死亡目标转 Returning。
+    if (!monster->Alive() || monster->State() != MonsterState::Chase) {
+        return;
+    }
+    auto target = m_players.FindByCharacter(monster->TargetCharacterId());
+    if (!target || !target->Alive() || target->MapId() != monster->MapId()) {
+        return; // StepMonsterAi 已处理 Returning；此处仅防御
+    }
+    // 指令十九/四十四：攻击距离判定（服务器权威位置，distanceSquared）。
+    const float dx = monster->PositionX() - target->PositionX();
+    const float dy = monster->PositionY() - target->PositionY();
+    const float rangeSq = definition.attackRange * definition.attackRange;
+    if (dx * dx + dy * dy > rangeSq) {
+        return; // 未进入攻击范围
+    }
+    // 指令四十六/二十八：怪物攻击冷却（1.2s，steady_clock 权威）。
+    if (!IsAttackOffCooldown(std::chrono::steady_clock::now(), monster->LastAttackTime(),
+                             definition.attackCooldownSeconds)) {
+        return;
+    }
+    monster->TouchAttackTime();
+    // 指令二十四/二十六：伤害 = max(1, atk - def) = max(1, 10 - 5) = 5。
+    const std::uint32_t damage = CalculateDamage(definition.attackPower, target->Defense());
+    const bool killed = target->ApplyDamage(damage);
+    // 指令四十/四十一：广播范围 = 能看到受害玩家的附近玩家 ∪ 受害者本人（去重）。
+    std::vector<std::uint64_t> receivers;
+    receivers.push_back(target->CharacterId());
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->CharacterId() != target->CharacterId() &&
+            observer->VisiblePlayers().count(target->CharacterId()) != 0) {
+            receivers.push_back(observer->CharacterId());
+        }
+    }
+    CombatEventPayload event;
+    event.eventId = m_nextCombatEventId++;
+    event.attackerType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+    event.attackerId = monster->EntityId();
+    event.targetType = static_cast<std::uint8_t>(CombatEntityType::Player);
+    event.targetId = target->CharacterId();
+    event.damage = damage;
+    event.targetHpAfter = target->CurrentHp();
+    event.targetMaxHp = target->MaxHp();
+    event.killed = killed;
+    event.serverTime = ServerTimeMs();
+    BroadcastCombatEvent(event, receivers);
+    // 指令七十六：战斗日志只记成功攻击（不刷失败包）。
+    LOG_INFO("[Combat] Monster #" + std::to_string(monster->EntityId()) + " hit player " +
+             target->CharacterName() + " (#" + std::to_string(target->CharacterId()) + ") for " +
+             std::to_string(damage) + " (hp=" + std::to_string(target->CurrentHp()) + ")");
+    if (killed) {
+        // 指令四十七/四十八：玩家死亡 + 所有以其为 target 的怪 Returning（含本怪）。
+        KillPlayer(target, CombatEntityType::Monster, monster->EntityId(), receivers);
     }
 }
 
@@ -1087,6 +1191,289 @@ void WorldServer::OnTargetPlayerRemoved(std::uint64_t characterId) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 阶段14：服务器权威战斗（指令一~三/十~十四/二十四~三十四/三十九~四十二/
+// 四十七~五十/五十三~五十五/六十八/七十七~七十九/八十二~八十九/一百二十九）
+// ---------------------------------------------------------------------------
+
+void WorldServer::HandlePlayerAttack(std::uint64_t connectionId,
+                                     const legend::network::Packet& packet) {
+    // 指令八十六：Malformed 遵循现有 WorldServer 协议策略——返回 MalformedRequest
+    // 响应（requestId 尽力回显），不断开，WorldServer 继续运行。
+    PlayerAttackRequestPayload request;
+    std::string decodeError;
+    if (!DecodePlayerAttackRequest(packet.payload.data(), packet.payload.size(), request,
+                                   decodeError)) {
+        LOG_INFO("[Combat] Malformed PlayerAttackRequest from #" + std::to_string(connectionId));
+        SendAttackResponse(nullptr, request.requestId, false, CombatResultCode::MalformedRequest,
+                           0);
+        return;
+    }
+    auto attacker = m_players.FindByConnection(connectionId);
+    if (!attacker) {
+        SendAttackResponse(nullptr, request.requestId, false, CombatResultCode::NotInWorld,
+                           request.targetEntityId);
+        return;
+    }
+    // 指令八十三：targetType=Player（含 Self）阶段14 一律 InvalidTarget（不做 PvP）；
+    // 指令八十四：Monster vs Monster 禁止（客户端只发 Monster 目标，其它类型拒绝）。
+    if (request.targetEntityType != static_cast<std::uint8_t>(CombatEntityType::Monster)) {
+        SendAttackResponse(attacker, request.requestId, false, CombatResultCode::InvalidTarget,
+                           request.targetEntityId);
+        return;
+    }
+    // 指令三十/三十一/一百零二：重复 requestId 不重复造成伤害 -> DuplicateRequest。
+    // 只记录成功造成伤害的请求（失败请求允许重试）。
+    if (attacker->IsRecentAttackRequest(request.requestId)) {
+        SendAttackResponse(attacker, request.requestId, false, CombatResultCode::DuplicateRequest,
+                           request.targetEntityId);
+        return;
+    }
+    // 指令二十一/二十二：死亡玩家不能攻击。
+    if (!attacker->Alive()) {
+        SendAttackResponse(attacker, request.requestId, false, CombatResultCode::AttackerDead,
+                           request.targetEntityId);
+        return;
+    }
+    // 指令三十二/三十三/三十四/八十八：目标必须存在于服务器 MonsterManager 且在
+    // 攻击者 visibleMonsters 内（防远程作弊：AOI 离开立即失效）。
+    if (attacker->VisibleMonsters().count(request.targetEntityId) == 0) {
+        SendAttackResponse(attacker, request.requestId, false, CombatResultCode::InvalidTarget,
+                           request.targetEntityId);
+        return;
+    }
+    auto target = m_monsters.FindMonster(request.targetEntityId);
+    if (!target) {
+        SendAttackResponse(attacker, request.requestId, false, CombatResultCode::InvalidTarget,
+                           request.targetEntityId);
+        return;
+    }
+    // 指令二十/二十三：死亡/跨地图目标验证（服务器权威状态）。
+    AttackContext context;
+    context.attackerAlive = attacker->Alive();
+    context.attackerInWorld = true;
+    context.targetAlive = target->Alive();
+    context.targetVisible = true; // 已验证 visibleMonsters
+    context.sameMap = attacker->MapId() == target->MapId();
+    const float dx = attacker->PositionX() - target->PositionX();
+    const float dy = attacker->PositionY() - target->PositionY();
+    context.distanceSquared = dx * dx + dy * dy;
+    const float range = attacker->AttackRange();
+    context.attackRangeSquared = range * range;
+    context.now = std::chrono::steady_clock::now();
+    context.lastAttackTime = attacker->LastAttackTime();
+    context.attackCooldownSeconds = attacker->AttackCooldownSeconds();
+    const CombatResultCode code = ValidateAttack(context);
+    if (code != CombatResultCode::Success) {
+        // 指令八十七：验证失败的请求不记录 requestId，不造成伤害（防刷）。
+        SendAttackResponse(attacker, request.requestId, false, code, request.targetEntityId);
+        return;
+    }
+    // ---- 攻击生效（服务器权威扣血）----
+    attacker->RememberAttackRequest(request.requestId);
+    attacker->TouchAttackTime();
+    attacker->SetCombatTargetEntityId(target->EntityId());
+    // 指令二十四/二十五/三十六：damage = max(1, atk - def) = max(1, 20 - 2) = 18
+    //（怪物防御来自 Definition，指令五）。
+    const MonsterDefinition* targetDefinition = FindMonsterDefinition(target->MonsterTypeId());
+    const std::uint32_t damage =
+        CalculateDamage(attacker->AttackPower(), targetDefinition ? targetDefinition->defense : 0u);
+    const bool killed = target->ApplyDamage(damage);
+    // 指令四十/四十二：广播范围 = 目标怪物当前所有观察者 ∪ 攻击者本人（去重，
+    // 不全世界广播，指令一百一十五）。
+    std::vector<std::uint64_t> receivers;
+    receivers.push_back(attacker->CharacterId());
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->CharacterId() != attacker->CharacterId() &&
+            observer->VisibleMonsters().count(target->EntityId()) != 0) {
+            receivers.push_back(observer->CharacterId());
+        }
+    }
+    CombatEventPayload event;
+    event.eventId = m_nextCombatEventId++; // 指令十三：单调 eventId
+    event.attackerType = static_cast<std::uint8_t>(CombatEntityType::Player);
+    event.attackerId = attacker->CharacterId();
+    event.targetType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+    event.targetId = target->EntityId();
+    event.damage = damage;
+    event.targetHpAfter = target->CurrentHp();
+    event.targetMaxHp = target->MaxHp();
+    event.killed = killed;
+    event.serverTime = ServerTimeMs();
+    SendAttackResponse(attacker, request.requestId, true, CombatResultCode::Success,
+                       target->EntityId());
+    BroadcastCombatEvent(event, receivers);
+    LOG_INFO("[Combat] Player " + attacker->CharacterName() + " (#" +
+             std::to_string(attacker->CharacterId()) + ") hit Monster #" +
+             std::to_string(target->EntityId()) + " for " + std::to_string(damage) +
+             " (hp=" + std::to_string(target->CurrentHp()) + ")");
+    if (killed) {
+        // 指令四十七/五十三：怪物死亡（AI 停/target 清空/state=Dead）+ MonsterDeath 广播。
+        KillMonster(target, attacker->CharacterId(), receivers);
+    }
+}
+
+void WorldServer::SendAttackResponse(const std::shared_ptr<PlayerSession>& player,
+                                     std::uint64_t requestId, bool success,
+                                     CombatResultCode code, std::uint64_t targetEntityId) {
+    if (!player) {
+        return;
+    }
+    PlayerAttackResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.targetEntityId = targetEntityId;
+    out.message = CombatResultCodeName(out.resultCode);
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::PlayerAttackResponse);
+    if (EncodePlayerAttackResponse(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::BroadcastCombatEvent(const CombatEventPayload& event,
+                                       const std::vector<std::uint64_t>& receiverCharacterIds) {
+    // 指令四十/四十一/四十二：只发相关玩家（观察者 ∪ 当事人），去重。
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::CombatEvent);
+    if (!EncodeCombatEvent(event, packet.payload)) {
+        return;
+    }
+    for (const auto characterId : receiverCharacterIds) {
+        auto player = m_players.FindByCharacter(characterId);
+        if (player) {
+            SendPacketToPlayer(player, packet);
+        }
+    }
+}
+
+void WorldServer::KillMonster(const std::shared_ptr<MonsterEntity>& monster,
+                              std::uint64_t killerCharacterId,
+                              const std::vector<std::uint64_t>& observers) {
+    // 指令二十三/四十七/五十三：HP=0 -> alive=false / state=Dead / target 清空 /
+    // AI 停止（Patrol/Chase/Returning 全停）。
+    monster->MarkDead();
+    monster->SetState(MonsterState::Dead);
+    monster->SetTargetCharacterId(0);
+    // 指令五十：MonsterDeath 广播（观察者集合已含 killer）。
+    MonsterDeathPayload death;
+    death.entityId = monster->EntityId();
+    death.killerCharacterId = killerCharacterId;
+    death.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::MonsterDeath);
+    if (EncodeMonsterDeath(death, packet.payload)) {
+        for (const auto characterId : observers) {
+            auto player = m_players.FindByCharacter(characterId);
+            if (player) {
+                SendPacketToPlayer(player, packet);
+            }
+        }
+    }
+    // 指令五十一/八十九：死亡期间保留实体 3 秒（仍属于 visibleMonsters，继续快照
+    // state=Dead）；3 秒后由 CleanupDeadMonsters 统一 RemoveMonster（指令五十四/七十七）。
+    LOG_INFO("[Combat] Monster #" + std::to_string(monster->EntityId()) + " killed by player #" +
+             std::to_string(killerCharacterId));
+}
+
+void WorldServer::KillPlayer(const std::shared_ptr<PlayerSession>& victim,
+                             CombatEntityType killerType, std::uint64_t killerId,
+                             const std::vector<std::uint64_t>& observers) {
+    // 指令四十八/五十七：currentHp=0 / alive=false，不自动复活。
+    victim->MarkDead();
+    // 指令四十九：PlayerDeath 广播（观察者 ∪ 受害者本人）。
+    PlayerDeathPayload death;
+    death.characterId = victim->CharacterId();
+    death.killerType = static_cast<std::uint8_t>(killerType);
+    death.killerId = killerId;
+    death.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::PlayerDeath);
+    if (EncodePlayerDeath(death, packet.payload)) {
+        for (const auto characterId : observers) {
+            auto player = m_players.FindByCharacter(characterId);
+            if (player) {
+                SendPacketToPlayer(player, packet);
+            }
+        }
+    }
+    // 指令一百二十九：所有以其为 target 的怪停止攻击 -> Returning。
+    for (const auto& monster : m_monsters.SnapshotMonsters()) {
+        if (monster->TargetCharacterId() == victim->CharacterId()) {
+            monster->SetTargetCharacterId(0);
+            monster->SetState(MonsterState::Returning);
+            monster->TouchStateEnterTime();
+        }
+    }
+    LOG_INFO("[Combat] Player " + victim->CharacterName() + " (#" +
+             std::to_string(victim->CharacterId()) + ") died (killer type=" +
+             std::to_string(static_cast<int>(death.killerType)) + " id=" +
+             std::to_string(killerId) + ")");
+}
+
+void WorldServer::ScheduleHealthSnapshotTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_healthTimer.expires_after(std::chrono::milliseconds(m_config.healthSnapshotIntervalMs));
+    auto self = shared_from_this();
+    m_healthTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->SendHealthSnapshots();
+        self->ScheduleHealthSnapshotTick();
+    });
+}
+
+void WorldServer::SendHealthSnapshots() {
+    // 指令六十八/六十九：每 1s 给每个玩家发可见实体的 HP 纠偏（单条 EntityHealthSnapshot，
+    // 不用 batch——数量不大）。
+    const std::uint64_t serverTime = ServerTimeMs();
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        // 自己（本地 HP 由客户端维护 + 此处纠偏）
+        SendEntityHealthSnapshot(player, CombatEntityType::Player, player->CharacterId(),
+                                 player->CurrentHp(), player->MaxHp(), player->Alive());
+        // 可见玩家
+        for (const auto remoteId : player->VisiblePlayers()) {
+            const auto remote = m_players.FindByCharacter(remoteId);
+            if (remote) {
+                SendEntityHealthSnapshot(player, CombatEntityType::Player, remoteId,
+                                         remote->CurrentHp(), remote->MaxHp(), remote->Alive());
+            }
+        }
+        // 可见怪物（死亡期间仍可见，alive=false 纠偏）
+        for (const auto entityId : player->VisibleMonsters()) {
+            const auto monster = m_monsters.FindMonster(entityId);
+            if (monster) {
+                SendEntityHealthSnapshot(player, CombatEntityType::Monster, entityId,
+                                         monster->CurrentHp(), monster->MaxHp(),
+                                         monster->Alive());
+            }
+        }
+        (void)serverTime;
+    }
+}
+
+void WorldServer::SendEntityHealthSnapshot(const std::shared_ptr<PlayerSession>& receiver,
+                                           CombatEntityType entityType, std::uint64_t entityId,
+                                           std::uint32_t currentHp, std::uint32_t maxHp,
+                                           bool alive) {
+    EntityHealthSnapshotPayload out;
+    out.entityType = static_cast<std::uint8_t>(entityType);
+    out.entityId = entityId;
+    out.currentHp = currentHp;
+    out.maxHp = maxHp;
+    out.alive = alive;
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::EntityHealthSnapshot);
+    if (EncodeEntityHealthSnapshot(out, packet.payload)) {
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
 void WorldServer::SendMonsterSpawn(const std::shared_ptr<PlayerSession>& receiver,
                                    const std::shared_ptr<MonsterEntity>& monster) {
     const MonsterDefinition* definition = FindMonsterDefinition(monster->MonsterTypeId());
@@ -1100,6 +1487,10 @@ void WorldServer::SendMonsterSpawn(const std::shared_ptr<PlayerSession>& receive
     payload.positionY = monster->PositionY();
     payload.state = static_cast<std::uint8_t>(monster->State());
     payload.serverTime = ServerTimeMs();
+    // 阶段14 指令十五：MonsterSpawn 携带 HP。
+    payload.currentHp = monster->CurrentHp();
+    payload.maxHp = monster->MaxHp();
+    payload.alive = monster->Alive();
     Packet out;
     out.header.messageId = static_cast<std::uint16_t>(MessageId::MonsterSpawn);
     if (EncodeMonsterSpawn(payload, out.payload)) {
@@ -1132,7 +1523,8 @@ void WorldServer::SendMonsterBatches(const std::shared_ptr<PlayerSession>& playe
         }
         entries.push_back({monster->EntityId(), monster->PositionX(), monster->PositionY(),
                            static_cast<std::uint8_t>(monster->State()),
-                           monster->TargetCharacterId()});
+                           monster->TargetCharacterId(), monster->CurrentHp(), monster->MaxHp(),
+                           monster->Alive()});
     }
     for (std::size_t offset = 0; offset < entries.size(); offset += kMonsterBatchMaxMonsters) {
         MonsterBatchSnapshotPayload batch;

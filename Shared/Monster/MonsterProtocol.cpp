@@ -45,6 +45,10 @@ bool EncodeMonsterSpawn(const MonsterSpawnPayload& p, std::vector<std::uint8_t>&
         w.WriteFloat(p.positionY);
         w.WriteUInt8(p.state);
         w.WriteUInt64(p.serverTime);
+        // 阶段14 指令十五：HP 字段
+        w.WriteUInt32(p.currentHp);
+        w.WriteUInt32(p.maxHp);
+        w.WriteBool(p.alive);
         return w.WriteString(p.name);
     });
 }
@@ -60,6 +64,9 @@ bool DecodeMonsterSpawn(const std::uint8_t* data, std::size_t size, MonsterSpawn
         out.positionY = r.ReadFloat();
         out.state = r.ReadUInt8();
         out.serverTime = r.ReadUInt64();
+        out.currentHp = r.ReadUInt32();
+        out.maxHp = r.ReadUInt32();
+        out.alive = r.ReadBool();
         (void)(r.ReadString(out.name));
     });
 }
@@ -91,6 +98,10 @@ bool EncodeMonsterBatchSnapshot(const MonsterBatchSnapshotPayload& p,
             w.WriteFloat(entry.positionY);
             w.WriteUInt8(entry.state);
             w.WriteUInt64(entry.targetCharacterId);
+            // 阶段14 指令九十一：HP 字段
+            w.WriteUInt32(entry.currentHp);
+            w.WriteUInt32(entry.maxHp);
+            w.WriteBool(entry.alive);
         }
         return true;
     });
@@ -114,6 +125,9 @@ bool DecodeMonsterBatchSnapshot(const std::uint8_t* data, std::size_t size,
             entry.positionY = r.ReadFloat();
             entry.state = r.ReadUInt8();
             entry.targetCharacterId = r.ReadUInt64();
+            entry.currentHp = r.ReadUInt32();
+            entry.maxHp = r.ReadUInt32();
+            entry.alive = r.ReadBool();
             out.monsters.push_back(entry);
         }
     });

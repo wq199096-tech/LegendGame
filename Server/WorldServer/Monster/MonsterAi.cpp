@@ -88,7 +88,9 @@ std::shared_ptr<PlayerSession> SelectAggroTarget(const MonsterEntity& monster,
 
 void StepMonsterAi(MonsterEntity& monster, const MonsterDefinition& definition, float deltaTime,
                    const WorldSpatialGrid& playerGrid, const WorldManager& players) {
-    if (!monster.IsActive()) {
+    // 阶段14 指令五十六：死亡实体 AI Tick 直接跳过（不再 Patrol/Chase/Returning，
+    // 指令二十三）；阶段14 指令一百一十三：Dead 位置冻结。
+    if (!monster.IsActive() || !monster.Alive()) {
         return;
     }
     // 指令四十一：server tick dt clamp 最大 0.25s（防卡顿瞬移）。
@@ -152,6 +154,12 @@ void StepMonsterAi(MonsterEntity& monster, const MonsterDefinition& definition, 
                 TransitionTo(monster, MonsterState::Returning, "target disconnected");
                 break;
             }
+            // 阶段14 指令一百二十九：目标玩家死亡 -> 停止攻击立刻 Returning。
+            if (!target->Alive()) {
+                monster.SetTargetCharacterId(0);
+                TransitionTo(monster, MonsterState::Returning, "target dead");
+                break;
+            }
             // 指令四十二：Leash——离 spawn > leashRadius(600) -> Returning。
             const float distSpawnSq =
                 DistanceSquared(monster.PositionX(), monster.PositionY(), monster.SpawnX(),
@@ -168,6 +176,12 @@ void StepMonsterAi(MonsterEntity& monster, const MonsterDefinition& definition, 
             if (distTargetSq > lostRadius * lostRadius) {
                 monster.SetTargetCharacterId(0);
                 TransitionTo(monster, MonsterState::Returning, "target lost");
+                break;
+            }
+            // 阶段14 指令四十三/四十四：距离 <= attackRange(60) 停止向前移动
+            //（不贴脸穿模到目标中心）；实际攻击由 WorldServer AI tick 统一触发
+            //（指令四十五）。
+            if (distTargetSq <= definition.attackRange * definition.attackRange) {
                 break;
             }
             // 指令四十：朝玩家服务器权威位置移动（speed=80，dt 为 server tick；不用 Client dt）。

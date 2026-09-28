@@ -20,6 +20,10 @@ void RemoteMonsterEntity::ApplySpawn(const world::MonsterSpawnPayload& spawn) {
     m_level = spawn.level;
     m_mapId = spawn.mapId;
     m_state = spawn.state;
+    // 阶段14 指令十五/六十三：Spawn 携带 HP。
+    m_currentHp = spawn.currentHp;
+    m_maxHp = spawn.maxHp;
+    m_alive = spawn.alive;
     if (!m_active) {
         // 首次 Spawn：render 直接落在服务器位置（无历史插值状态）。
         m_serverX = spawn.positionX;
@@ -33,17 +37,36 @@ void RemoteMonsterEntity::ApplySpawn(const world::MonsterSpawnPayload& spawn) {
     m_active = true;
 }
 
-void RemoteMonsterEntity::ApplySnapshot(float serverX, float serverY, std::uint8_t state,
-                                        std::uint64_t targetCharacterId,
+void RemoteMonsterEntity::ApplySnapshot(const world::MonsterSnapshotEntry& entry,
                                         std::uint64_t serverTime) {
     if (!m_active) {
         return; // 指令六十一：Spawn 前的 snapshot 由 Manager 丢弃，防御性兜底
     }
     (void)serverTime;
-    m_state = state;                        // 指令五十五：状态随服务器权威快照
-    m_targetCharacterId = targetCharacterId;
-    m_serverX = serverX;
-    m_serverY = serverY;
+    m_state = entry.state;                  // 指令五十五：状态随服务器权威快照
+    m_targetCharacterId = entry.targetCharacterId;
+    // 阶段14 指令九十一：快照携带 HP（Dead 怪 alive=false 继续同步）。
+    m_currentHp = entry.currentHp;
+    m_maxHp = entry.maxHp;
+    m_alive = entry.alive;
+    m_serverX = entry.positionX;
+    m_serverY = entry.positionY;
+}
+
+void RemoteMonsterEntity::ApplyCombatEvent(std::uint64_t eventId, std::uint32_t hpAfter,
+                                           bool killed) {
+    if (!m_active) {
+        return;
+    }
+    // 阶段14 指令六十七：eventId <= lastCombatEventId 的旧包忽略（乱序保护）。
+    if (eventId <= m_lastCombatEventId) {
+        return;
+    }
+    m_lastCombatEventId = eventId;
+    m_currentHp = hpAfter;
+    if (killed) {
+        m_alive = false; // 指令七十二：死亡后保留实体直到 MonsterDespawn
+    }
 }
 
 void RemoteMonsterEntity::UpdateInterpolation(float deltaTime) {

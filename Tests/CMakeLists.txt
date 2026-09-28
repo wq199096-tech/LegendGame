@@ -44,6 +44,7 @@ add_executable(LegendWorldTests
     WorldChecks.cpp
     WorldAoiChecks.cpp
     WorldMonsterChecks.cpp
+    WorldCombatChecks.cpp
 )
 target_include_directories(LegendWorldTests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldTests PRIVATE cxx_std_20)

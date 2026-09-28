@@ -1,7 +1,9 @@
 #pragma once
 
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterTypes.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -66,6 +68,58 @@ public:
     void ClearVisibleMonsters() { m_visibleMonsters.clear(); }
     std::size_t VisibleMonsterCount() const { return m_visibleMonsters.size(); }
 
+    // ------------------------------------------------------------------
+    // 阶段14 指令四：固定基础战斗属性（不做装备/成长加成）。
+    // ------------------------------------------------------------------
+    std::uint32_t MaxHp() const { return m_maxHp; }
+    std::uint32_t CurrentHp() const { return m_currentHp; }
+    std::uint32_t AttackPower() const { return m_attackPower; }
+    std::uint32_t Defense() const { return m_defense; }
+    float AttackRange() const { return m_attackRange; }
+    float AttackCooldownSeconds() const { return m_attackCooldownSeconds; }
+    bool Alive() const { return m_alive; }
+
+    // 指令二十四：扣血（不低于 0；返回是否致死）。
+    bool ApplyDamage(std::uint32_t damage) {
+        m_currentHp = (m_currentHp > damage) ? (m_currentHp - damage) : 0u;
+        if (m_currentHp == 0 && m_alive) {
+            m_alive = false;
+            return true;
+        }
+        return false;
+    }
+    // 指令七十九：死亡（不自动复活）。
+    void MarkDead() {
+        m_alive = false;
+        m_currentHp = 0;
+        m_deadSince = std::chrono::steady_clock::now();
+    }
+    // 指令七十九：死亡时刻。
+    std::chrono::steady_clock::time_point DeadSince() const { return m_deadSince; }
+
+    // 指令二十七/七：玩家攻击冷却（steady_clock，服务器权威）。
+    std::chrono::steady_clock::time_point LastAttackTime() const { return m_lastAttackTime; }
+    void TouchAttackTime() { m_lastAttackTime = std::chrono::steady_clock::now(); }
+    // 指令七：当前攻击目标（monsterEntityId，调试/日志用）。
+    std::uint64_t CombatTargetEntityId() const { return m_combatTargetEntityId; }
+    void SetCombatTargetEntityId(std::uint64_t entityId) { m_combatTargetEntityId = entityId; }
+
+    // 指令三十：最近 64 个攻击 requestId（防网络重放重复扣血）。
+    // 只记录成功造成伤害的请求；重复 -> DuplicateRequest。
+    bool IsRecentAttackRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentAttackRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberAttackRequest(std::uint64_t requestId) {
+        m_recentAttackRequestIds[m_recentAttackRequestCursor] = requestId;
+        m_recentAttackRequestCursor =
+            (m_recentAttackRequestCursor + 1) % m_recentAttackRequestIds.size();
+    }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -84,6 +138,20 @@ private:
     std::unordered_set<std::uint64_t> m_visiblePlayers;
     // 阶段13 指令十三：可见怪物集合（仅 io 线程维护）。
     std::unordered_set<std::uint64_t> m_visibleMonsters;
+    // 阶段14：战斗字段（runtime only，不持久化，指令八十/八十一）。
+    std::uint32_t m_maxHp = kPlayerMaxHp;           // 指令四：100
+    std::uint32_t m_currentHp = kPlayerMaxHp;       // 指令四：100
+    std::uint32_t m_attackPower = kPlayerAttackPower; // 指令四：20
+    std::uint32_t m_defense = kPlayerDefense;       // 指令四：5
+    float m_attackRange = kPlayerAttackRange;       // 指令四：100
+    float m_attackCooldownSeconds = kPlayerAttackCooldownSeconds; // 指令四：0.8s
+    bool m_alive = true;
+    // epoch 初始化：首次攻击不受 CD 限制（steady_clock epoch 距 now 极大）。
+    std::chrono::steady_clock::time_point m_lastAttackTime{};
+    std::chrono::steady_clock::time_point m_deadSince{std::chrono::steady_clock::now()};
+    std::uint64_t m_combatTargetEntityId = 0;
+    std::array<std::uint64_t, kAttackRequestHistorySize> m_recentAttackRequestIds{};
+    std::size_t m_recentAttackRequestCursor = 0;
 };
 
 } // namespace legend::world

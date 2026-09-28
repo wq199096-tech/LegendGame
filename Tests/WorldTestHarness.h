@@ -287,9 +287,9 @@ struct WorldTestClient {
         controller.SetWorldEndpoint("127.0.0.1", kWorldPort);
     }
 
-    std::deque<WorldNetworkEvent> recorded[16];
-    int counts[16] = {};
-    WorldNetworkEvent lastEvent[16];
+    std::deque<WorldNetworkEvent> recorded[32];
+    int counts[32] = {};
+    WorldNetworkEvent lastEvent[32];
 
     static int IndexOf(WorldNetworkEvent::Type type) { return static_cast<int>(type); }
 
@@ -300,7 +300,7 @@ struct WorldTestClient {
         client().PollEvents(events);
         for (auto& e : events) {
             const int idx = IndexOf(e.type);
-            if (idx >= 0 && idx < 16) {
+            if (idx >= 0 && idx < 32) {
                 ++counts[idx];
                 recorded[idx].push_back(e);
             }

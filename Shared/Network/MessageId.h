@@ -56,6 +56,14 @@ enum class MessageId : std::uint16_t {
     MonsterSpawn = 240,
     MonsterDespawn = 241,
     MonsterBatchSnapshot = 242,
+    // 阶段14 指令十：服务器权威战斗（PlayerDeath 用 256——255 已被 ErrorResponse
+    // 占用，指令十允许微调编号不冲突）
+    PlayerAttackRequest = 250,
+    PlayerAttackResponse = 251,
+    CombatEvent = 252,
+    EntityHealthSnapshot = 253,
+    MonsterDeath = 254,
+    PlayerDeath = 256,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -149,6 +157,12 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::MonsterSpawn:
         case MessageId::MonsterDespawn:
         case MessageId::MonsterBatchSnapshot:
+        case MessageId::PlayerAttackRequest:
+        case MessageId::PlayerAttackResponse:
+        case MessageId::CombatEvent:
+        case MessageId::EntityHealthSnapshot:
+        case MessageId::MonsterDeath:
+        case MessageId::PlayerDeath:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

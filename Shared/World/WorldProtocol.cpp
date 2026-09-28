@@ -64,6 +64,10 @@ bool EncodeEnterWorldResponse(const EnterWorldResponsePayload& p, std::vector<st
         w.WriteFloat(p.positionX);
         w.WriteFloat(p.positionY);
         w.WriteUInt64(p.serverTime);
+        // 阶段14 指令十七：玩家 HP
+        w.WriteUInt32(p.currentHp);
+        w.WriteUInt32(p.maxHp);
+        w.WriteBool(p.alive);
         w.WriteUInt16(p.errorCode);
         return w.WriteString(p.characterName) && w.WriteString(p.message);
     });
@@ -83,6 +87,9 @@ bool DecodeEnterWorldResponse(const std::uint8_t* data, std::size_t size,
         out.positionX = r.ReadFloat();
         out.positionY = r.ReadFloat();
         out.serverTime = r.ReadUInt64();
+        out.currentHp = r.ReadUInt32();
+        out.maxHp = r.ReadUInt32();
+        out.alive = r.ReadBool();
         out.errorCode = r.ReadUInt16();
         (void)(r.ReadString(out.characterName) && r.ReadString(out.message));
     });
@@ -159,6 +166,10 @@ bool EncodePlayerSpawn(const PlayerSpawnPayload& p, std::vector<std::uint8_t>& o
         w.WriteFloat(p.positionX);
         w.WriteFloat(p.positionY);
         w.WriteUInt64(p.serverTime);
+        // 阶段14 指令十六：HP 字段
+        w.WriteUInt32(p.currentHp);
+        w.WriteUInt32(p.maxHp);
+        w.WriteBool(p.alive);
         return w.WriteString(p.name);
     });
 }
@@ -174,6 +185,9 @@ bool DecodePlayerSpawn(const std::uint8_t* data, std::size_t size, PlayerSpawnPa
         out.positionX = r.ReadFloat();
         out.positionY = r.ReadFloat();
         out.serverTime = r.ReadUInt64();
+        out.currentHp = r.ReadUInt32();
+        out.maxHp = r.ReadUInt32();
+        out.alive = r.ReadBool();
         (void)(r.ReadString(out.name));
     });
 }

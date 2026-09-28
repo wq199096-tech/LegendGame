@@ -122,6 +122,8 @@ add_library(LegendWorldCore STATIC
     WorldServer/Monster/MonsterManager.cpp
     WorldServer/Monster/MonsterSpatialGrid.cpp
     WorldServer/Monster/MonsterAi.cpp
+    WorldServer/Combat/DamageCalculator.cpp
+    WorldServer/Combat/CombatService.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)

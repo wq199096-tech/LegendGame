@@ -20,6 +20,10 @@ void RemotePlayerEntity::ApplySpawn(const world::PlayerSpawnPayload& spawn) {
     m_gender = spawn.gender;
     m_level = spawn.level;
     m_mapId = spawn.mapId;
+    // 阶段14 指令十六/六十四：Spawn 携带 HP。
+    m_currentHp = spawn.currentHp;
+    m_maxHp = spawn.maxHp;
+    m_alive = spawn.alive;
     if (!m_active) {
         // 首次 Spawn：render 直接落在服务器位置（无历史插值状态）。
         m_serverX = spawn.positionX;

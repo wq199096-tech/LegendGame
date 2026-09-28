@@ -14,6 +14,8 @@
 #include "Server/WorldServer/WorldMapManager.h"
 #include "Server/WorldServer/WorldSession.h"
 
+#include "Shared/Combat/CombatProtocol.h"
+#include "Shared/Combat/CombatTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/World/WorldError.h"
 
@@ -27,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace legend::network {
 struct Packet;
@@ -57,6 +60,8 @@ public:
         std::size_t aoiVisibleLimit = kAoiVisibleLimit;      // 指令二十七：128
         // 阶段13：怪物 AI（指令三十/六十九）
         int monsterAiTickMs = kMonsterAiTickMs;               // 200ms
+        // 阶段14 指令六十八：Health Snapshot 纠偏（1s，单条）
+        int healthSnapshotIntervalMs = kHealthSnapshotIntervalMs;
     };
 
     struct Hooks {
@@ -81,6 +86,10 @@ public:
     }
     // 阶段13 指令一百零六：移除怪物 -> 可见玩家收到 MonsterDespawn(Removed)。
     bool RemoveMonster(std::uint64_t entityId);
+    // 阶段14：玩家访问器（测试用）。
+    std::shared_ptr<PlayerSession> FindPlayerByCharacter(std::uint64_t characterId) const {
+        return m_players.FindByCharacter(characterId);
+    }
 
 private:
     struct PendingTicket {
@@ -149,6 +158,25 @@ private:
     void SendMonsterBatches(const std::shared_ptr<PlayerSession>& player, std::uint64_t serverTime);
     void OnTargetPlayerRemoved(std::uint64_t characterId);
 
+    // 阶段14：服务器权威战斗（指令三十五/三十九/四十五/六十八/七十七）
+    void HandlePlayerAttack(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void SendAttackResponse(const std::shared_ptr<PlayerSession>& player, std::uint64_t requestId,
+                            bool success, CombatResultCode code, std::uint64_t targetEntityId);
+    void BroadcastCombatEvent(const CombatEventPayload& event,
+                              const std::vector<std::uint64_t>& receiverCharacterIds);
+    void KillMonster(const std::shared_ptr<MonsterEntity>& monster, std::uint64_t killerCharacterId,
+                     const std::vector<std::uint64_t>& observers);
+    void TryMonsterAttack(const std::shared_ptr<MonsterEntity>& monster,
+                          const MonsterDefinition& definition);
+    void KillPlayer(const std::shared_ptr<PlayerSession>& victim, CombatEntityType killerType,
+                    std::uint64_t killerId, const std::vector<std::uint64_t>& observers);
+    void CleanupDeadMonsters();
+    void ScheduleHealthSnapshotTick();
+    void SendHealthSnapshots();
+    void SendEntityHealthSnapshot(const std::shared_ptr<PlayerSession>& receiver,
+                                  CombatEntityType entityType, std::uint64_t entityId,
+                                  std::uint32_t currentHp, std::uint32_t maxHp, bool alive);
+
     // 位置保存（指令五十二/五十三/五十四/五十六）
     void SavePlayerPosition(const std::shared_ptr<PlayerSession>& player, bool touchLastPlayed);
     void SavePlayerPositionNow(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
@@ -175,6 +203,9 @@ private:
     MonsterSpatialGrid m_monsterGrid;
     std::uint64_t m_nextMonsterEntityId = 1; // 指令七：单调计数器
 
+    // 阶段14：战斗（指令十三：eventId 单调；runtime only 不持久化，指令八十）
+    std::uint64_t m_nextCombatEventId = 1;
+
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;
     legend::account::DbWorker m_dbWorker;
@@ -186,6 +217,7 @@ private:
     asio::steady_timer m_idleTimer;
     asio::steady_timer m_aoiTimer;        // 阶段12 指令六十九：AOI tick 200ms，Stop 时 cancel
     asio::steady_timer m_monsterAiTimer;  // 阶段13 指令三十：AI tick 200ms，Stop 时 cancel
+    asio::steady_timer m_healthTimer;     // 阶段14 指令六十八：1s HP 纠偏，Stop 时 cancel
 
     std::uint64_t m_nextRequestId = 1; // 指令七十三：单调增长
     Hooks m_hooks;

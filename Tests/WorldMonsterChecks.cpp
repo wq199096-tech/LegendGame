@@ -380,7 +380,11 @@ void RunMonsterLogicChecks() {
         spawn.positionX = 0.0f;
         spawn.positionY = 0.0f;
         entity.ApplySpawn(spawn);
-        entity.ApplySnapshot(100.0f, 0.0f, 0, 0, 1);
+        world::MonsterSnapshotEntry entry;
+        entry.entityId = 8;
+        entry.positionX = 100.0f;
+        entry.positionY = 0.0f;
+        entity.ApplySnapshot(entry, 1);
         entity.UpdateInterpolation(0.1f);
         const float first = entity.RenderX();
         bool ok = first > 50.0f && first < 100.0f; // 渐进，不瞬移
@@ -400,7 +404,11 @@ void RunMonsterLogicChecks() {
         spawn.positionX = 0.0f;
         spawn.positionY = 0.0f;
         entity.ApplySpawn(spawn);
-        entity.ApplySnapshot(400.0f, 0.0f, 0, 0, 1);
+        world::MonsterSnapshotEntry entry;
+        entry.entityId = 9;
+        entry.positionX = 400.0f;
+        entry.positionY = 0.0f;
+        entity.ApplySnapshot(entry, 1);
         entity.UpdateInterpolation(0.016f);
         Check("MonsterTeleportCorrectionCheck: >300 snaps to server position",
               entity.RenderX() == 400.0f && entity.RenderY() == 0.0f);

@@ -38,6 +38,10 @@ struct EnterWorldResponsePayload {
     float positionX = 0.0f;
     float positionY = 0.0f;
     std::uint64_t serverTime = 0;
+    // 阶段14 指令十七：进入世界返回玩家 HP。
+    std::uint32_t currentHp = 100;
+    std::uint32_t maxHp = 100;
+    bool alive = true;
     std::uint16_t errorCode = 0; // WorldErrorCode
     std::string message;
 };
@@ -68,7 +72,7 @@ struct PlayerPositionSnapshotPayload {
 // 阶段12 指令二十二~二十五：AOI 多玩家同步 payload
 // ---------------------------------------------------------------------------
 
-// 指令二十二：PlayerSpawn(230)。
+// 指令二十二：PlayerSpawn(230)。阶段14 指令十六：增加 HP 字段。
 struct PlayerSpawnPayload {
     std::uint64_t characterId = 0;
     std::string name;
@@ -79,6 +83,9 @@ struct PlayerSpawnPayload {
     float positionX = 0.0f;
     float positionY = 0.0f;
     std::uint64_t serverTime = 0;
+    std::uint32_t currentHp = 100;
+    std::uint32_t maxHp = 100;
+    bool alive = true;
 };
 
 // 指令二十三：PlayerDespawn(231)，reason = PlayerDespawnReason。
@@ -88,6 +95,7 @@ struct PlayerDespawnPayload {
 };
 
 // 指令二十四：RemotePlayerSnapshot(232)（阶段12 服务器只发 batch，保留单条协议）。
+// 阶段14 指令九十二：RemotePlayer batch 不加 HP——HP 走 CombatEvent + HealthSnapshot。
 struct RemotePlayerSnapshotPayload {
     std::uint64_t characterId = 0;
     float positionX = 0.0f;
