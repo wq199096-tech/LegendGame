@@ -142,6 +142,25 @@ void WorldNetworkClient::SendAttack(std::uint64_t requestId, std::uint8_t target
     }
 }
 
+void WorldNetworkClient::SendSkillCast(std::uint64_t requestId, std::uint32_t skillId,
+                                       std::uint8_t targetType, std::uint64_t targetEntityId) {
+    // 阶段15 指令二十二/二十三：Client 只发 skillId + 目标（requestId/type/id），
+    // 不发伤害/Mana/CD/CastTime/AOE 位置/命中结果（指令二十三/九十六/九十七）。
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::SkillCastRequestPayload request;
+    request.requestId = requestId;
+    request.skillId = skillId;
+    request.targetType = targetType;
+    request.targetEntityId = targetEntityId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::SkillCastRequest);
+    if (world::EncodeSkillCastRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
 void WorldNetworkClient::PollEvents(std::deque<WorldNetworkEvent>& out) {
     std::lock_guard<std::mutex> lock(m_eventMutex);
     while (!m_events.empty()) {
@@ -270,6 +289,9 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.currentHp = response.currentHp;
             event.maxHp = response.maxHp;
             event.alive = response.alive;
+            // 阶段15 指令六十九：进入世界返回玩家 Mana
+            event.currentMana = response.currentMana;
+            event.maxManaVal = response.maxMana;
             event.errorCode = response.errorCode;
             event.message = response.message;
             PushEvent(std::move(event));
@@ -462,6 +484,9 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.targetMaxHp = payload.targetMaxHp;
             event.killed = payload.killed;
             event.serverTime = payload.serverTime;
+            // 阶段15 指令三十二：伤害来源（BasicAttack/Skill + skillId）。
+            event.sourceType = payload.sourceType;
+            event.sourceId = payload.sourceId;
             PushEvent(std::move(event));
             return;
         }
@@ -510,6 +535,114 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.characterId = payload.characterId;
             event.attackerType = payload.killerType;
             event.attackerId = payload.killerId;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // 阶段15 指令五十五：服务器权威技能事件（Client 不做本地伤害预测，
+        // 指令五十八：进度只展示，完成必须等 Completed/Impact）
+        // ------------------------------------------------------------------
+        case MessageId::SkillCastResponse: {
+            world::SkillCastResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeSkillCastResponse(packet.payload.data(), packet.payload.size(),
+                                                payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::SkillCastResponseEvent;
+            event.requestId = payload.requestId;
+            event.skillId = payload.skillId;
+            event.accepted = payload.accepted;
+            event.skillResultCode = payload.resultCode;
+            event.currentMana = payload.currentMana;
+            event.message = payload.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::SkillCastStarted: {
+            world::SkillCastStartedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeSkillCastStarted(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::SkillCastStartedEvent;
+            event.castId = payload.castId;
+            event.characterId = payload.casterCharacterId;
+            event.skillId = payload.skillId;
+            event.skillTargetType = payload.targetType;
+            event.targetEntityId = payload.targetEntityId;
+            event.castTimeMs = payload.castTimeMs;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::SkillCastCompleted: {
+            world::SkillCastCompletedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeSkillCastCompleted(packet.payload.data(), packet.payload.size(),
+                                                 payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::SkillCastCompletedEvent;
+            event.castId = payload.castId;
+            event.characterId = payload.casterCharacterId;
+            event.skillId = payload.skillId;
+            event.skillTargetType = payload.targetType;
+            event.targetEntityId = payload.targetEntityId;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::SkillCastCancelled: {
+            world::SkillCastCancelledPayload payload;
+            std::string decodeError;
+            if (!world::DecodeSkillCastCancelled(packet.payload.data(), packet.payload.size(),
+                                                 payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::SkillCastCancelledEvent;
+            event.castId = payload.castId;
+            event.characterId = payload.casterCharacterId;
+            event.skillId = payload.skillId;
+            event.cancelReason = payload.reason;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::SkillImpactEvent: {
+            world::SkillImpactEventPayload payload;
+            std::string decodeError;
+            if (!world::DecodeSkillImpactEvent(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::SkillImpact;
+            event.castId = payload.castId;
+            event.skillId = payload.skillId;
+            event.characterId = payload.casterCharacterId;
+            event.serverTime = payload.serverTime;
+            event.impactTargets = payload.targets;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ManaSnapshot: {
+            world::ManaSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeManaSnapshot(packet.payload.data(), packet.payload.size(), payload,
+                                           decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ManaSnapshot;
+            event.currentMana = payload.currentMana;
+            event.maxManaVal = payload.maxMana;
             event.serverTime = payload.serverTime;
             PushEvent(std::move(event));
             return;

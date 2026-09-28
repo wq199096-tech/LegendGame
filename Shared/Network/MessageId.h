@@ -64,6 +64,14 @@ enum class MessageId : std::uint16_t {
     EntityHealthSnapshot = 253,
     MonsterDeath = 254,
     PlayerDeath = 256,
+    // 阶段15 指令二十二：Skill & Ability Replication（编号允许调整不冲突）
+    SkillCastRequest = 260,
+    SkillCastResponse = 261,
+    SkillCastStarted = 262,
+    SkillCastCompleted = 263,
+    SkillCastCancelled = 264,
+    SkillImpactEvent = 265,
+    ManaSnapshot = 266,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -163,6 +171,13 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::EntityHealthSnapshot:
         case MessageId::MonsterDeath:
         case MessageId::PlayerDeath:
+        case MessageId::SkillCastRequest:
+        case MessageId::SkillCastResponse:
+        case MessageId::SkillCastStarted:
+        case MessageId::SkillCastCompleted:
+        case MessageId::SkillCastCancelled:
+        case MessageId::SkillImpactEvent:
+        case MessageId::ManaSnapshot:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

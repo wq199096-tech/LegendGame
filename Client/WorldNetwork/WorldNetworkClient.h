@@ -9,6 +9,8 @@
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
+#include "Shared/Skill/SkillProtocol.h"
+#include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldProtocol.h"
 
 #include <asio.hpp>
@@ -63,6 +65,13 @@ struct WorldNetworkEvent {
         HealthSnapshot,
         MonsterDeath,
         PlayerDeath,
+        // 阶段15 指令五十五：服务器权威技能事件
+        SkillCastResponseEvent,
+        SkillCastStartedEvent,
+        SkillCastCompletedEvent,
+        SkillCastCancelledEvent,
+        SkillImpact,
+        ManaSnapshot,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -113,6 +122,20 @@ struct WorldNetworkEvent {
     std::uint32_t currentHp = 0;    // HealthSnapshot
     std::uint32_t maxHp = 0;        // HealthSnapshot
     bool alive = true;              // HealthSnapshot
+
+    // 阶段15：技能事件字段（指令五十五；EnterWorldResponse 复用 currentMana/maxMana）
+    std::uint8_t sourceType = 0;    // CombatEvent 伤害来源（CombatSource，指令三十二）
+    std::uint64_t sourceId = 0;     // CombatEvent 来源 ID（普通攻击 0 / 技能 skillId）
+    std::uint32_t skillId = 0;      // SkillCastResponse/Started/Completed/Cancelled/Impact
+    std::uint64_t castId = 0;       // Started/Completed/Cancelled/Impact
+    std::uint8_t skillTargetType = 0; // Started/Completed（SkillTargetType）
+    std::uint32_t castTimeMs = 0;   // Started
+    std::uint8_t cancelReason = 0;  // Cancelled（SkillCancelReason）
+    std::uint8_t skillResultCode = 0; // SkillCastResponse（SkillResultCode）
+    bool accepted = false;          // SkillCastResponse
+    std::uint32_t currentMana = 0;  // SkillCastResponse / ManaSnapshot
+    std::uint32_t maxManaVal = 0;   // ManaSnapshot（maxMana 名与 CombatEvent 冲突改用）
+    std::vector<world::SkillImpactTarget> impactTargets; // Impact
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -150,6 +173,10 @@ public:
     //（禁止传坐标/hitbox/damage，指令三；服务器重新验证，指令六十）。
     void SendAttack(std::uint64_t requestId, std::uint8_t targetEntityType,
                     std::uint64_t targetEntityId);
+    // 阶段15 指令二十二/二十三：Debug 施法——只发 skillId + 目标类型/ID
+    //（禁止传伤害/Mana/CD/CastTime/AOE 位置/命中结果，指令二十三/九十六/九十七）。
+    void SendSkillCast(std::uint64_t requestId, std::uint32_t skillId, std::uint8_t targetType,
+                       std::uint64_t targetEntityId);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);

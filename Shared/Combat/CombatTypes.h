@@ -17,7 +17,7 @@ enum class CombatEntityType : std::uint8_t {
     Monster = 2,
 };
 
-// 指令九/三十一：CombatResultCode。
+// 指令九/三十一：CombatResultCode（Busy 为阶段15 指令七十一新增：施法中拒绝普攻）。
 enum class CombatResultCode : std::uint8_t {
     Success = 0,
     InvalidTarget = 1,
@@ -30,6 +30,7 @@ enum class CombatResultCode : std::uint8_t {
     MalformedRequest = 8,
     InternalError = 9,
     DuplicateRequest = 10,
+    Busy = 11,
 };
 
 inline const char* CombatResultCodeName(std::uint8_t code) {
@@ -45,9 +46,16 @@ inline const char* CombatResultCodeName(std::uint8_t code) {
         case CombatResultCode::MalformedRequest: return "MalformedRequest";
         case CombatResultCode::InternalError: return "InternalError";
         case CombatResultCode::DuplicateRequest: return "DuplicateRequest";
+        case CombatResultCode::Busy: return "Busy";
     }
     return "Unknown";
 }
+
+// 阶段15 指令三十二：CombatEvent 伤害来源（普通攻击=1 / 技能=2）。
+enum class CombatSource : std::uint8_t {
+    BasicAttack = 1,
+    Skill = 2,
+};
 
 // 指令四：玩家固定基础战斗属性（阶段14 全体一致，不做装备/成长加成）。
 inline constexpr std::uint32_t kPlayerMaxHp = 100;

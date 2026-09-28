@@ -42,6 +42,20 @@ public:
         m_alive = alive;
     }
 
+    // 阶段15 指令五十七：远程玩家技能表现状态（Started/Completed/Cancelled 驱动；
+    // 仅表现——完成必须等服务器 Impact，不做本地预测，指令五十八）。
+    bool Casting() const { return m_casting; }
+    std::uint32_t CastingSkillId() const { return m_castingSkillId; }
+    std::uint64_t CastStartServerTime() const { return m_castStartServerTime; }
+    std::uint32_t CastDurationMs() const { return m_castDurationMs; }
+    void ApplyCastState(bool casting, std::uint32_t skillId, std::uint64_t startServerTime,
+                        std::uint32_t durationMs) {
+        m_casting = casting;
+        m_castingSkillId = skillId;
+        m_castStartServerTime = startServerTime;
+        m_castDurationMs = durationMs;
+    }
+
 private:
     std::uint64_t m_characterId = 0;
     std::string m_name;
@@ -60,6 +74,11 @@ private:
     std::uint32_t m_currentHp = 100;
     std::uint32_t m_maxHp = 100;
     bool m_alive = true;
+    // 阶段15 指令五十七：技能表现状态。
+    bool m_casting = false;
+    std::uint32_t m_castingSkillId = 0;
+    std::uint64_t m_castStartServerTime = 0;
+    std::uint32_t m_castDurationMs = 0;
 };
 
 } // namespace legend::client

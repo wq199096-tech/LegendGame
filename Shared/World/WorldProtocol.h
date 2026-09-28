@@ -42,6 +42,9 @@ struct EnterWorldResponsePayload {
     std::uint32_t currentHp = 100;
     std::uint32_t maxHp = 100;
     bool alive = true;
+    // 阶段15 指令六十九：进入世界返回玩家 Mana（阶段15 不持久化，恢复 100/100）。
+    std::uint32_t currentMana = 100;
+    std::uint32_t maxMana = 100;
     std::uint16_t errorCode = 0; // WorldErrorCode
     std::string message;
 };

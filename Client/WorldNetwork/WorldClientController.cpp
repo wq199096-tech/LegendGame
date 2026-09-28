@@ -2,11 +2,28 @@
 
 #include "Engine/Debug/Logger.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldError.h"
+
+#include <algorithm>
+#include <chrono>
 
 namespace legend::client {
 
 WorldClientController::WorldClientController() = default;
+
+float WorldClientController::CastProgress() const {
+    // 阶段15 指令五十八：本地进度仅展示；绝不因本地 100% 自行结算伤害。
+    if (!m_localCasting || m_castDurationMs == 0) {
+        return 0.0f;
+    }
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    const float elapsed = static_cast<float>(nowMs - m_castStartSteadyMs);
+    const float progress = elapsed / static_cast<float>(m_castDurationMs);
+    return std::clamp(progress, 0.0f, 1.0f);
+}
 
 void WorldClientController::SetState(WorldFlowState state) {
     if (m_state != state) {
@@ -57,6 +74,15 @@ void WorldClientController::SendAttack(std::uint64_t targetEntityId) {
     m_client->SendAttack(++m_lastAttackRequestId,
                          static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster),
                          targetEntityId);
+}
+
+void WorldClientController::SendSkillCast(std::uint32_t skillId, std::uint8_t targetType,
+                                          std::uint64_t targetEntityId) {
+    // 阶段15 指令五十九：Debug 施法——只发 skillId + 目标（服务器重新验证一切）。
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_client->SendSkillCast(++m_lastSkillRequestId, skillId, targetType, targetEntityId);
 }
 
 void WorldClientController::Disconnect() {
@@ -113,6 +139,12 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_localCurrentHp = event.currentHp;
             m_localMaxHp = event.maxHp;
             m_localAlive = event.alive;
+            // 阶段15 指令五十六/六十九：本地玩家 Mana 初始化（服务器权威值）。
+            m_localCurrentMana = event.currentMana;
+            m_localMaxMana = event.maxManaVal;
+            m_localCasting = false;
+            m_activeCastId = 0;
+            m_activeSkillId = 0;
             SetState(WorldFlowState::WorldReady);
             LOG_INFO("[World] EnterWorld success character=" + event.characterName + " (#" +
                      std::to_string(event.characterId) + ") map=" + std::to_string(event.mapId) +
@@ -237,17 +269,24 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                                                   event.killed);
             }
             // 指令七十五：攻击表现——Debug 日志（不做正式特效）。
+            // 阶段15 指令六十六：技能命中日志 [Combat] Skill X hit Monster #Y for Z。
             const bool playerAttacker =
                 event.attackerType == static_cast<std::uint8_t>(legend::world::CombatEntityType::Player);
-            LOG_INFO(std::string("[Combat] ") +
-                     (playerAttacker ? "Player #" : "Monster #") +
-                     std::to_string(event.attackerId) + " hit " +
-                     (event.targetType ==
-                              static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster)
-                          ? "Monster #"
-                          : "Player #") +
-                     std::to_string(event.targetId) + " for " + std::to_string(event.damage) +
-                     (event.killed ? " (killed)" : ""));
+            std::string hitLog = std::string("[Combat] ") +
+                                 (playerAttacker ? "Player #" : "Monster #") +
+                                 std::to_string(event.attackerId);
+            if (event.sourceType ==
+                static_cast<std::uint8_t>(legend::world::CombatSource::Skill)) {
+                hitLog += " (skill " + std::to_string(event.sourceId) + ")";
+            }
+            hitLog += std::string(" hit ") +
+                      (event.targetType ==
+                               static_cast<std::uint8_t>(legend::world::CombatEntityType::Monster)
+                           ? "Monster #"
+                           : "Player #") +
+                      std::to_string(event.targetId) + " for " + std::to_string(event.damage) +
+                      (event.killed ? " (killed)" : "");
+            LOG_INFO(hitLog);
             break;
         }
         case WorldNetworkEvent::Type::HealthSnapshot:
@@ -285,17 +324,90 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             if (event.characterId == m_characterId) {
                 m_localAlive = false;
                 m_localCurrentHp = 0;
+                // 阶段15 指令十七：本地死亡清施法表现（服务器已先发 Cancelled(Dead)）。
+                m_localCasting = false;
+                m_activeCastId = 0;
+                m_activeSkillId = 0;
                 LOG_INFO("[Combat] You died (killer type=" +
                          std::to_string(static_cast<int>(event.attackerType)) + " id=" +
                          std::to_string(event.attackerId) + ")");
             } else {
                 m_remotePlayers.HandleDeath(event.characterId);
+                m_remotePlayers.ApplyCastState(event.characterId, false, 0, 0, 0);
                 LOG_INFO("[Combat] Player #" + std::to_string(event.characterId) + " died.");
             }
             break;
         case WorldNetworkEvent::Type::ProtocolError:
             LOG_WARN("[World] Protocol error: " + event.message);
             m_lastError = event.message;
+            break;
+        // ------------------------------------------------------------------
+        // 阶段15 指令五十五/五十六：服务器权威技能事件（Client 只响应，不做
+        // 本地伤害预测——指令五十八：本地进度到 100% 不自行结算）
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::SkillCastResponseEvent:
+            // 指令二十四：请求回执；accepted 时等待 Started/Completed/Impact。
+            m_localCurrentMana = event.currentMana;
+            LOG_INFO(std::string("[Skill] Player #") + std::to_string(m_characterId) +
+                     " cast " + std::to_string(event.skillId) + " -> " +
+                     (event.accepted ? std::string("accepted")
+                                     : std::string("rejected: ") +
+                                           legend::world::SkillResultCodeName(
+                                               event.skillResultCode)));
+            break;
+        case WorldNetworkEvent::Type::SkillCastStartedEvent:
+            // 指令五十七/五十九：施法表现开始（本地 Caster 与远程 Caster）。
+            if (event.characterId == m_characterId) {
+                m_localCasting = true;
+                m_activeCastId = event.castId;
+                m_activeSkillId = event.skillId;
+                m_castStartSteadyMs = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count());
+                m_castDurationMs = event.castTimeMs;
+            } else {
+                m_remotePlayers.ApplyCastState(event.characterId, true, event.skillId,
+                                               event.serverTime, event.castTimeMs);
+            }
+            LOG_INFO("[Skill] Player #" + std::to_string(event.characterId) + " started cast " +
+                     std::to_string(event.skillId) + " (" + std::to_string(event.castTimeMs) +
+                     "ms)");
+            break;
+        case WorldNetworkEvent::Type::SkillCastCompletedEvent:
+            // 指令五十七：完成只清表现状态——伤害必须等 Impact/CombatEvent。
+            if (event.characterId == m_characterId) {
+                m_localCasting = false;
+                m_activeCastId = 0;
+                m_activeSkillId = 0;
+            } else {
+                m_remotePlayers.ApplyCastState(event.characterId, false, 0, 0, 0);
+            }
+            break;
+        case WorldNetworkEvent::Type::SkillCastCancelledEvent:
+            // 指令二十八/五十七：取消（Moved/Dead/TargetInvalid）。
+            if (event.characterId == m_characterId) {
+                m_localCasting = false;
+                m_activeCastId = 0;
+                m_activeSkillId = 0;
+            } else {
+                m_remotePlayers.ApplyCastState(event.characterId, false, 0, 0, 0);
+            }
+            LOG_INFO("[Skill] Player #" + std::to_string(event.characterId) + " cast " +
+                     std::to_string(event.skillId) + " cancelled (" +
+                     legend::world::SkillCancelReasonName(event.cancelReason) + ")");
+            break;
+        case WorldNetworkEvent::Type::SkillImpact:
+            // 指令二十九/六十六：Impact 到达才确认命中（Debug 表现：闪一下由
+            // RemoteMonster HP 变化体现；正式飘字后续阶段）。
+            LOG_INFO("[Skill] Skill " + std::to_string(event.skillId) + " by player #" +
+                     std::to_string(event.characterId) + " impacted " +
+                     std::to_string(event.impactTargets.size()) + " target(s)");
+            break;
+        case WorldNetworkEvent::Type::ManaSnapshot:
+            // 指令六十七：1s Mana 快照纠偏（本人）。
+            m_localCurrentMana = event.currentMana;
+            m_localMaxMana = event.maxManaVal;
             break;
     }
 }

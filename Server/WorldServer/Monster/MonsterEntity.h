@@ -29,6 +29,11 @@ public:
 
     float SpawnX() const { return m_spawnX; }
     float SpawnY() const { return m_spawnY; }
+    // 阶段15：测试/布景辅助——重设 spawn（移动怪物"重新安家"，避免 leash 立即回家）。
+    void SetSpawnPoint(float x, float y) {
+        m_spawnX = x;
+        m_spawnY = y;
+    }
     float MoveSpeed() const { return m_moveSpeed; }
 
     MonsterState State() const { return m_state; }

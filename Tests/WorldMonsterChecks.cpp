@@ -616,12 +616,13 @@ void RunWorldMonsterChecks() {
         const std::string ticketK = TicketFor(servers.login, seedK);
         const bool enterK = !ticketK.empty() && clientK.ConnectAndEnter(ticketK, 8000);
         // K(400,1500) 距怪13 (500,1500) 100 -> 巡逻任意相位必 aggro（<=280<350）；
-        // K 以 60units/s（< 怪 80）慢速北移 624：怪13 贴身跟随（K-怪 ~=100+滞后 <525，
-        // 不触发 lost），怪13 被带至距 spawn >600 -> leash
+        // K 以 60units/s（< 怪 80）慢速北移 768：怪13 贴身跟随（K-怪 ~=100+滞后 <525，
+        // 不触发 lost），怪13 被带至距 spawn >600（跟随滞后<=60，720-60=660>592 必触
+        // 发 leash）——52 步（624）在跟随滞后 44~60 时距 spawn 仅 ~588 临界不触发。
         bool ok = enterK;
         ok = ok && WaitMonsterSpawnCountAtLeast(clientK, kSlime13, 1, 3000);
         ok = ok && WaitMonsterState(clientK, kSlime13, stateChase, 6000);
-        for (int i = 0; i < 52; ++i) {
+        for (int i = 0; i < 64; ++i) {
             clientK.client().SendMoveInput(static_cast<std::uint32_t>(i + 1), 0.0f, -1.0f, 0.1f);
             std::this_thread::sleep_for(std::chrono::milliseconds(180));
         }

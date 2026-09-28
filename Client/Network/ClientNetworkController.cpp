@@ -307,6 +307,18 @@ std::string ClientNetworkController::WorldStatusText() const {
     text += std::to_string(m_world.LocalMaxHp());
     text += " alive=";
     text += m_world.LocalAlive() ? "1" : "0";
+    // 阶段15 指令六十三/六十四：F12 增加 Mana 与 Casting 状态。
+    text += " mana=";
+    text += std::to_string(m_world.LocalCurrentMana());
+    text += "/";
+    text += std::to_string(m_world.LocalMaxMana());
+    if (m_world.LocalCasting()) {
+        text += " casting=skill:";
+        text += std::to_string(m_world.ActiveSkillId());
+        text += " cast:";
+        text += std::to_string(static_cast<int>(m_world.CastProgress() * 100.0f));
+        text += "%%";
+    }
     // 阶段14 指令七十：前 4 只怪 HP current/max（不做正式血条 UI）。
     if (m_world.RemoteMonsters().Count() > 0) {
         text += " mHP[";

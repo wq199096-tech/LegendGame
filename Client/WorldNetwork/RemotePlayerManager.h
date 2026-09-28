@@ -29,6 +29,9 @@ public:
     // 阶段14 指令六十八：HealthSnapshot 纠偏（已知实体直接覆盖）。
     void ApplyHealthSnapshot(std::uint64_t characterId, std::uint32_t currentHp,
                              std::uint32_t maxHp, bool alive);
+    // 阶段15 指令五十七：远程玩家技能表现状态（未知 characterId 忽略）。
+    void ApplyCastState(std::uint64_t characterId, bool casting, std::uint32_t skillId,
+                        std::uint64_t startServerTime, std::uint32_t durationMs);
     // 指令三十七：每帧插值（主线程）。
     void Update(float deltaTime);
 

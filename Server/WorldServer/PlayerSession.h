@@ -2,14 +2,31 @@
 
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterTypes.h"
+#include "Shared/Skill/SkillDefinition.h"
+#include "Shared/Skill/SkillTypes.h"
 
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace legend::world {
+
+// 阶段15 指令十四：PendingSkillCast —— Cast-Time 技能的进行中施法状态
+//（封装在 PlayerSession；WorldServer Skill Tick 统一检查 castCompleteTime）。
+class PendingSkillCast {
+public:
+    bool active = false; // isCasting
+    std::uint64_t castId = 0;            // 指令二十六：WorldServer 单调 castId
+    SkillId skillId = 0;
+    std::uint64_t castRequestId = 0;     // 触发本次施法的 Client requestId
+    std::uint8_t targetType = 0;         // SkillTargetType
+    std::uint64_t targetEntityId = 0;
+    std::chrono::steady_clock::time_point castStartTime{};
+    std::chrono::steady_clock::time_point castCompleteTime{};
+};
 
 // 阶段11 指令二十七：PlayerSession —— 进入世界后的权威玩家数据。
 // 由 WorldManager 持有（io 线程访问）；位置为服务器权威（指令三十三）。
@@ -120,6 +137,62 @@ public:
             (m_recentAttackRequestCursor + 1) % m_recentAttackRequestIds.size();
     }
 
+    // ------------------------------------------------------------------
+    // 阶段15：Mana（指令十一/十二/六十八）。
+    // 只有 WorldServer 扣 Mana（Client 不能发送剩余 Mana）；阶段15 不持久化
+    //（WorldServer 重启/重新进入恢复 100/100）；无 Regen；永不为负。
+    // ------------------------------------------------------------------
+    std::uint32_t MaxMana() const { return m_maxMana; }
+    std::uint32_t CurrentMana() const { return m_currentMana; }
+    // 指令十九：施法被服务器正式接受时扣 Mana（不足返回 false；下限 0 保护）。
+    bool ConsumeMana(std::uint32_t amount) {
+        if (m_currentMana < amount) {
+            return false;
+        }
+        m_currentMana -= amount;
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // 阶段15 指令十三：每技能独立 Cooldown（nextReadyTime，steady_clock 权威）。
+    // ------------------------------------------------------------------
+    bool IsSkillReady(SkillId skillId, std::chrono::steady_clock::time_point now) const {
+        auto it = m_skillNextReadyTime.find(skillId);
+        return it == m_skillNextReadyTime.end() || now >= it->second;
+    }
+    // 指令二十：服务器正式接受施法时启动（不等命中；取消不返还）。
+    void StartSkillCooldown(SkillId skillId, float cooldownSeconds) {
+        m_skillNextReadyTime[skillId] =
+            std::chrono::steady_clock::now() +
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<float>(cooldownSeconds));
+    }
+
+    // ------------------------------------------------------------------
+    // 阶段15 指令十四：CastingState —— 同一时间只能施放一个技能（指令十五）。
+    // ------------------------------------------------------------------
+    bool IsCasting() const { return m_casting.active; }
+    const PendingSkillCast& Casting() const { return m_casting; }
+    PendingSkillCast& CastingRef() { return m_casting; }
+    void SetCasting(const PendingSkillCast& cast) { m_casting = cast; }
+    void ClearCasting() { m_casting = PendingSkillCast{}; }
+
+    // 指令七十四：最近 64 个已接受技能 requestId（防重放：不能重复扣 Mana/
+    // 重复启动 CD/重复伤害）。失败请求允许重试（指令七十五，只缓存 accepted）。
+    bool IsRecentSkillRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentSkillRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberSkillRequest(std::uint64_t requestId) {
+        m_recentSkillRequestIds[m_recentSkillRequestCursor] = requestId;
+        m_recentSkillRequestCursor =
+            (m_recentSkillRequestCursor + 1) % m_recentSkillRequestIds.size();
+    }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -152,6 +225,15 @@ private:
     std::uint64_t m_combatTargetEntityId = 0;
     std::array<std::uint64_t, kAttackRequestHistorySize> m_recentAttackRequestIds{};
     std::size_t m_recentAttackRequestCursor = 0;
+
+    // 阶段15：技能字段（runtime only，不持久化——重启/重进恢复默认）。
+    std::uint32_t m_maxMana = kPlayerMaxMana;     // 指令十一：100
+    std::uint32_t m_currentMana = kPlayerMaxMana; // 指令十一：100
+    std::unordered_map<SkillId, std::chrono::steady_clock::time_point>
+        m_skillNextReadyTime; // 指令十三：nextReadyTime
+    PendingSkillCast m_casting; // 指令十四：同一时间最多一个施法
+    std::array<std::uint64_t, kAttackRequestHistorySize> m_recentSkillRequestIds{};
+    std::size_t m_recentSkillRequestCursor = 0;
 };
 
 } // namespace legend::world

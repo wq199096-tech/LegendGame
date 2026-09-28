@@ -37,6 +37,10 @@ public:
     void SendMoveInput(float directionX, float directionY, float deltaTime);
     // 阶段14 指令五十九/六十一：Debug 攻击——只发目标（服务器重新验证）。
     void SendAttack(std::uint64_t targetEntityId);
+    // 阶段15 指令五十五/五十九：Debug 施法——只发 skillId + 目标类型/ID
+    //（伤害/Mana/CD/完成时间全部服务器权威，指令一/二）。
+    void SendSkillCast(std::uint32_t skillId, std::uint8_t targetType,
+                       std::uint64_t targetEntityId);
     void Disconnect();
 
     WorldFlowState State() const { return m_state; }
@@ -49,6 +53,14 @@ public:
     std::uint32_t LocalMaxHp() const { return m_localMaxHp; }
     bool LocalAlive() const { return m_localAlive; }
     std::uint64_t LastAttackRequestId() const { return m_lastAttackRequestId; }
+    std::uint64_t LastSkillRequestId() const { return m_lastSkillRequestId; } // 阶段15
+    // 阶段15 指令五十六：本地 Mana / 施法状态（服务器权威事件驱动维护）。
+    std::uint32_t LocalCurrentMana() const { return m_localCurrentMana; }
+    std::uint32_t LocalMaxMana() const { return m_localMaxMana; }
+    bool LocalCasting() const { return m_localCasting; }
+    std::uint64_t ActiveCastId() const { return m_activeCastId; }
+    std::uint32_t ActiveSkillId() const { return m_activeSkillId; }
+    float CastProgress() const; // 0~1（仅展示；完成必须等服务器事件，指令五十八）
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -89,6 +101,15 @@ private:
     std::uint32_t m_localMaxHp = 100;
     bool m_localAlive = true;
     std::uint64_t m_lastAttackRequestId = 0;
+    // 阶段15 指令五十六：本地 Mana / 施法状态（服务器权威事件驱动）。
+    std::uint32_t m_localCurrentMana = 100;
+    std::uint32_t m_localMaxMana = 100;
+    bool m_localCasting = false;
+    std::uint64_t m_activeCastId = 0;
+    std::uint32_t m_activeSkillId = 0;
+    std::uint64_t m_castStartSteadyMs = 0; // 本地展示计时（steady，仅进度条）
+    std::uint32_t m_castDurationMs = 0;
+    std::uint64_t m_lastSkillRequestId = 0;
 };
 
 } // namespace legend::client

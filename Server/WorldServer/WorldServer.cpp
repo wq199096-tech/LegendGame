@@ -55,7 +55,9 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_idleTimer(service.Io()),
       m_aoiTimer(service.Io()),
       m_monsterAiTimer(service.Io()),
-      m_healthTimer(service.Io()) {}
+      m_healthTimer(service.Io()),
+      m_skillTimer(service.Io()),
+      m_manaTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -92,6 +94,8 @@ bool WorldServer::Start(std::string& error) {
     SpawnInitialMonsters();   // 阶段13 指令十五/十六：固定 20 只 Training Slime
     ScheduleMonsterAiTick();  // 阶段13 指令三十：AI tick 200ms
     ScheduleHealthSnapshotTick(); // 阶段14 指令六十八：HP 纠偏 1s
+    ScheduleSkillTick();      // 阶段15 指令七十七/七十八：Skill Tick 50ms（与 AI 分离）
+    ScheduleManaSnapshotTick(); // 阶段15 指令六十七：Mana 快照 1s
     return true;
 }
 
@@ -106,11 +110,15 @@ void WorldServer::Stop() {
     m_aoiTimer.cancel();        // 指令六十九：Stop 时 cancel AOI tick
     m_monsterAiTimer.cancel();  // 阶段13 指令六十五：停止 AI Timer
     m_healthTimer.cancel();     // 阶段14：停止 HP 纠偏 timer
+    m_skillTimer.cancel();      // 阶段15 指令七十九：停止 Skill Timer
+    m_manaTimer.cancel();      // 阶段15 指令七十九：停止 Mana 快照 timer
     // 阶段13 指令六十五/六十六：清 Monster（runtime only，无持久化）。
     m_monsters.Clear();
     m_monsterGrid = MonsterSpatialGrid{};
     m_nextMonsterEntityId = 1; // 指令六十七：重启 entityId 允许重新开始
     m_nextCombatEventId = 1;   // 阶段14：eventId 同步复位
+    m_nextCastId = 1;          // 阶段15 指令一百四十七：重启 castId 复位，Pending Cast 随
+                               // PlayerSession 一起消失（无网络 Cancel，指令七十九）
     m_loginClient->Cancel();
     if (m_loginConnection) {
         m_loginConnection->Close();
@@ -185,6 +193,8 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
             HandleMoveInput(connectionId, packet);
         } else if (messageId == MessageId::PlayerAttackRequest) {
             HandlePlayerAttack(connectionId, packet); // 阶段14 指令三十九
+        } else if (messageId == MessageId::SkillCastRequest) {
+            HandleSkillCastRequest(connectionId, packet); // 阶段15 指令二十二
         }
     }
 }
@@ -569,6 +579,9 @@ void WorldServer::SendEnterWorldSuccess(std::uint64_t connectionId, std::uint64_
     out.currentHp = player->CurrentHp();
     out.maxHp = player->MaxHp();
     out.alive = player->Alive();
+    // 阶段15 指令六十九：进入世界返回玩家 Mana（不持久化，恢复 100/100）。
+    out.currentMana = player->CurrentMana();
+    out.maxMana = player->MaxMana();
     out.errorCode = static_cast<std::uint16_t>(WorldErrorCode::None);
     out.message = "ok";
     Packet packet;
@@ -624,8 +637,20 @@ void WorldServer::HandleMoveInput(std::uint64_t connectionId, const Packet& pack
     if (!player->Alive()) {
         return;
     }
-    if (WorldMapManager::ApplyMoveInput(*player, input.inputSequence, input.directionX,
-                                        input.directionY, input.deltaTime)) {
+    // 阶段15 指令七十二/七十三：有效移动（位置将实际变化）取消当前施法——
+    // 先取消再执行移动；direction 0,0、地图 Clamp 抵消等位置不变的情况不取消
+    //（ApplyMoveInput 对任何单调 sequence 都返回 true，必须以位置差为准）。
+    const float prevX = player->PositionX();
+    const float prevY = player->PositionY();
+    const bool moved = WorldMapManager::ApplyMoveInput(*player, input.inputSequence,
+                                                       input.directionX, input.directionY,
+                                                       input.deltaTime);
+    const bool actuallyMoved =
+        player->PositionX() != prevX || player->PositionY() != prevY;
+    if (actuallyMoved && player->IsCasting()) {
+        CancelActiveCast(player, SkillCancelReason::Moved);
+    }
+    if (moved) {
         // 阶段12 指令十二：移动后重挂 SpatialGrid cell。
         m_spatialGrid.UpdatePlayerCell(player);
     }
@@ -1117,6 +1142,8 @@ void WorldServer::TryMonsterAttack(const std::shared_ptr<MonsterEntity>& monster
     event.targetMaxHp = target->MaxHp();
     event.killed = killed;
     event.serverTime = ServerTimeMs();
+    event.sourceType = static_cast<std::uint8_t>(CombatSource::BasicAttack); // 阶段15 指令三十二
+    event.sourceId = 0;
     BroadcastCombatEvent(event, receivers);
     // 指令七十六：战斗日志只记成功攻击（不刷失败包）。
     LOG_INFO("[Combat] Monster #" + std::to_string(monster->EntityId()) + " hit player " +
@@ -1235,6 +1262,12 @@ void WorldServer::HandlePlayerAttack(std::uint64_t connectionId,
                            request.targetEntityId);
         return;
     }
+    // 阶段15 指令七十一：施法中禁止普通攻击（Busy，不伤害）。
+    if (attacker->IsCasting()) {
+        SendAttackResponse(attacker, request.requestId, false, CombatResultCode::Busy,
+                           request.targetEntityId);
+        return;
+    }
     // 指令三十二/三十三/三十四/八十八：目标必须存在于服务器 MonsterManager 且在
     // 攻击者 visibleMonsters 内（防远程作弊：AOI 离开立即失效）。
     if (attacker->VisibleMonsters().count(request.targetEntityId) == 0) {
@@ -1300,6 +1333,8 @@ void WorldServer::HandlePlayerAttack(std::uint64_t connectionId,
     event.targetMaxHp = target->MaxHp();
     event.killed = killed;
     event.serverTime = ServerTimeMs();
+    event.sourceType = static_cast<std::uint8_t>(CombatSource::BasicAttack); // 阶段15 指令三十二
+    event.sourceId = 0;
     SendAttackResponse(attacker, request.requestId, true, CombatResultCode::Success,
                        target->EntityId());
     BroadcastCombatEvent(event, receivers);
@@ -1381,6 +1416,10 @@ void WorldServer::KillPlayer(const std::shared_ptr<PlayerSession>& victim,
                              CombatEntityType killerType, std::uint64_t killerId,
                              const std::vector<std::uint64_t>& observers) {
     // 指令四十八/五十七：currentHp=0 / alive=false，不自动复活。
+    // 阶段15 指令十七：死亡取消当前施法（reason=Dead，Mana 不返还——指令九十四）。
+    if (victim->IsCasting()) {
+        CancelActiveCast(victim, SkillCancelReason::Dead);
+    }
     victim->MarkDead();
     // 指令四十九：PlayerDeath 广播（观察者 ∪ 受害者本人）。
     PlayerDeathPayload death;
@@ -1471,6 +1510,538 @@ void WorldServer::SendEntityHealthSnapshot(const std::shared_ptr<PlayerSession>&
     packet.header.messageId = static_cast<std::uint16_t>(MessageId::EntityHealthSnapshot);
     if (EncodeEntityHealthSnapshot(out, packet.payload)) {
         SendPacketToPlayer(receiver, packet);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段15：技能与施法（Skill & Ability Replication Core V0.15）
+// 编排原则（指令三十六）：WorldSession 只做协议状态；SkillRegistry 提供定义；
+// SkillService 提供规则；WorldServer 只负责接收->验证->扣费->执行->广播。
+// ---------------------------------------------------------------------------
+
+std::size_t WorldServer::CastingPlayerCount() const {
+    std::size_t count = 0;
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        if (player->IsCasting()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool WorldServer::MoveMonsterTo(std::uint64_t entityId, float x, float y) {
+    // 阶段15：测试/布景辅助。位置 + spawn 点 + SpatialGrid cell 一致更新（移动即
+    // "重新安家"，避免 leash 立即触发 Returning 走出布景）；必须与 AI Tick 同在
+    // io 线程串行执行（grid 非线程安全）——经 m_service.Post 投递，测试侧轮询等待。
+    auto monster = m_monsters.FindMonster(entityId);
+    if (!monster) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, entityId, x, y]() {
+        if (self->m_stopped.load()) {
+            return;
+        }
+        auto moved = self->m_monsters.FindMonster(entityId);
+        if (!moved) {
+            return;
+        }
+        moved->SetPosition(x, y);
+        moved->SetSpawnPoint(x, y);
+        self->m_monsterGrid.UpdateMonsterCell(moved);
+    });
+    return true;
+}
+
+void WorldServer::MergeReceiver(std::vector<std::uint64_t>& receivers,
+                                std::uint64_t characterId) {
+    if (std::find(receivers.begin(), receivers.end(), characterId) == receivers.end()) {
+        receivers.push_back(characterId);
+    }
+}
+
+std::vector<std::uint64_t> WorldServer::CasterObservers(std::uint64_t casterCharacterId) const {
+    // 指令五十一：Started/Completed/Cancelled 广播范围 = Caster 本人 + 能看到
+    // Caster 的玩家（去重，不全世界广播）。
+    std::vector<std::uint64_t> receivers;
+    receivers.push_back(casterCharacterId);
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->CharacterId() != casterCharacterId &&
+            observer->VisiblePlayers().count(casterCharacterId) != 0) {
+            MergeReceiver(receivers, observer->CharacterId());
+        }
+    }
+    return receivers;
+}
+
+void WorldServer::HandleSkillCastRequest(std::uint64_t connectionId,
+                                         const legend::network::Packet& packet) {
+    // 指令八十七：Malformed 只影响当前 Client（回 MalformedRequest，不断开）。
+    SkillCastRequestPayload request;
+    std::string decodeError;
+    if (!DecodeSkillCastRequest(packet.payload.data(), packet.payload.size(), request,
+                                decodeError)) {
+        LOG_INFO("[Skill] Malformed SkillCastRequest from #" + std::to_string(connectionId));
+        SendSkillCastResponse(nullptr, request.requestId, request.skillId, false,
+                              SkillResultCode::MalformedRequest);
+        return;
+    }
+    auto caster = m_players.FindByConnection(connectionId);
+    if (!caster) {
+        SendSkillCastResponse(nullptr, request.requestId, request.skillId, false,
+                              SkillResultCode::NotInWorld);
+        return;
+    }
+    // 指令八十八：未知技能 -> UnknownSkill（Mana 不变，CD 不启动）。
+    const SkillDefinition* skill = m_skillRegistry.FindSkill(request.skillId);
+    if (!skill) {
+        SendSkillCastResponse(caster, request.requestId, request.skillId, false,
+                              SkillResultCode::UnknownSkill);
+        return;
+    }
+    // 指令七十四：重复 accepted requestId -> DuplicateRequest（不重复扣 Mana/
+    // 不重复 CD/不重复伤害）；指令七十五：失败请求允许重试（不缓存）。
+    if (caster->IsRecentSkillRequest(request.requestId)) {
+        SendSkillCastResponse(caster, request.requestId, request.skillId, false,
+                              SkillResultCode::DuplicateRequest);
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    SkillCastContext context;
+    context.casterAlive = caster->Alive();
+    context.casterInWorld = true;
+    context.alreadyCasting = caster->IsCasting(); // 指令十五：Casting 期间拒绝一切新技能
+    const auto requestTargetType = static_cast<SkillTargetType>(request.targetType);
+    context.requestTargetType = requestTargetType;
+    context.definitionTargetType = skill->targetType;
+    context.cooldownReady = caster->IsSkillReady(request.skillId, now);
+    context.currentMana = caster->CurrentMana();
+    context.manaCost = skill->manaCost;
+
+    std::shared_ptr<MonsterEntity> target;
+    if (skill->targetType == SkillTargetType::Monster) {
+        // 指令四十九：单体目标必须在 visibleMonsters（防远程猜 entityId）。
+        if (caster->VisibleMonsters().count(request.targetEntityId) == 0) {
+            SendSkillCastResponse(caster, request.requestId, request.skillId, false,
+                                  SkillResultCode::InvalidTarget);
+            return;
+        }
+        target = m_monsters.FindMonster(request.targetEntityId);
+        if (!target) {
+            SendSkillCastResponse(caster, request.requestId, request.skillId, false,
+                                  SkillResultCode::InvalidTarget);
+            return;
+        }
+        context.targetAlive = target->Alive();
+        context.targetVisible = true; // 已验证 visibleMonsters
+        context.sameMap = caster->MapId() == target->MapId();
+        const float dx = caster->PositionX() - target->PositionX();
+        const float dy = caster->PositionY() - target->PositionY();
+        context.distanceSquared = dx * dx + dy * dy;
+        context.rangeSquared = skill->range * skill->range;
+    }
+    // 指令三十九：验证链（CasterDead -> NotInWorld -> AlreadyCasting -> TargetDead ->
+    // InvalidTarget -> DifferentMap -> OutOfRange -> Cooldown -> NotEnoughMana）。
+    const SkillResultCode code = ValidateSkillCast(context);
+    if (code != SkillResultCode::Success) {
+        // 指令八十九/九十/九十一/九十二/九十三：失败不扣 Mana、不启动 CD、
+        // 不记录 requestId。
+        SendSkillCastResponse(caster, request.requestId, request.skillId, false, code);
+        return;
+    }
+
+    // ---- 施法被服务器正式接受（指令十九/二十）：扣 Mana + 启动 CD + 记录请求 ----
+    if (!caster->ConsumeMana(skill->manaCost)) {
+        // 防御：验证与扣费之间同线程无窗口，理论不可达；保底 NotEnoughMana。
+        SendSkillCastResponse(caster, request.requestId, request.skillId, false,
+                              SkillResultCode::NotEnoughMana);
+        return;
+    }
+    caster->StartSkillCooldown(request.skillId, skill->cooldownSeconds);
+    caster->RememberSkillRequest(request.requestId);
+    const std::uint64_t castId = m_nextCastId++; // 指令二十六：服务器单调 castId
+    // 指令二十四：成功回执（accepted + 当前 Mana），先于 Started 发送。
+    SendSkillCastResponse(caster, request.requestId, request.skillId, true,
+                          SkillResultCode::Success);
+
+    if (skill->castType == SkillCastType::Instant) {
+        ExecuteInstantCast(caster, *skill, castId, request.targetEntityId);
+    } else {
+        BeginTimedCast(caster, *skill, castId, request.targetEntityId, request.requestId);
+    }
+}
+
+void WorldServer::ExecuteInstantCast(const std::shared_ptr<PlayerSession>& caster,
+                                     const SkillDefinition& skill, std::uint64_t castId,
+                                     std::uint64_t targetEntityId) {
+    // 指令三十九：Instant 也必须 Started -> Completed -> Impact -> CombatEvent
+    //（统一协议，castTimeMs=0；指令八十三顺序：Completed 在 Impact/CombatEvent 之前）。
+    SendSkillCastStarted(CasterObservers(caster->CharacterId()), castId,
+                         caster->CharacterId(), skill.skillId,
+                         static_cast<std::uint8_t>(skill.targetType), targetEntityId, 0);
+    SendSkillCastCompleted(CasterObservers(caster->CharacterId()), castId,
+                           caster->CharacterId(), skill.skillId,
+                           static_cast<std::uint8_t>(skill.targetType), targetEntityId);
+    ResolveAndApplySkillDamage(caster, skill, castId, targetEntityId,
+                               skill.targetType == SkillTargetType::Monster);
+}
+
+void WorldServer::BeginTimedCast(const std::shared_ptr<PlayerSession>& caster,
+                                 const SkillDefinition& skill, std::uint64_t castId,
+                                 std::uint64_t targetEntityId, std::uint64_t requestId) {
+    // 指令十四/四十：进入 Casting；Skill Tick 统一检查完成（指令七十七：不 new thread）。
+    PendingSkillCast cast;
+    cast.active = true;
+    cast.castId = castId;
+    cast.skillId = skill.skillId;
+    cast.castRequestId = requestId;
+    cast.targetType = static_cast<std::uint8_t>(skill.targetType);
+    cast.targetEntityId = targetEntityId;
+    cast.castStartTime = std::chrono::steady_clock::now();
+    cast.castCompleteTime =
+        cast.castStartTime +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(skill.castTimeSeconds));
+    caster->SetCasting(cast);
+    SendSkillCastStarted(CasterObservers(caster->CharacterId()), castId,
+                         caster->CharacterId(), skill.skillId,
+                         static_cast<std::uint8_t>(skill.targetType), targetEntityId,
+                         static_cast<std::uint32_t>(skill.castTimeSeconds * 1000.0f));
+}
+
+void WorldServer::CancelActiveCast(const std::shared_ptr<PlayerSession>& caster,
+                                   SkillCancelReason reason) {
+    if (!caster->IsCasting()) {
+        return;
+    }
+    const PendingSkillCast cast = caster->Casting();
+    caster->ClearCasting();
+    // 指令九十四：取消不返还 Mana / 不清除 CD（Cooldown 已在接受时启动）。
+    SendSkillCastCancelled(CasterObservers(caster->CharacterId()), cast.castId,
+                           caster->CharacterId(), cast.skillId, reason);
+    LOG_INFO("[Skill] Player " + caster->CharacterName() + " (#" +
+             std::to_string(caster->CharacterId()) + ") cast " +
+             std::to_string(cast.skillId) + " cancelled (" +
+             SkillCancelReasonName(static_cast<std::uint8_t>(reason)) + ")");
+}
+
+void WorldServer::ScheduleSkillTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_skillTimer.expires_after(std::chrono::milliseconds(m_config.skillTickMs));
+    auto self = shared_from_this();
+    m_skillTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->RunSkillTick();
+        self->ScheduleSkillTick();
+    });
+}
+
+void WorldServer::RunSkillTick() {
+    // 指令七十七/七十八/八十：50ms Skill Tick（与 AI Tick 200ms 分离），统一
+    // 检查 Pending Cast 完成时间；不 new thread。
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        if (!player->IsCasting() || now < player->Casting().castCompleteTime) {
+            continue;
+        }
+        PendingSkillCast cast = player->Casting();
+        player->ClearCasting();
+        CompleteCast(player, cast);
+    }
+}
+
+void WorldServer::CompleteCast(const std::shared_ptr<PlayerSession>& caster,
+                               PendingSkillCast& cast) {
+    // 防御：施法完成时施法者死亡（AI 击杀发生在独立路径，正常已在 KillPlayer
+    // 取消）——不再结算。
+    if (!caster->Alive()) {
+        return;
+    }
+    const SkillDefinition* skill = m_skillRegistry.FindSkill(cast.skillId);
+    if (!skill) {
+        return; // 定义不可达（runtime only 注册表常驻）——防御
+    }
+    // 指令十八/四十二/四十三：完成时重新验证目标（exists/alive/sameMap/visible/
+    // range），失败 -> Cancelled(TargetInvalid)，不造成伤害。
+    if (skill->targetType == SkillTargetType::Monster) {
+        auto target = m_monsters.FindMonster(cast.targetEntityId);
+        bool valid = target != nullptr && target->Alive() &&
+                     target->MapId() == caster->MapId() &&
+                     caster->VisibleMonsters().count(cast.targetEntityId) != 0;
+        float dx = 0.0f;
+        float dy = 0.0f;
+        if (valid && target) {
+            dx = caster->PositionX() - target->PositionX();
+            dy = caster->PositionY() - target->PositionY();
+            const float rangeSquared = skill->range * skill->range;
+            valid = (dx * dx + dy * dy) <= rangeSquared; // 完成时重算服务器距离
+        }
+        if (!valid) {
+            SendSkillCastCancelled(CasterObservers(caster->CharacterId()), cast.castId,
+                                   caster->CharacterId(), cast.skillId,
+                                   SkillCancelReason::TargetInvalid);
+            LOG_INFO("[Skill] Player " + caster->CharacterName() + " cast " +
+                     std::to_string(cast.skillId) + " cancelled (TargetInvalid at complete).");
+            return;
+        }
+    }
+    // 指令二十七：SkillCastCompleted（顺序：Completed -> Impact -> CombatEvent
+    // -> MonsterDeath，指令八十三）。
+    SendSkillCastCompleted(CasterObservers(caster->CharacterId()), cast.castId,
+                           caster->CharacterId(), cast.skillId, cast.targetType,
+                           cast.targetEntityId);
+    ResolveAndApplySkillDamage(caster, *skill, cast.castId, cast.targetEntityId,
+                               skill->targetType == SkillTargetType::Monster);
+}
+
+void WorldServer::ResolveAndApplySkillDamage(const std::shared_ptr<PlayerSession>& caster,
+                                             const SkillDefinition& skill, std::uint64_t castId,
+                                             std::uint64_t targetEntityId,
+                                             bool hasTargetEntity) {
+    // ---- 收集目标 ----
+    std::vector<std::shared_ptr<MonsterEntity>> targets;
+    if (skill.aoeRadius > 0.0f) {
+        // 指令四十四：以 Caster 服务器权威位置为中心查 MonsterSpatialGrid
+        //（禁止遍历全部 Monster，指令一百二十一）。
+        auto candidates = m_monsterGrid.QueryNearbyMonsters(
+            caster->PositionX(), caster->PositionY(), skill.aoeRadius, 0);
+        targets = ResolveAoeTargets(candidates, caster->MapId(), skill.aoeRadius,
+                                    skill.maxTargets);
+    } else if (hasTargetEntity) {
+        // 单体：完成时/即时执行时目标仍存在（CompleteCast 已重验；Instant 在
+        // HandleSkillCastRequest 已验证——此处防御性复查 alive）。
+        auto target = m_monsters.FindMonster(targetEntityId);
+        if (target && target->Alive()) {
+            targets.push_back(target);
+        }
+    }
+
+    // ---- SkillImpactEvent 广播范围（指令五十二）：Caster + 能看到 Caster 的玩家
+    // + 能看到至少一个受影响 Monster 的玩家（去重，不全世界广播——指令五十四）。 ----
+    std::vector<std::uint64_t> receivers = CasterObservers(caster->CharacterId());
+
+    SkillImpactEventPayload impact;
+    impact.castId = castId;
+    impact.skillId = skill.skillId;
+    impact.casterCharacterId = caster->CharacterId();
+    impact.serverTime = ServerTimeMs();
+
+    // ---- 逐目标结算（指令三十七：damage = max(1, base + atk - def)）----
+    for (const auto& target : targets) {
+        const MonsterDefinition* targetDefinition = FindMonsterDefinition(target->MonsterTypeId());
+        const std::uint32_t damage =
+            CalculateSkillDamage(skill.baseDamage, caster->AttackPower(),
+                                 targetDefinition ? targetDefinition->defense : 0u);
+        const bool killed = target->ApplyDamage(damage);
+
+        SkillImpactTarget impactTarget;
+        impactTarget.entityType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+        impactTarget.entityId = target->EntityId();
+        impactTarget.damage = damage;
+        impactTarget.hpAfter = target->CurrentHp();
+        impactTarget.maxHp = target->MaxHp();
+        impactTarget.killed = killed;
+        impact.targets.push_back(impactTarget);
+        if (impact.targets.size() >= kSkillImpactMaxTargets) {
+            break; // 指令三十/八十五：硬上限 16
+        }
+
+        // 指令五十三：CombatEvent 继续复用阶段14 广播范围（目标怪观察者 ∪ 攻击者）。
+        std::vector<std::uint64_t> combatReceivers;
+        MergeReceiver(combatReceivers, caster->CharacterId());
+        for (const auto& observer : m_players.SnapshotPlayers()) {
+            if (observer->CharacterId() != caster->CharacterId() &&
+                observer->VisibleMonsters().count(target->EntityId()) != 0) {
+                MergeReceiver(combatReceivers, observer->CharacterId());
+            }
+        }
+        // 指令五十二：能看到受影响 Monster 的玩家也进 Impact 接收者。
+        for (const auto characterId : combatReceivers) {
+            MergeReceiver(receivers, characterId);
+        }
+
+        CombatEventPayload event;
+        event.eventId = m_nextCombatEventId++; // 指令十三：单调 eventId
+        event.attackerType = static_cast<std::uint8_t>(CombatEntityType::Player);
+        event.attackerId = caster->CharacterId();
+        event.targetType = static_cast<std::uint8_t>(CombatEntityType::Monster);
+        event.targetId = target->EntityId();
+        event.damage = damage;
+        event.targetHpAfter = target->CurrentHp();
+        event.targetMaxHp = target->MaxHp();
+        event.killed = killed;
+        event.serverTime = ServerTimeMs();
+        // 指令三十二/一百二十四：技能伤害来源（sourceType=Skill, sourceId=skillId）。
+        event.sourceType = static_cast<std::uint8_t>(CombatSource::Skill);
+        event.sourceId = skill.skillId;
+        BroadcastCombatEvent(event, combatReceivers);
+        LOG_INFO("[Combat] Skill " + std::to_string(skill.skillId) + " hit Monster #" +
+                 std::to_string(target->EntityId()) + " for " + std::to_string(damage) +
+                 " (hp=" + std::to_string(target->CurrentHp()) + ")");
+    }
+
+    // 指令八十三：Impact 在 CombatEvent 之后、MonsterDeath 之前发送（测试一致）。
+    SendSkillImpactEvent(receivers, impact);
+
+    // 指令八十一：技能击杀复用阶段14 KillMonster（不写第二套死亡代码）；
+    // 指令八十二：No Loot / No EXP；指令八十四：多死亡各自独立 MonsterDeath。
+    for (const auto& target : targets) {
+        if (!target->Alive() && target->CurrentHp() == 0 &&
+            target->State() != MonsterState::Dead) {
+            std::vector<std::uint64_t> deathReceivers;
+            MergeReceiver(deathReceivers, caster->CharacterId());
+            for (const auto& observer : m_players.SnapshotPlayers()) {
+                if (observer->CharacterId() != caster->CharacterId() &&
+                    observer->VisibleMonsters().count(target->EntityId()) != 0) {
+                    MergeReceiver(deathReceivers, observer->CharacterId());
+                }
+            }
+            KillMonster(target, caster->CharacterId(), deathReceivers);
+        }
+    }
+}
+
+void WorldServer::ScheduleManaSnapshotTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_manaTimer.expires_after(std::chrono::milliseconds(m_config.manaSnapshotIntervalMs));
+    auto self = shared_from_this();
+    m_manaTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->SendManaSnapshots();
+        self->ScheduleManaSnapshotTick();
+    });
+}
+
+void WorldServer::SendManaSnapshots() {
+    // 指令六十七：每 1s 给玩家本人发 ManaSnapshot（指令六十八：无 Regen，值恒定）。
+    const std::uint64_t serverTime = ServerTimeMs();
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        ManaSnapshotPayload out;
+        out.currentMana = player->CurrentMana();
+        out.maxMana = player->MaxMana();
+        out.serverTime = serverTime;
+        Packet packet;
+        packet.header.messageId = static_cast<std::uint16_t>(MessageId::ManaSnapshot);
+        if (EncodeManaSnapshot(out, packet.payload)) {
+            SendPacketToPlayer(player, packet);
+        }
+    }
+}
+
+void WorldServer::SendSkillCastResponse(const std::shared_ptr<PlayerSession>& player,
+                                        std::uint64_t requestId, SkillId skillId, bool accepted,
+                                        SkillResultCode code) {
+    if (!player) {
+        return; // NotInWorld/Malformed 时尽力回执（无会话则丢弃）
+    }
+    SkillCastResponsePayload out;
+    out.requestId = requestId;
+    out.skillId = skillId;
+    out.accepted = accepted;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.currentMana = player->CurrentMana(); // 指令二十四：回执带服务器权威 Mana
+    out.message = SkillResultCodeName(out.resultCode);
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::SkillCastResponse);
+    if (EncodeSkillCastResponse(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendSkillCastStarted(const std::vector<std::uint64_t>& receivers,
+                                       std::uint64_t castId, std::uint64_t casterCharacterId,
+                                       SkillId skillId, std::uint8_t targetType,
+                                       std::uint64_t targetEntityId, std::uint32_t castTimeMs) {
+    SkillCastStartedPayload out;
+    out.castId = castId;
+    out.casterCharacterId = casterCharacterId;
+    out.skillId = skillId;
+    out.targetType = targetType;
+    out.targetEntityId = targetEntityId;
+    out.castTimeMs = castTimeMs;
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::SkillCastStarted);
+    if (!EncodeSkillCastStarted(out, packet.payload)) {
+        return;
+    }
+    for (const auto characterId : receivers) {
+        auto player = m_players.FindByCharacter(characterId);
+        if (player) {
+            SendPacketToPlayer(player, packet);
+        }
+    }
+}
+
+void WorldServer::SendSkillCastCompleted(const std::vector<std::uint64_t>& receivers,
+                                         std::uint64_t castId, std::uint64_t casterCharacterId,
+                                         SkillId skillId, std::uint8_t targetType,
+                                         std::uint64_t targetEntityId) {
+    SkillCastCompletedPayload out;
+    out.castId = castId;
+    out.casterCharacterId = casterCharacterId;
+    out.skillId = skillId;
+    out.targetType = targetType;
+    out.targetEntityId = targetEntityId;
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::SkillCastCompleted);
+    if (!EncodeSkillCastCompleted(out, packet.payload)) {
+        return;
+    }
+    for (const auto characterId : receivers) {
+        auto player = m_players.FindByCharacter(characterId);
+        if (player) {
+            SendPacketToPlayer(player, packet);
+        }
+    }
+}
+
+void WorldServer::SendSkillCastCancelled(const std::vector<std::uint64_t>& receivers,
+                                         std::uint64_t castId, std::uint64_t casterCharacterId,
+                                         SkillId skillId, SkillCancelReason reason) {
+    SkillCastCancelledPayload out;
+    out.castId = castId;
+    out.casterCharacterId = casterCharacterId;
+    out.skillId = skillId;
+    out.reason = static_cast<std::uint8_t>(reason);
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::SkillCastCancelled);
+    if (!EncodeSkillCastCancelled(out, packet.payload)) {
+        return;
+    }
+    for (const auto characterId : receivers) {
+        auto player = m_players.FindByCharacter(characterId);
+        if (player) {
+            SendPacketToPlayer(player, packet);
+        }
+    }
+}
+
+void WorldServer::SendSkillImpactEvent(const std::vector<std::uint64_t>& receivers,
+                                       const SkillImpactEventPayload& impact) {
+    if (impact.targets.empty()) {
+        return; // 无目标不广播（例如单体目标已消失的防御路径）
+    }
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::SkillImpactEvent);
+    if (!EncodeSkillImpactEvent(impact, packet.payload)) {
+        return;
+    }
+    for (const auto characterId : receivers) {
+        auto player = m_players.FindByCharacter(characterId);
+        if (player) {
+            SendPacketToPlayer(player, packet);
+        }
     }
 }
 

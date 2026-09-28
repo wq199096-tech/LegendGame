@@ -10,6 +10,8 @@
 #include "Server/WorldServer/Monster/MonsterAi.h"
 #include "Server/WorldServer/Monster/MonsterManager.h"
 #include "Server/WorldServer/Monster/MonsterSpatialGrid.h"
+#include "Server/WorldServer/Skill/SkillRegistry.h"
+#include "Server/WorldServer/Skill/SkillService.h"
 #include "Server/WorldServer/WorldManager.h"
 #include "Server/WorldServer/WorldMapManager.h"
 #include "Server/WorldServer/WorldSession.h"
@@ -17,6 +19,8 @@
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Network/MessageId.h"
+#include "Shared/Skill/SkillProtocol.h"
+#include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldError.h"
 
 #include <asio.hpp>
@@ -62,6 +66,10 @@ public:
         int monsterAiTickMs = kMonsterAiTickMs;               // 200ms
         // 阶段14 指令六十八：Health Snapshot 纠偏（1s，单条）
         int healthSnapshotIntervalMs = kHealthSnapshotIntervalMs;
+        // 阶段15 指令七十七/七十八：Skill Tick 50ms（与 AI Tick 200ms 分离，指令八十）
+        int skillTickMs = 50;
+        // 阶段15 指令六十七：ManaSnapshot 周期（1s，发给玩家本人）
+        int manaSnapshotIntervalMs = 1000;
     };
 
     struct Hooks {
@@ -90,6 +98,10 @@ public:
     std::shared_ptr<PlayerSession> FindPlayerByCharacter(std::uint64_t characterId) const {
         return m_players.FindByCharacter(characterId);
     }
+    // 阶段15：施法中的玩家数（测试/运维用）。
+    std::size_t CastingPlayerCount() const;
+    // 阶段15：测试/布景辅助——移动怪物（含 SpatialGrid cell 更新；测试确定性布景用）。
+    bool MoveMonsterTo(std::uint64_t entityId, float x, float y);
 
 private:
     struct PendingTicket {
@@ -177,6 +189,45 @@ private:
                                   CombatEntityType entityType, std::uint64_t entityId,
                                   std::uint32_t currentHp, std::uint32_t maxHp, bool alive);
 
+    // 阶段15：技能（指令三十三/三十五~四十六/七十一~八十九/一百二十一）
+    void HandleSkillCastRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void ExecuteInstantCast(const std::shared_ptr<PlayerSession>& caster,
+                            const SkillDefinition& skill, std::uint64_t castId,
+                            std::uint64_t targetEntityId);
+    void BeginTimedCast(const std::shared_ptr<PlayerSession>& caster,
+                        const SkillDefinition& skill, std::uint64_t castId,
+                        std::uint64_t targetEntityId, std::uint64_t requestId);
+    void CompleteCast(const std::shared_ptr<PlayerSession>& caster, PendingSkillCast& cast);
+    void CancelActiveCast(const std::shared_ptr<PlayerSession>& caster,
+                          SkillCancelReason reason);
+    void ResolveAndApplySkillDamage(const std::shared_ptr<PlayerSession>& caster,
+                                    const SkillDefinition& skill, std::uint64_t castId,
+                                    std::uint64_t targetEntityId, bool hasTargetEntity);
+    void ScheduleSkillTick();
+    void RunSkillTick();
+    void ScheduleManaSnapshotTick();
+    void SendManaSnapshots();
+    void SendSkillCastResponse(const std::shared_ptr<PlayerSession>& player,
+                               std::uint64_t requestId, SkillId skillId, bool accepted,
+                               SkillResultCode code);
+    void SendSkillCastStarted(const std::vector<std::uint64_t>& receivers,
+                              std::uint64_t castId, std::uint64_t casterCharacterId,
+                              SkillId skillId, std::uint8_t targetType,
+                              std::uint64_t targetEntityId, std::uint32_t castTimeMs);
+    void SendSkillCastCompleted(const std::vector<std::uint64_t>& receivers,
+                                std::uint64_t castId, std::uint64_t casterCharacterId,
+                                SkillId skillId, std::uint8_t targetType,
+                                std::uint64_t targetEntityId);
+    void SendSkillCastCancelled(const std::vector<std::uint64_t>& receivers,
+                                std::uint64_t castId, std::uint64_t casterCharacterId,
+                                SkillId skillId, SkillCancelReason reason);
+    void SendSkillImpactEvent(const std::vector<std::uint64_t>& receivers,
+                              const SkillImpactEventPayload& impact);
+    // 阶段15：收集"能看到 caster 的玩家 ∪ caster"（Started/Completed/Cancelled）
+    std::vector<std::uint64_t> CasterObservers(std::uint64_t casterCharacterId) const;
+    // 阶段15 指令一百二十九：合并去重接收者。
+    static void MergeReceiver(std::vector<std::uint64_t>& receivers, std::uint64_t characterId);
+
     // 位置保存（指令五十二/五十三/五十四/五十六）
     void SavePlayerPosition(const std::shared_ptr<PlayerSession>& player, bool touchLastPlayed);
     void SavePlayerPositionNow(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
@@ -206,6 +257,12 @@ private:
     // 阶段14：战斗（指令十三：eventId 单调；runtime only 不持久化，指令八十）
     std::uint64_t m_nextCombatEventId = 1;
 
+    // 阶段15：技能（指令二十六：castId 单调，不能用 Client requestId；
+    // 指令三十三：SkillRegistry/SkillService 拆分；runtime only 不持久化，
+    // 指令一百四十七：重启 Mana 恢复 100、CD 清空、Pending Cast 消失）
+    SkillRegistry m_skillRegistry;
+    std::uint64_t m_nextCastId = 1;
+
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;
     legend::account::DbWorker m_dbWorker;
@@ -218,6 +275,8 @@ private:
     asio::steady_timer m_aoiTimer;        // 阶段12 指令六十九：AOI tick 200ms，Stop 时 cancel
     asio::steady_timer m_monsterAiTimer;  // 阶段13 指令三十：AI tick 200ms，Stop 时 cancel
     asio::steady_timer m_healthTimer;     // 阶段14 指令六十八：1s HP 纠偏，Stop 时 cancel
+    asio::steady_timer m_skillTimer;      // 阶段15 指令七十八：Skill Tick 50ms，Stop 时 cancel
+    asio::steady_timer m_manaTimer;       // 阶段15 指令六十七：1s Mana 快照，Stop 时 cancel
 
     std::uint64_t m_nextRequestId = 1; // 指令七十三：单调增长
     Hooks m_hooks;

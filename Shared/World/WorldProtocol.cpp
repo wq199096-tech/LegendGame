@@ -68,6 +68,9 @@ bool EncodeEnterWorldResponse(const EnterWorldResponsePayload& p, std::vector<st
         w.WriteUInt32(p.currentHp);
         w.WriteUInt32(p.maxHp);
         w.WriteBool(p.alive);
+        // 阶段15 指令六十九：玩家 Mana
+        w.WriteUInt32(p.currentMana);
+        w.WriteUInt32(p.maxMana);
         w.WriteUInt16(p.errorCode);
         return w.WriteString(p.characterName) && w.WriteString(p.message);
     });
@@ -90,6 +93,8 @@ bool DecodeEnterWorldResponse(const std::uint8_t* data, std::size_t size,
         out.currentHp = r.ReadUInt32();
         out.maxHp = r.ReadUInt32();
         out.alive = r.ReadBool();
+        out.currentMana = r.ReadUInt32();
+        out.maxMana = r.ReadUInt32();
         out.errorCode = r.ReadUInt16();
         (void)(r.ReadString(out.characterName) && r.ReadString(out.message));
     });

@@ -60,6 +60,16 @@ void RemotePlayerManager::ApplyHealthSnapshot(std::uint64_t characterId, std::ui
     }
 }
 
+void RemotePlayerManager::ApplyCastState(std::uint64_t characterId, bool casting,
+                                         std::uint32_t skillId, std::uint64_t startServerTime,
+                                         std::uint32_t durationMs) {
+    // 阶段15 指令五十七：Started/Completed/Cancelled 驱动的远程施法表现。
+    const auto it = m_players.find(characterId);
+    if (it != m_players.end()) {
+        it->second.ApplyCastState(casting, skillId, startServerTime, durationMs);
+    }
+}
+
 const RemotePlayerEntity* RemotePlayerManager::Find(std::uint64_t characterId) const {
     const auto it = m_players.find(characterId);
     return it != m_players.end() ? &it->second : nullptr;

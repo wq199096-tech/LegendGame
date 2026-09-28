@@ -36,6 +36,8 @@
 #include "Engine/Progression/LevelSystem.h"
 #include "Engine/Render/SpriteBatch.h"
 #include "Engine/Render/Texture.h"
+#include "Shared/Skill/SkillDefinition.h"
+#include "Shared/Skill/SkillTypes.h"
 
 GameScene::~GameScene() = default; // 阶段9：unique_ptr 完整类型在此实例化
 
@@ -427,6 +429,56 @@ void GameScene::Update(float deltaTime) {
             LOG_INFO("[Combat] Space -> no visible alive monster.");
         }
     }
+    // ---- 阶段15 指令五十九~六十二：Debug 技能键 1/2/3（Space 保留普攻）----
+    // 1 = Quick Strike / 2 = Fire Bolt（自动选最近 visible+alive Monster，仅
+    // Debug 便利——服务器重新验证一切，指令六十）；3 = Whirlwind（无目标，
+    // targetType=Self + targetEntityId=0，指令六十一）。Client 不做本地伤害预测
+    //（指令五十九/一百五十九：accepted 后才开始表现，Impact 到达才播命中）。
+    if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+        auto& world = m_networkController->World();
+        std::uint32_t skillId = 0;
+        if (input.IsKeyPressed(SDL_SCANCODE_1)) {
+            skillId = legend::world::kSkillIdQuickStrike;
+        } else if (input.IsKeyPressed(SDL_SCANCODE_2)) {
+            skillId = legend::world::kSkillIdFireBolt;
+        } else if (input.IsKeyPressed(SDL_SCANCODE_3)) {
+            skillId = legend::world::kSkillIdWhirlwind;
+        }
+        if (skillId != 0) {
+            if (skillId == legend::world::kSkillIdWhirlwind) {
+                world.SendSkillCast(skillId,
+                                    static_cast<std::uint8_t>(legend::world::SkillTargetType::Self),
+                                    0);
+                LOG_INFO("[Skill] Key3 -> Whirlwind (Self).");
+            } else {
+                const float selfX = world.ServerPositionX();
+                const float selfY = world.ServerPositionY();
+                std::uint64_t bestId = 0;
+                float bestDistSq = 0.0f;
+                for (const auto& [entityId, monster] : world.RemoteMonsters().All()) {
+                    if (!monster.Alive()) {
+                        continue; // 指令六十：最近目标选择忽略 alive=false
+                    }
+                    const float dx = monster.ServerX() - selfX;
+                    const float dy = monster.ServerY() - selfY;
+                    const float distSq = dx * dx + dy * dy;
+                    if (bestId == 0 || distSq < bestDistSq) {
+                        bestId = entityId;
+                        bestDistSq = distSq;
+                    }
+                }
+                if (bestId != 0) {
+                    world.SendSkillCast(
+                        skillId, static_cast<std::uint8_t>(legend::world::SkillTargetType::Monster),
+                        bestId);
+                    LOG_INFO("[Skill] Key -> skill " + std::to_string(skillId) + " on Monster #" +
+                             std::to_string(bestId));
+                } else {
+                    LOG_INFO("[Skill] Key -> no visible alive monster.");
+                }
+            }
+        }
+    }
     if (input.IsKeyPressed(SDL_SCANCODE_F6)) {
         m_equipmentDebug = !m_equipmentDebug;
         LOG_INFO(m_equipmentDebug ? "Equipment debug: enabled (F6)"
@@ -722,6 +774,26 @@ void GameScene::DrawRemotePlayers(legend::render::SpriteBatch& batch) {
         batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -70.0f),
                        {12.0f / 64.0f, 12.0f / 64.0f}, 0.0f,
                        legend::math::Color(1.0f, 1.0f, 1.0f, 0.95f));
+        // 阶段15 指令六十五：施法中显示蓝色标记（仅 Debug，不做正式技能美术）。
+        if (remote.Casting()) {
+            batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -84.0f),
+                           {20.0f / 64.0f, 8.0f / 64.0f}, 0.0f,
+                           legend::math::Color(0.25f, 0.45f, 1.0f, 0.9f));
+            // Whirlwind：半透明 Debug 范围框（半径 160 → 320x320 Quad 边界）。
+            if (remote.CastingSkillId() == legend::world::kSkillIdWhirlwind) {
+                batch.DrawQuad(*m_whiteTexture, feet, {320.0f / 64.0f, 320.0f / 64.0f}, 0.0f,
+                               legend::math::Color(0.6f, 0.7f, 1.0f, 0.12f));
+            }
+        }
+    }
+    // 阶段15 指令六十五：本地玩家 Cast-Time 施法中的蓝色标记（画在服务器权威
+    // 位置；Whirlwind 是 Instant 无持续表现，仅 CastTime 技能显示）。
+    if (m_networkController->World().IsWorldReady() && m_networkController->World().LocalCasting()) {
+        const auto& world = m_networkController->World();
+        const legend::math::Vector2 feet(world.ServerPositionX(), world.ServerPositionY());
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -84.0f),
+                       {20.0f / 64.0f, 8.0f / 64.0f}, 0.0f,
+                       legend::math::Color(0.25f, 0.45f, 1.0f, 0.9f));
     }
 }
 

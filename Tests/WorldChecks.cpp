@@ -11,10 +11,12 @@ using namespace worldtest;
 // 阶段12 指令七十四：AOI 检查入口（WorldAoiChecks.cpp，自带 servers 生命周期）。
 // 阶段13 指令七十二：怪物检查入口（WorldMonsterChecks.cpp，自带 servers 生命周期）。
 // 阶段14 指令九十六：战斗检查入口（WorldCombatChecks.cpp，自带 servers 生命周期）。
+// 阶段15 指令九十九：技能检查入口（WorldSkillChecks.cpp，自带 servers 生命周期）。
 namespace worldtest {
 void RunWorldAoiChecks();
 void RunWorldMonsterChecks();
 void RunWorldCombatChecks();
+void RunWorldSkillChecks();
 }
 
 namespace {
@@ -845,6 +847,9 @@ int main() {
 
     // ---- 阶段14 战斗检查（指令九十六：独立 servers 生命周期） ----
     RunWorldCombatChecks();
+
+    // ---- 阶段15 技能检查（指令九十九：独立 servers 生命周期） ----
+    RunWorldSkillChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

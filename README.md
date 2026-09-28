@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Server-authoritative Combat & Damage Core V0.14**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Skill & Ability Replication Core V0.15**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -182,6 +182,59 @@ Login 链路断开时已在线玩家不受影响，WorldServer 自动重连。
   No Loot / No EXP / No Level up / No Respawn / No Boss / No Hit VFX / No Floating damage UI
 - **验收**：LegendWorldTests 165 Check 全绿（DamageFormula/攻击链/距离/冷却/重放/刷包/
   击杀/死亡广播/清理/多客户端复制/断线/持久化边界等）；双 Client 同区域看到相同 HP 变化
+
+**技能、施法与战斗表现同步（阶段15：Skill & Ability Replication Core V0.15）**：
+
+- **技能效果 100% WorldServer 权威**：Client 只发"我要释放哪个技能，以及目标是谁"
+  （SkillCastRequest 只含 requestId/skillId/targetType/targetEntityId，禁止传伤害/Mana/
+  CD/CastTime/AOE 位置/命中结果）；伤害/命中/冷却完成/Mana 消耗/施法完成时间/AOE 命中
+  目标/死亡全部由服务器决定；Client 不做本地伤害预测（进度条仅展示，完成必须等
+  SkillCastCompleted/SkillImpactEvent）
+- **三个固定测试技能**（SkillRegistry 硬编码，不上 JSON 不进数据库，Definition 不可由
+  Client 上传）：1001 Quick Strike（Instant 单体，CD 1.5s，耗蓝 10，距离 120，伤害 30）/
+  1002 Fire Bolt（CastTime 1s，CD 3s，耗蓝 20，距离 500，伤害 40）/
+  1003 Whirlwind（Instant 自体 AOE，半径 160，最多 16 目标，伤害 25，只打 Monster）
+- **SkillService / SkillRegistry**（`Server/WorldServer/Skill/`）：纯函数验证链
+  （CasterDead → NotInWorld → AlreadyCasting → TargetDead → InvalidTarget(不可见/类型伪造)
+  → DifferentMap → OutOfRange → Cooldown → NotEnoughMana）；技能伤害公式
+  `damage = max(1, baseDamage + attackPower - defense)`（48/58/43），不随机不暴击；
+  普通攻击继续走阶段14 公式（18/次）互不影响
+- **Mana（阶段15 不持久化、无 Regen）**：默认 100/100；只有 WorldServer 扣 Mana（Client
+  不能发送剩余 Mana）；**施法被服务器正式接受时扣**，之后因移动/死亡/目标消失取消一律
+  不返还；currentMana 永不为负；每 1s ManaSnapshot 纠偏（本人）；EnterWorldResponse 携带
+  currentMana/maxMana
+- **Cooldown / CastingState**：每技能独立 nextReadyTime（steady_clock 权威，Client 时间
+  不可信）；服务器正式接受施法时启动（不等命中）；同一时间只能施放一个（Casting 期间
+  一切新技能 → AlreadyCasting；普通攻击 → Busy）；castId 为服务器单调 uint64（与 Client
+  requestId 严格区分）
+- **施法生命周期**：Instant 立即结算但同样发送 SkillCastStarted(castTimeMs=0)→Completed→
+  Impact→CombatEvent（统一协议）；Cast-Time 由 WorldServer 统一 Skill Tick（50ms，与
+  AI Tick 200ms 分离，不建 per-cast 线程）完成时重验目标（exists/alive/sameMap/visible/
+  range），失败 → SkillCastCancelled(TargetInvalid) 不造成伤害；有效移动 → Cancelled(Moved)
+  （direction 0,0 不取消）；死亡 → Cancelled(Dead)；断线 → Pending Cast 随 PlayerSession
+  清除；重进世界 Mana=100 / CD 清空（不持久化边界）
+- **AOE 目标解析**：以 Caster 服务器权威位置查 MonsterSpatialGrid（禁止全 Monster 遍历）；
+  过滤 alive=false / 跨地图；distanceSquared 升序 + entityId 升序稳定排序；最多 16 目标；
+  不伤玩家（无 PvP）
+- **广播范围**：Started/Completed/Cancelled = Caster ∪ 能看到 Caster 的玩家；Impact =
+  Caster ∪ 能看到 Caster 的玩家 ∪ 能看到至少一个受影响怪物的玩家（去重，不全世界广播）；
+  CombatEvent 复用阶段14 范围并扩展 sourceType(BasicAttack=1/Skill=2) + sourceId(skillId)
+- **技能击杀**：复用阶段14 KillMonster（state=Dead/target 清空/MonsterDeath/3 秒清理），
+  不写第二套死亡代码；No Loot / No EXP；多个死亡各自独立 MonsterDeath
+- **协议**：SkillCastRequest=260 / SkillCastResponse=261 / SkillCastStarted=262 /
+  SkillCastCompleted=263 / SkillCastCancelled=264 / SkillImpactEvent=265 / ManaSnapshot=266；
+  SkillImpact 最多 16 目标（Decode 超过拒绝）；所有 Decode 严格 IsValid && Remaining==0；
+  World 协议版本 2 → 3（旧版本握手拒绝）
+- **客户端**：Debug 键 1/2/3（QuickStrike/FireBolt/Whirlwind；1/2 自动选最近可见存活怪，
+  服务器重新验证；3 无目标 Self）；Space 保留普攻；F12 增加 Mana current/max 与
+  Casting/SkillId/CastProgress；施法中 Caster 头顶蓝色 Debug 标记（正式技能美术后续阶段）；
+  RemotePlayerEntity 携带 casting/castingSkillId/castStartServerTime/castDurationMs
+- **明确不做**（后续阶段）：No Buff/Debuff/DOT/HOT/Stun/Root/Knockback/Shield/Heal/Summon/
+  Pet/Projectile 物理/技能树/天赋/职业成长/装备加成/技能升级/PvP Skill/Boss 技能/怪物技能/
+  Combo/Channeling/蓄力/持续施法/打断抗性/元素系统/Mana Regen/掉落/经验
+- **验收**：LegendWorldTests 新增 WorldSkillChecks（SkillDefinition/协议 Roundtrip/畸形包/
+  AOE 排序与上限/Mana 下限/施法链/移动与死亡取消/目标重验/观察者复制/无全局广播/无重复
+  广播/Mana 快照/刷包限流/断线/重进/持久化边界等）全部 0 failures
 
 **Account Database（SQLite3）**：
 

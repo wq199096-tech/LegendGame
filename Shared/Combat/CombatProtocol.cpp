@@ -89,6 +89,9 @@ bool EncodeCombatEvent(const CombatEventPayload& p, std::vector<std::uint8_t>& o
         w.WriteUInt32(p.targetMaxHp);
         w.WriteBool(p.killed);
         w.WriteUInt64(p.serverTime);
+        // 阶段15 指令三十二：伤害来源（BasicAttack/Skill + skillId）。
+        w.WriteUInt8(p.sourceType);
+        w.WriteUInt64(p.sourceId);
         return true;
     });
 }
@@ -106,6 +109,8 @@ bool DecodeCombatEvent(const std::uint8_t* data, std::size_t size, CombatEventPa
         out.targetMaxHp = r.ReadUInt32();
         out.killed = r.ReadBool();
         out.serverTime = r.ReadUInt64();
+        out.sourceType = r.ReadUInt8();
+        out.sourceId = r.ReadUInt64();
     });
 }
 

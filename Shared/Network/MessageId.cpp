@@ -52,6 +52,13 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::EntityHealthSnapshot: return "EntityHealthSnapshot";
         case MessageId::MonsterDeath: return "MonsterDeath";
         case MessageId::PlayerDeath: return "PlayerDeath";
+        case MessageId::SkillCastRequest: return "SkillCastRequest";
+        case MessageId::SkillCastResponse: return "SkillCastResponse";
+        case MessageId::SkillCastStarted: return "SkillCastStarted";
+        case MessageId::SkillCastCompleted: return "SkillCastCompleted";
+        case MessageId::SkillCastCancelled: return "SkillCastCancelled";
+        case MessageId::SkillImpactEvent: return "SkillImpactEvent";
+        case MessageId::ManaSnapshot: return "ManaSnapshot";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

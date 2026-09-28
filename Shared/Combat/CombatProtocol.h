@@ -37,6 +37,8 @@ struct PlayerAttackResponsePayload {
 };
 
 // CombatEvent(252)（指令十二）：服务器生成的战斗事件广播（eventId 单调，指令十三）。
+// 阶段15 指令三十二：增加 sourceType（BasicAttack=1/Skill=2）与 sourceId
+//（普通攻击 0 / 技能 skillId）——技能伤害仍产生 CombatEvent，不绕开阶段14 协议。
 struct CombatEventPayload {
     std::uint64_t eventId = 0;
     std::uint8_t attackerType = 0; // CombatEntityType
@@ -48,6 +50,8 @@ struct CombatEventPayload {
     std::uint32_t targetMaxHp = 0;
     bool killed = false;
     std::uint64_t serverTime = 0;
+    std::uint8_t sourceType = 1;   // CombatSource（默认 BasicAttack 兼容阶段14）
+    std::uint64_t sourceId = 0;    // 普通攻击 0 / 技能 skillId
 };
 
 // EntityHealthSnapshot(253)（指令十四）：1s 纠偏快照（单条，指令六十九）。
