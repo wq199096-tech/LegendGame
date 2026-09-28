@@ -618,6 +618,8 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
 
     // 阶段12 指令四十/四十五：远程玩家 Debug 绘制（跟随相机剔除由 SpriteBatch 裁剪）
     DrawRemotePlayers(m_mapRenderer.GetBatch());
+    // 阶段13 指令五十六/五十七：远程怪物 Debug 绘制
+    DrawRemoteMonsters(m_mapRenderer.GetBatch());
 
     if (m_collisionDebug) {
         m_mapRenderer.RenderCollisionOverlay(*m_map);
@@ -686,6 +688,35 @@ void GameScene::DrawRemotePlayers(legend::render::SpriteBatch& batch) {
         batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -70.0f),
                        {12.0f / 64.0f, 12.0f / 64.0f}, 0.0f,
                        legend::math::Color(1.0f, 1.0f, 1.0f, 0.95f));
+    }
+}
+
+// 阶段13 指令五十六/五十七：远程怪物 Debug 绘制——红/橙 Quad 与远程玩家（绿色）区分；
+// 状态着色（指令五十五）：Idle 暗红 / Patrol 橙 / Chase 亮红 / Returning 黄。
+// 无攻击表现（指令一百一十七：即使 Chase 到玩家身边也不播放攻击）。
+void GameScene::DrawRemoteMonsters(legend::render::SpriteBatch& batch) {
+    if (!m_networkController || !m_whiteTexture) {
+        return;
+    }
+    const auto& monsters = m_networkController->World().RemoteMonsters().All();
+    for (const auto& [entityId, monster] : monsters) {
+        const legend::math::Vector2 feet(monster.RenderX(), monster.RenderY());
+        legend::math::Color bodyColor(0.85f, 0.25f, 0.20f, 0.95f); // Idle 暗红
+        if (monster.State() == static_cast<std::uint8_t>(legend::world::MonsterState::Patrol)) {
+            bodyColor = legend::math::Color(0.95f, 0.55f, 0.15f, 0.95f); // Patrol 橙
+        } else if (monster.State() ==
+                   static_cast<std::uint8_t>(legend::world::MonsterState::Chase)) {
+            bodyColor = legend::math::Color(1.0f, 0.15f, 0.10f, 1.0f); // Chase 亮红
+        } else if (monster.State() ==
+                   static_cast<std::uint8_t>(legend::world::MonsterState::Returning)) {
+            bodyColor = legend::math::Color(0.95f, 0.90f, 0.25f, 0.95f); // Returning 黄
+        }
+        // 身体 40x40 + 头顶橙色小方块标记
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -20.0f),
+                       {40.0f / 64.0f, 40.0f / 64.0f}, 0.0f, bodyColor);
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -50.0f),
+                       {10.0f / 64.0f, 10.0f / 64.0f}, 0.0f,
+                       legend::math::Color(1.0f, 0.55f, 0.10f, 0.95f));
     }
 }
 

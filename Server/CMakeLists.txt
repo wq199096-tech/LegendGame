@@ -117,6 +117,11 @@ add_library(LegendWorldCore STATIC
     WorldServer/WorldMapManager.cpp
     WorldServer/PlayerSession.cpp
     WorldServer/AOI/WorldSpatialGrid.cpp
+    WorldServer/Monster/MonsterDefinition.cpp
+    WorldServer/Monster/MonsterEntity.cpp
+    WorldServer/Monster/MonsterManager.cpp
+    WorldServer/Monster/MonsterSpatialGrid.cpp
+    WorldServer/Monster/MonsterAi.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)

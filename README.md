@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**AOI & Multiplayer Replication Core V0.12**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Server-authoritative Monster & AI Core V0.13**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -118,6 +118,33 @@ Login 链路断开时已在线玩家不受影响，WorldServer 自动重连。
   远程玩家不接受本地输入，移动方向/亮暗色由服务器位置差估算（不同步动画帧/技能）；
   F12 World Debug 增加 remotes=N / batch=M / 远程玩家名列表
 - **双开验收**：两个 LegendClient 不同账号进入同一地图，靠近互见、移动同步、走远消失、走近重现
+
+**服务器权威怪物与基础 AI（阶段13：Server-authoritative Monster & AI Core V0.13）**：
+
+- **怪物完全由 WorldServer 权威控制**：Client 不能生成/决定位置/AI 状态/目标，只根据
+  MonsterSpawn / MonsterBatchSnapshot / MonsterDespawn 显示
+- **MonsterDefinition**（`Server/WorldServer/Monster/`）：硬编码 Training Slime（monsterTypeId=1，
+  level=1，moveSpeed=80，aggroRadius=350，leashRadius=600，patrolRadius=180）；不上 JSON 数据库
+- **MonsterEntity / MonsterManager / MonsterSpatialGrid**：entityId 为 WorldServer 单调计数器；
+  空间网格 cellSize=400（与玩家 AOI 同构）；怪物 runtime only（不进数据库，重启重新生成）
+- **固定初始布局**：map1 固定 20 只 Training Slime（5 簇 x 4 只固定位置表，测试可复现）
+- **AI 状态机**（AI Tick 200ms，World io 线程，dt clamp 0.25s）：
+  Idle(固定 2s) → Patrol（spawn 附近 <=180 确定性目标点，entityId+patrolSequence 决定角度，
+  到达 <=10 回 Idle）→ 玩家进入 aggro 350（经玩家 SpatialGrid 查询，最近优先/同距离
+  characterId 最小）→ Chase（朝玩家权威位置 80 units/s 直线移动）→ 离 spawn>600（Leash）/
+  目标>525（aggro*1.5）/ 目标断线 → Returning → 回到 spawn(<=10) → Idle。
+  **禁止 Attack/Cast/Hit/Dead——怪物追到玩家身边也不攻击（Combat not implemented yet）**
+- **怪物 AOI**：EnterRadius=600 / LeaveRadius=700 滞回（与玩家一致）；每玩家服务器权威
+  visibleMonsters 集合；Spawn/Despawn exactly-once；离开再进入重新 Spawn
+- **协议**：MonsterSpawn=240 / MonsterDespawn=241（LeftAOI/Removed/ChangedMap/ServerCleanup）/
+  MonsterBatchSnapshot=242（serverTime+count+entries，单批 <=128 超出拆包，count>128 拒解码）；
+  每 100ms 复用快照 timer 下发 visibleMonsters batch（不含远处怪物，禁止全图广播）
+- **客户端**：RemoteMonsterEntity / RemoteMonsterManager（network thread → event queue →
+  main thread）；插值 1-exp(-12dt)，位置差 >300 直接 snap；state 切换调试表现（不同步动画帧/
+  技能）；Debug Quad 红色系（Idle 暗红/Patrol 橙/Chase 亮红/Returning 黄）与远程玩家绿色区分；
+  F12 增加 monsters=N / mbatch=M
+- **双开验收**：两个 Client 进入同一地图可见附近 Training Slime；怪物 Idle→Patrol，玩家靠近
+  Chase，玩家跑远 Returning 回出生点 Idle；两个 Client 看到同一怪物位置与状态一致
 
 **Account Database（SQLite3）**：
 

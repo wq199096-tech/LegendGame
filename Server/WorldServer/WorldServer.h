@@ -7,6 +7,9 @@
 #include "Server/LoginServer/Account/Database/Database.h"
 #include "Server/LoginServer/Account/DbWorker.h"
 #include "Server/WorldServer/AOI/WorldSpatialGrid.h"
+#include "Server/WorldServer/Monster/MonsterAi.h"
+#include "Server/WorldServer/Monster/MonsterManager.h"
+#include "Server/WorldServer/Monster/MonsterSpatialGrid.h"
 #include "Server/WorldServer/WorldManager.h"
 #include "Server/WorldServer/WorldMapManager.h"
 #include "Server/WorldServer/WorldSession.h"
@@ -52,6 +55,8 @@ public:
         float aoiEnterRadius = kAoiEnterRadius;              // 指令六：600
         float aoiLeaveRadius = kAoiLeaveRadius;              // 指令七：700（滞回）
         std::size_t aoiVisibleLimit = kAoiVisibleLimit;      // 指令二十七：128
+        // 阶段13：怪物 AI（指令三十/六十九）
+        int monsterAiTickMs = kMonsterAiTickMs;               // 200ms
     };
 
     struct Hooks {
@@ -67,6 +72,15 @@ public:
     bool IsLoginConnected() const { return m_loginAvailable.load(); }
     std::size_t PlayerCount() const { return m_players.PlayerCount(); }
     void SetHooks(Hooks hooks) { m_hooks = std::move(hooks); }
+
+    // 阶段13：怪物访问器（测试/运维用；MonsterManager 内部互斥）。
+    std::size_t MonsterCount() const { return m_monsters.Count(); }
+    std::vector<std::uint64_t> MonsterEntityIds() const;
+    std::shared_ptr<MonsterEntity> FindMonster(std::uint64_t entityId) const {
+        return m_monsters.FindMonster(entityId);
+    }
+    // 阶段13 指令一百零六：移除怪物 -> 可见玩家收到 MonsterDespawn(Removed)。
+    bool RemoveMonster(std::uint64_t entityId);
 
 private:
     struct PendingTicket {
@@ -121,6 +135,20 @@ private:
     void SendPacketToPlayer(const std::shared_ptr<PlayerSession>& player,
                             const legend::network::Packet& packet);
 
+    // 阶段13：怪物（指令十五/三十/三十一/六十五/六十九/七十/一百零六）
+    void SpawnInitialMonsters();
+    void ScheduleMonsterAiTick();
+    void RunMonsterAiTick();
+    void UpdatePlayerMonsterVisibility(const std::shared_ptr<PlayerSession>& player,
+                                       bool initialVisibility);
+    void NotifyMonsterGoneToObservers(std::uint64_t monsterEntityId, MonsterDespawnReason reason);
+    void SendMonsterSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                          const std::shared_ptr<MonsterEntity>& monster);
+    void SendMonsterDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                            std::uint64_t monsterEntityId, MonsterDespawnReason reason);
+    void SendMonsterBatches(const std::shared_ptr<PlayerSession>& player, std::uint64_t serverTime);
+    void OnTargetPlayerRemoved(std::uint64_t characterId);
+
     // 位置保存（指令五十二/五十三/五十四/五十六）
     void SavePlayerPosition(const std::shared_ptr<PlayerSession>& player, bool touchLastPlayed);
     void SavePlayerPositionNow(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
@@ -142,6 +170,10 @@ private:
     WorldManager m_players;
     WorldMapManager m_mapManager;
     WorldSpatialGrid m_spatialGrid; // 阶段12 指令九：仅 io 线程访问（无锁）
+    // 阶段13：怪物系统（runtime only，指令六十六：不进数据库）
+    MonsterManager m_monsters;
+    MonsterSpatialGrid m_monsterGrid;
+    std::uint64_t m_nextMonsterEntityId = 1; // 指令七：单调计数器
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;
@@ -152,7 +184,8 @@ private:
     asio::steady_timer m_snapshotTimer;
     asio::steady_timer m_saveTimer;
     asio::steady_timer m_idleTimer;
-    asio::steady_timer m_aoiTimer; // 阶段12 指令六十九：AOI tick 200ms，Stop 时 cancel
+    asio::steady_timer m_aoiTimer;        // 阶段12 指令六十九：AOI tick 200ms，Stop 时 cancel
+    asio::steady_timer m_monsterAiTimer;  // 阶段13 指令三十：AI tick 200ms，Stop 时 cancel
 
     std::uint64_t m_nextRequestId = 1; // 指令七十三：单调增长
     Hooks m_hooks;

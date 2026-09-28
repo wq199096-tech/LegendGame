@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Shared/Monster/MonsterTypes.h"
+
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -53,6 +55,17 @@ public:
     void ClearVisiblePlayers() { m_visiblePlayers.clear(); }
     std::size_t VisibleCount() const { return m_visiblePlayers.size(); }
 
+    // 阶段13 指令十三/十四：可见怪物集合（monsterEntityId），WorldServer 权威维护。
+    const std::unordered_set<std::uint64_t>& VisibleMonsters() const { return m_visibleMonsters; }
+    void AddVisibleMonster(std::uint64_t monsterEntityId) {
+        m_visibleMonsters.insert(monsterEntityId);
+    }
+    bool EraseVisibleMonster(std::uint64_t monsterEntityId) {
+        return m_visibleMonsters.erase(monsterEntityId) != 0;
+    }
+    void ClearVisibleMonsters() { m_visibleMonsters.clear(); }
+    std::size_t VisibleMonsterCount() const { return m_visibleMonsters.size(); }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -69,6 +82,8 @@ private:
     std::chrono::steady_clock::time_point m_lastMoveTime{std::chrono::steady_clock::now()};
     // 阶段12 指令十三：仅 WorldServer io 线程维护。
     std::unordered_set<std::uint64_t> m_visiblePlayers;
+    // 阶段13 指令十三：可见怪物集合（仅 io 线程维护）。
+    std::unordered_set<std::uint64_t> m_visibleMonsters;
 };
 
 } // namespace legend::world

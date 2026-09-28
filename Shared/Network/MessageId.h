@@ -52,6 +52,10 @@ enum class MessageId : std::uint16_t {
     PlayerDespawn = 231,
     RemotePlayerSnapshot = 232,
     RemotePlayerBatchSnapshot = 233,
+    // 阶段13 指令十七：服务器权威怪物
+    MonsterSpawn = 240,
+    MonsterDespawn = 241,
+    MonsterBatchSnapshot = 242,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -142,6 +146,9 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::PlayerDespawn:
         case MessageId::RemotePlayerSnapshot:
         case MessageId::RemotePlayerBatchSnapshot:
+        case MessageId::MonsterSpawn:
+        case MessageId::MonsterDespawn:
+        case MessageId::MonsterBatchSnapshot:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

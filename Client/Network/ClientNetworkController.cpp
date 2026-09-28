@@ -95,6 +95,8 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
     }
     // 阶段12 指令三十七/四十七：主线程远程玩家插值
     m_world.UpdateRemotePlayers(deltaTime);
+    // 阶段13 指令五十三/六十：主线程远程怪物插值
+    m_world.UpdateRemoteMonsters(deltaTime);
 
     // 指令六十四：心跳超时检测
     m_client->UpdateHeartbeat(deltaTime);
@@ -293,6 +295,11 @@ std::string ClientNetworkController::WorldStatusText() const {
     text += std::to_string(m_world.RemotePlayers().Count());
     text += " batch=";
     text += std::to_string(m_world.LastRemoteBatchSize());
+    // 阶段13 指令五十八：F12 增加 VisibleMonsters / LastMonsterBatchSize / MonsterCount。
+    text += " monsters=";
+    text += std::to_string(m_world.RemoteMonsters().Count());
+    text += " mbatch=";
+    text += std::to_string(m_world.LastMonsterBatchSize());
     // 阶段12 指令四十四：Debug 列出前 4 个远程玩家名（无世界内文字渲染器，
     // 名字随 F12 面板显示；正式头顶 UI 后续单独阶段）。
     if (m_world.RemotePlayers().Count() > 0) {

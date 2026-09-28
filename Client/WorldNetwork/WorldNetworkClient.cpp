@@ -340,6 +340,58 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             PushEvent(std::move(event));
             return;
         }
+        // ------------------------------------------------------------------
+        // 阶段13 指令五十九：Monster 事件（Spawn/Despawn/Batch）
+        // ------------------------------------------------------------------
+        case MessageId::MonsterSpawn: {
+            world::MonsterSpawnPayload spawn;
+            std::string decodeError;
+            if (!world::DecodeMonsterSpawn(packet.payload.data(), packet.payload.size(), spawn,
+                                           decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::MonsterSpawn;
+            event.monsterEntityId = spawn.entityId;
+            event.monsterTypeId = spawn.monsterTypeId;
+            event.monsterState = spawn.state;
+            event.characterName = spawn.name;
+            event.level = spawn.level;
+            event.mapId = spawn.mapId;
+            event.positionX = spawn.positionX;
+            event.positionY = spawn.positionY;
+            event.serverTime = spawn.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::MonsterDespawn: {
+            world::MonsterDespawnPayload despawn;
+            std::string decodeError;
+            if (!world::DecodeMonsterDespawn(packet.payload.data(), packet.payload.size(), despawn,
+                                             decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::MonsterDespawn;
+            event.monsterEntityId = despawn.entityId;
+            event.despawnReason = despawn.reason;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::MonsterBatchSnapshot: {
+            world::MonsterBatchSnapshotPayload batch;
+            std::string decodeError;
+            if (!world::DecodeMonsterBatchSnapshot(packet.payload.data(), packet.payload.size(),
+                                                   batch, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::MonsterBatchSnapshot;
+            event.serverTime = batch.serverTime;
+            event.monsterBatch = std::move(batch.monsters);
+            PushEvent(std::move(event));
+            return;
+        }
         case MessageId::HeartbeatPong: {
             legend::network::ByteReader reader(packet.payload.data(), packet.payload.size());
             reader.ReadUInt32(); // pingSequence

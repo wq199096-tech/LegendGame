@@ -2,6 +2,8 @@
 
 #include "Engine/Debug/Logger.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
+#include "Shared/Monster/MonsterProtocol.h"
+#include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/Protocol.h"
 #include "Shared/World/WorldError.h"
@@ -47,7 +49,8 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_snapshotTimer(service.Io()),
       m_saveTimer(service.Io()),
       m_idleTimer(service.Io()),
-      m_aoiTimer(service.Io()) {}
+      m_aoiTimer(service.Io()),
+      m_monsterAiTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -81,6 +84,8 @@ bool WorldServer::Start(std::string& error) {
     ScheduleSaveTimer();
     ScheduleClientIdleCheck();
     ScheduleAoiTick(); // 阶段12 指令六十九：AOI tick 200ms
+    SpawnInitialMonsters();   // 阶段13 指令十五/十六：固定 20 只 Training Slime
+    ScheduleMonsterAiTick();  // 阶段13 指令三十：AI tick 200ms
     return true;
 }
 
@@ -92,7 +97,12 @@ void WorldServer::Stop() {
     m_snapshotTimer.cancel();
     m_saveTimer.cancel();
     m_idleTimer.cancel();
-    m_aoiTimer.cancel(); // 指令六十九：Stop 时 cancel AOI tick
+    m_aoiTimer.cancel();        // 指令六十九：Stop 时 cancel AOI tick
+    m_monsterAiTimer.cancel();  // 阶段13 指令六十五：停止 AI Timer
+    // 阶段13 指令六十五/六十六：清 Monster（runtime only，无持久化）。
+    m_monsters.Clear();
+    m_monsterGrid = MonsterSpatialGrid{};
+    m_nextMonsterEntityId = 1; // 指令六十七：重启 entityId 允许重新开始
     m_loginClient->Cancel();
     if (m_loginConnection) {
         m_loginConnection->Close();
@@ -189,6 +199,8 @@ void WorldServer::OnClientClosed(std::uint64_t connectionId, const std::error_co
         //（防 ghost player），并从他们的 visiblePlayers 清除。
         m_spatialGrid.RemovePlayer(player->CharacterId());
         NotifyPlayerGoneToObservers(player->CharacterId(), PlayerDespawnReason::Disconnected);
+        // 阶段13 指令四十四：目标玩家离线 -> 追击它的怪物立刻 Returning。
+        OnTargetPlayerRemoved(player->CharacterId());
         SavePlayerPositionNow(player->CharacterId(), player->MapId(), player->PositionX(),
                               player->PositionY());
         LOG_INFO("[World] Player left character=" + player->CharacterName() + " (#" +
@@ -633,6 +645,8 @@ void WorldServer::SendPositionSnapshots() {
         SendPacketToPlayer(player, out);
         // 阶段12 指令二十九：visiblePlayers 的位置 batch（100ms）。
         SendRemoteBatches(player, serverTime);
+        // 阶段13 指令四十九/五十/七十：visibleMonsters 的 MonsterBatch（同一 timer）。
+        SendMonsterBatches(player, serverTime);
     }
 }
 
@@ -816,6 +830,8 @@ void WorldServer::RunAoiTick() {
             LOG_DEBUG("[World] AOI leave char=" + std::to_string(player->CharacterId()) +
                       " lost=" + std::to_string(despawnId));
         }
+        // 阶段13 指令二十五~二十九：怪物 AOI 差量（同一 tick，独立 resolver）。
+        UpdatePlayerMonsterVisibility(player, false);
     }
 }
 
@@ -848,6 +864,8 @@ void WorldServer::InitializePlayerVisibility(const std::shared_ptr<PlayerSession
             candidate.player->AddVisiblePlayer(player->CharacterId());
         }
     }
+    // 阶段13 指令二十四：进入世界还必须收到附近怪物 MonsterSpawn。
+    UpdatePlayerMonsterVisibility(player, true);
 }
 
 void WorldServer::NotifyPlayerGoneToObservers(std::uint64_t characterId,
@@ -940,6 +958,195 @@ void WorldServer::SendPacketToPlayer(const std::shared_ptr<PlayerSession>& playe
     }
     if (session) {
         session->SendPacket(packet);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段13：服务器权威怪物（指令十五/十七~三十一/四十九/五十八/六十五~七十/一百零六）
+// ---------------------------------------------------------------------------
+
+std::vector<std::uint64_t> WorldServer::MonsterEntityIds() const {
+    std::vector<std::uint64_t> ids;
+    for (const auto& monster : m_monsters.SnapshotMonsters()) {
+        ids.push_back(monster->EntityId());
+    }
+    return ids;
+}
+
+void WorldServer::SpawnInitialMonsters() {
+    // 指令十五/十六：map1 固定生成 20 只 Training Slime（固定位置表，测试可复现）。
+    const MonsterDefinition* definition = FindMonsterDefinition(kTrainingSlimeTypeId);
+    if (!definition) {
+        LOG_ERROR("[World] Monster definition missing (Training Slime).");
+        return;
+    }
+    for (const auto& point : kInitialMonsterSpawnTable) {
+        auto monster = std::make_shared<MonsterEntity>(m_nextMonsterEntityId++,
+                                                       definition->monsterTypeId, kDefaultMapId,
+                                                       point.x, point.y, definition->moveSpeed);
+        if (!m_monsters.SpawnMonster(monster)) {
+            LOG_WARN("[World] Monster spawn duplicate entityId=" +
+                     std::to_string(monster->EntityId()));
+            continue;
+        }
+        m_monsterGrid.AddMonster(monster);
+    }
+    LOG_INFO("[World] Spawned " + std::to_string(m_monsters.Count()) + " " +
+             definition->name + " monsters (fixed table).");
+}
+
+void WorldServer::ScheduleMonsterAiTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_monsterAiTimer.expires_after(std::chrono::milliseconds(m_config.monsterAiTickMs));
+    auto self = shared_from_this();
+    m_monsterAiTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->RunMonsterAiTick();
+        self->ScheduleMonsterAiTick();
+    });
+}
+
+void WorldServer::RunMonsterAiTick() {
+    // 指令三十/三十一/六十九：AI tick 200ms，World io 线程执行（无 AI 线程池）；
+    // AI 与 AOI 解耦（指令六十八）：本 tick 只推进状态与位置。
+    const MonsterDefinition* definition = FindMonsterDefinition(kTrainingSlimeTypeId);
+    if (!definition) {
+        return;
+    }
+    const float dt = static_cast<float>(m_config.monsterAiTickMs) / 1000.0f; // server tick dt
+    for (const auto& monster : m_monsters.SnapshotMonsters()) {
+        StepMonsterAi(*monster, *definition, dt, m_spatialGrid, m_players);
+        m_monsterGrid.UpdateMonsterCell(monster); // AI 移动后重挂 cell
+    }
+}
+
+void WorldServer::UpdatePlayerMonsterVisibility(const std::shared_ptr<PlayerSession>& player,
+                                                bool initialVisibility) {
+    // 指令二十五/二十六/二十七：怪物 AOI 差量（Enter 600 / Leave 700 滞回）。
+    // initialVisibility=true 时为进入世界初始可见性（只发 <=600 的初始 spawn）。
+    auto candidates =
+        m_monsterGrid.QueryNearbyMonsters(player->PositionX(), player->PositionY(),
+                                          m_config.aoiLeaveRadius, 0);
+    const MonsterAoiDelta delta = ResolveMonsterAoiVisibility(
+        candidates, player->MapId(), player->VisibleMonsters(), m_config.aoiEnterRadius,
+        m_config.aoiLeaveRadius, m_config.aoiVisibleLimit);
+    for (const auto& spawn : delta.spawns) {
+        // 指令二十八：visibleMonsters 期间只 Spawn 一次。
+        SendMonsterSpawn(player, spawn);
+        player->AddVisibleMonster(spawn->EntityId());
+        LOG_DEBUG("[World] Monster AOI enter char=" + std::to_string(player->CharacterId()) +
+                  " monster=" + std::to_string(spawn->EntityId()));
+    }
+    if (!initialVisibility) {
+        for (const auto despawnId : delta.despawns) {
+            // 指令二十六/二十九：离开只 Despawn 一次；重新进入由下轮 tick Spawn。
+            SendMonsterDespawn(player, despawnId, MonsterDespawnReason::LeftAOI);
+            player->EraseVisibleMonster(despawnId);
+            LOG_DEBUG("[World] Monster AOI leave char=" + std::to_string(player->CharacterId()) +
+                      " monster=" + std::to_string(despawnId));
+        }
+    }
+}
+
+void WorldServer::NotifyMonsterGoneToObservers(std::uint64_t monsterEntityId,
+                                               MonsterDespawnReason reason) {
+    // 指令一百零六：所有可见该怪物的玩家收到 Despawn，并清除 visibleMonsters。
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->EraseVisibleMonster(monsterEntityId)) {
+            SendMonsterDespawn(observer, monsterEntityId, reason);
+        }
+    }
+}
+
+bool WorldServer::RemoveMonster(std::uint64_t entityId) {
+    auto monster = m_monsters.RemoveMonster(entityId);
+    if (!monster) {
+        return false;
+    }
+    m_monsterGrid.RemoveMonster(entityId);
+    NotifyMonsterGoneToObservers(entityId, MonsterDespawnReason::Removed);
+    LOG_INFO("[World] Monster removed entityId=" + std::to_string(entityId));
+    return true;
+}
+
+void WorldServer::OnTargetPlayerRemoved(std::uint64_t characterId) {
+    // 指令四十四：目标玩家离线 -> 追击它的怪物立刻 Returning。
+    for (const auto& monster : m_monsters.SnapshotMonsters()) {
+        if (monster->State() == MonsterState::Chase &&
+            monster->TargetCharacterId() == characterId) {
+            monster->SetTargetCharacterId(0);
+            monster->SetState(MonsterState::Returning);
+            monster->TouchStateEnterTime();
+            LOG_DEBUG("[World] Monster #" + std::to_string(monster->EntityId()) +
+                      " target lost (player removed) -> Returning");
+        }
+    }
+}
+
+void WorldServer::SendMonsterSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                                   const std::shared_ptr<MonsterEntity>& monster) {
+    const MonsterDefinition* definition = FindMonsterDefinition(monster->MonsterTypeId());
+    MonsterSpawnPayload payload;
+    payload.entityId = monster->EntityId();
+    payload.monsterTypeId = monster->MonsterTypeId();
+    payload.name = definition ? definition->name : "Monster";
+    payload.level = definition ? definition->level : 1;
+    payload.mapId = monster->MapId();
+    payload.positionX = monster->PositionX();
+    payload.positionY = monster->PositionY();
+    payload.state = static_cast<std::uint8_t>(monster->State());
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::MonsterSpawn);
+    if (EncodeMonsterSpawn(payload, out.payload)) {
+        SendPacketToPlayer(receiver, out);
+    }
+}
+
+void WorldServer::SendMonsterDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                                     std::uint64_t monsterEntityId, MonsterDespawnReason reason) {
+    MonsterDespawnPayload payload;
+    payload.entityId = monsterEntityId;
+    payload.reason = static_cast<std::uint8_t>(reason);
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::MonsterDespawn);
+    if (EncodeMonsterDespawn(payload, out.payload)) {
+        SendPacketToPlayer(receiver, out);
+    }
+}
+
+void WorldServer::SendMonsterBatches(const std::shared_ptr<PlayerSession>& player,
+                                     std::uint64_t serverTime) {
+    // 指令四十九/五十：只发 visibleMonsters（禁止全地图广播）；
+    // 指令二十/二十一：entry {entityId,x,y,state,target}；指令二十二：单包 <=128 拆包。
+    std::vector<MonsterSnapshotEntry> entries;
+    entries.reserve(player->VisibleMonsterCount());
+    for (const auto entityId : player->VisibleMonsters()) {
+        const auto monster = m_monsters.FindMonster(entityId);
+        if (!monster) {
+            continue; // 可见集短暂残留（下个 AOI tick 清理）
+        }
+        entries.push_back({monster->EntityId(), monster->PositionX(), monster->PositionY(),
+                           static_cast<std::uint8_t>(monster->State()),
+                           monster->TargetCharacterId()});
+    }
+    for (std::size_t offset = 0; offset < entries.size(); offset += kMonsterBatchMaxMonsters) {
+        MonsterBatchSnapshotPayload batch;
+        batch.serverTime = serverTime;
+        const auto begin = entries.begin() + static_cast<std::ptrdiff_t>(offset);
+        const auto end = entries.begin() +
+                         static_cast<std::ptrdiff_t>(
+                             std::min(offset + kMonsterBatchMaxMonsters, entries.size()));
+        batch.monsters.assign(begin, end);
+        Packet out;
+        out.header.messageId = static_cast<std::uint16_t>(MessageId::MonsterBatchSnapshot);
+        if (EncodeMonsterBatchSnapshot(batch, out.payload)) {
+            SendPacketToPlayer(player, out);
+        }
     }
 }
 

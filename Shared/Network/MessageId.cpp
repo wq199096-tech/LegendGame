@@ -43,6 +43,9 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::PlayerDespawn: return "PlayerDespawn";
         case MessageId::RemotePlayerSnapshot: return "RemotePlayerSnapshot";
         case MessageId::RemotePlayerBatchSnapshot: return "RemotePlayerBatchSnapshot";
+        case MessageId::MonsterSpawn: return "MonsterSpawn";
+        case MessageId::MonsterDespawn: return "MonsterDespawn";
+        case MessageId::MonsterBatchSnapshot: return "MonsterBatchSnapshot";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

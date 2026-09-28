@@ -9,8 +9,10 @@
 using namespace worldtest;
 
 // 阶段12 指令七十四：AOI 检查入口（WorldAoiChecks.cpp，自带 servers 生命周期）。
+// 阶段13 指令七十二：怪物检查入口（WorldMonsterChecks.cpp，自带 servers 生命周期）。
 namespace worldtest {
 void RunWorldAoiChecks();
+void RunWorldMonsterChecks();
 }
 
 namespace {
@@ -835,6 +837,9 @@ int main() {
 
     // ---- 阶段12 AOI 检查（指令七十四：独立 servers 生命周期，同端口串行复用） ----
     RunWorldAoiChecks();
+
+    // ---- 阶段13 怪物检查（指令七十二：独立 servers 生命周期） ----
+    RunWorldMonsterChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/WorldNetworkClient.h"
 
@@ -13,6 +14,7 @@ namespace legend::client {
 // CharacterSelect 成功后（拿到 selectionTicket）自动连接 WorldServer；
 // 只更新自身状态/缓存，禁止直接修改 PlayerCharacter/Combat。
 // 阶段12：持有 RemotePlayerManager（指令三十三，主线程独占，指令四十七）。
+// 阶段13：持有 RemoteMonsterManager（指令五十二/六十）。
 class WorldClientController {
 public:
     WorldClientController();
@@ -22,6 +24,8 @@ public:
     void OnDisconnected();
     // 阶段12 指令三十七：每帧远程玩家插值（主线程）。
     void UpdateRemotePlayers(float deltaTime);
+    // 阶段13 指令五十三：每帧远程怪物插值（主线程）。
+    void UpdateRemoteMonsters(float deltaTime);
 
     // 指令四十六：CharacterSelect 成功后调用（自动连接 + EnterWorld）。
     void EnterWorldWithTicket(const std::string& selectionTicket);
@@ -41,6 +45,9 @@ public:
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
+    // 阶段13 指令五十二/五十八：远程怪物容器与 Debug 统计。
+    const RemoteMonsterManager& RemoteMonsters() const { return m_remoteMonsters; }
+    std::uint32_t LastMonsterBatchSize() const { return m_lastMonsterBatchSize; }
     float ServerPositionX() const { return m_serverPositionX; }
     float ServerPositionY() const { return m_serverPositionY; }
     std::uint32_t LastServerInputSequence() const { return m_lastServerSequence; }
@@ -58,6 +65,8 @@ private:
     WorldFlowState m_state = WorldFlowState::Disconnected;
     RemotePlayerManager m_remotePlayers; // 阶段12 指令三十三
     std::uint32_t m_lastRemoteBatchSize = 0;
+    RemoteMonsterManager m_remoteMonsters; // 阶段13 指令五十二
+    std::uint32_t m_lastMonsterBatchSize = 0;
 
     std::uint64_t m_characterId = 0;
     std::uint16_t m_mapId = 1;

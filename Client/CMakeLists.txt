@@ -11,6 +11,8 @@ add_library(LegendClientAccount STATIC
     WorldNetwork/WorldClientController.cpp
     WorldNetwork/RemotePlayerEntity.cpp
     WorldNetwork/RemotePlayerManager.cpp
+    WorldNetwork/RemoteMonsterEntity.cpp
+    WorldNetwork/RemoteMonsterManager.cpp
 )
 target_include_directories(LegendClientAccount PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendClientAccount PUBLIC cxx_std_20)

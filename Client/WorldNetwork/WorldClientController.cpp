@@ -20,6 +20,11 @@ void WorldClientController::UpdateRemotePlayers(float deltaTime) {
     m_remotePlayers.Update(deltaTime);
 }
 
+void WorldClientController::UpdateRemoteMonsters(float deltaTime) {
+    // 阶段13 指令五十三/六十：主线程怪物插值。
+    m_remoteMonsters.Update(deltaTime);
+}
+
 void WorldClientController::EnterWorldWithTicket(const std::string& selectionTicket) {
     if (selectionTicket.empty()) {
         return;
@@ -44,12 +49,14 @@ void WorldClientController::SendMoveInput(float directionX, float directionY, fl
 
 void WorldClientController::Disconnect() {
     m_client->Disconnect(true);
-    m_remotePlayers.Clear(); // 阶段12 指令五十九（客户端侧）：断开清空远程实体
+    m_remotePlayers.Clear();   // 阶段12 指令五十九（客户端侧）：断开清空远程实体
+    m_remoteMonsters.Clear();  // 阶段13：断开清空远程怪物
     SetState(WorldFlowState::Disconnected);
 }
 
 void WorldClientController::OnDisconnected() {
     m_remotePlayers.Clear();
+    m_remoteMonsters.Clear();
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -65,7 +72,8 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             break;
         case WorldNetworkEvent::Type::Disconnected:
             LOG_INFO("[World] Disconnected: " + event.message);
-            m_remotePlayers.Clear(); // 阶段12 指令五十九
+            m_remotePlayers.Clear();  // 阶段12 指令五十九
+            m_remoteMonsters.Clear(); // 阶段13
             SetState(WorldFlowState::Disconnected);
             break;
         case WorldNetworkEvent::Type::HandshakeSuccess:
@@ -87,6 +95,8 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_lastError.clear();
             m_remotePlayers.Clear(); // 阶段12：新世界会话不残留上次远程实体
             m_lastRemoteBatchSize = 0;
+            m_remoteMonsters.Clear(); // 阶段13：新世界会话不残留上次远程怪物
+            m_lastMonsterBatchSize = 0;
             SetState(WorldFlowState::WorldReady);
             LOG_INFO("[World] EnterWorld success character=" + event.characterName + " (#" +
                      std::to_string(event.characterId) + ") map=" + std::to_string(event.mapId) +
@@ -140,6 +150,39 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             batch.players = event.batchPlayers;
             m_remotePlayers.HandleBatch(batch);
             m_lastRemoteBatchSize = static_cast<std::uint32_t>(batch.players.size());
+            break;
+        }
+        // ------------------------------------------------------------------
+        // 阶段13 指令五十九/六十/六十一/六十二：Monster 事件 -> RemoteMonsterManager
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::MonsterSpawn: {
+            world::MonsterSpawnPayload spawn;
+            spawn.entityId = event.monsterEntityId;
+            spawn.monsterTypeId = event.monsterTypeId;
+            spawn.name = event.characterName;
+            spawn.level = event.level;
+            spawn.mapId = event.mapId;
+            spawn.positionX = event.positionX;
+            spawn.positionY = event.positionY;
+            spawn.state = event.monsterState;
+            spawn.serverTime = event.serverTime;
+            m_remoteMonsters.HandleSpawn(spawn);
+            LOG_DEBUG("[World] MonsterSpawn #" + std::to_string(event.monsterEntityId) + " " +
+                      event.characterName);
+            break;
+        }
+        case WorldNetworkEvent::Type::MonsterDespawn:
+            m_remoteMonsters.HandleDespawn(event.monsterEntityId);
+            LOG_DEBUG("[World] MonsterDespawn #" + std::to_string(event.monsterEntityId) +
+                      " reason=" + std::to_string(static_cast<int>(event.despawnReason)));
+            break;
+        case WorldNetworkEvent::Type::MonsterBatchSnapshot: {
+            // 指令六十一/九十七：未知 entityId 丢弃在 Manager 内处理。
+            world::MonsterBatchSnapshotPayload batch;
+            batch.serverTime = event.serverTime;
+            batch.monsters = event.monsterBatch;
+            m_remoteMonsters.HandleBatch(batch);
+            m_lastMonsterBatchSize = static_cast<std::uint32_t>(batch.monsters.size());
             break;
         }
         case WorldNetworkEvent::Type::ProtocolError:

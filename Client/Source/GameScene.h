@@ -62,6 +62,8 @@ private:
     void DrawCharacterDebug(legend::render::SpriteBatch& batch);
     // 阶段12 指令四十/四十五：远程玩家 Debug 绘制（复用 Debug Quad，不做正式美术）
     void DrawRemotePlayers(legend::render::SpriteBatch& batch);
+    // 阶段13 指令五十六/五十七：远程怪物 Debug 绘制（红/橙 Debug Quad，不做美术）
+    void DrawRemoteMonsters(legend::render::SpriteBatch& batch);
 
     // ---- 阶段4：World Actor System ----
     // 阶段4 静态自检：注册表 / 目标句柄 / 生成器（结果写日志）

@@ -3,6 +3,8 @@
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
 
+#include "Shared/Monster/MonsterProtocol.h"
+#include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
 #include "Shared/World/WorldProtocol.h"
@@ -49,6 +51,10 @@ struct WorldNetworkEvent {
         PlayerSpawn,
         PlayerDespawn,
         RemotePlayerBatchSnapshot,
+        // 阶段13 指令五十九：服务器权威怪物事件
+        MonsterSpawn,
+        MonsterDespawn,
+        MonsterBatchSnapshot,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -73,6 +79,12 @@ struct WorldNetworkEvent {
     std::uint8_t despawnReason = 0;
     std::uint64_t serverTime = 0;
     std::vector<world::RemotePlayerBatchEntry> batchPlayers;
+
+    // 阶段13：Monster 事件字段（指令五十九；Spawn 元数据复用 name/level/mapId/x/y）
+    std::uint64_t monsterEntityId = 0;
+    std::uint32_t monsterTypeId = 0;
+    std::uint8_t monsterState = 0;
+    std::vector<world::MonsterSnapshotEntry> monsterBatch;
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
