@@ -97,6 +97,17 @@ void GameNetworkClient::SendLogin(const std::string& username, const std::string
     }
 }
 
+void GameNetworkClient::SendAccountPacket(std::uint16_t messageId,
+                                          const std::vector<std::uint8_t>& payload) {
+    if (m_state.load() != NetworkState::Ready || !m_connection) {
+        return;
+    }
+    Packet out;
+    out.header.messageId = messageId;
+    out.payload = payload;
+    m_connection->Send(out);
+}
+
 void GameNetworkClient::PollEvents(std::deque<NetworkEvent>& out) {
     std::lock_guard<std::mutex> lock(m_eventMutex);
     while (!m_events.empty()) {
@@ -227,6 +238,139 @@ void GameNetworkClient::OnPacket(const Packet& packet) {
             event.accountId = response.accountId;
             event.errorCode = response.errorCode;
             event.displayName = response.displayName;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        // ---- 阶段10 指令五十八：Account / Character 响应 -> 事件 ----
+        case MessageId::RegisterResponse: {
+            legend::account::RegisterResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeRegisterResponse(packet.payload.data(),
+                                                         packet.payload.size(), response,
+                                                         decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::RegisterResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.accountId = response.accountId;
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::AccountLoginResponse: {
+            legend::account::AccountLoginResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeAccountLoginResponse(packet.payload.data(),
+                                                             packet.payload.size(), response,
+                                                             decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::AccountLoginResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.accountId = response.accountId;
+            event.sessionToken = std::move(response.sessionToken);
+            event.expiresAt = response.expiresAt;
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::SessionResumeResponse: {
+            legend::account::SessionResumeResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeSessionResumeResponse(packet.payload.data(),
+                                                              packet.payload.size(), response,
+                                                              decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::SessionResumeResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.accountId = response.accountId;
+            event.expiresAt = response.expiresAt;
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::CharacterListResponse: {
+            legend::account::CharacterListResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeCharacterListResponse(packet.payload.data(),
+                                                              packet.payload.size(), response,
+                                                              decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::CharacterListResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.characters = std::move(response.characters);
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::CharacterCreateResponse: {
+            legend::account::CharacterCreateResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeCharacterCreateResponse(packet.payload.data(),
+                                                                packet.payload.size(), response,
+                                                                decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::CharacterCreateResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.character = response.character;
+            event.characterId = response.character.characterId;
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::CharacterDeleteResponse: {
+            legend::account::CharacterDeleteResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeCharacterDeleteResponse(packet.payload.data(),
+                                                                packet.payload.size(), response,
+                                                                decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::CharacterDeleteResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.characterId = response.characterId;
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::CharacterSelectResponse: {
+            legend::account::CharacterSelectResponsePayload response;
+            std::string decodeError;
+            if (!legend::account::DecodeCharacterSelectResponse(packet.payload.data(),
+                                                                packet.payload.size(), response,
+                                                                decodeError)) {
+                return;
+            }
+            NetworkEvent event;
+            event.type = NetworkEvent::Type::CharacterSelectResponse;
+            event.requestId = response.requestId;
+            event.success = response.success;
+            event.character = response.character;
+            event.characterId = response.character.characterId;
+            event.selectionTicket = std::move(response.selectionTicket);
+            event.errorCode = response.errorCode;
             event.message = response.message;
             PushEvent(std::move(event));
             return;

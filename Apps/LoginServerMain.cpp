@@ -39,6 +39,13 @@ int main(int argc, char** argv) {
                          (success ? "success account=" + std::to_string(accountId)
                                   : std::string("rejected")));
             },
+        // 阶段10 指令六十九：只记录 messageId/accountId/结果，绝不含 password/token/ticket
+        .onAccountResult =
+            [](std::uint16_t innerMessageId, std::uint64_t accountId, bool success) {
+                LOG_INFO(std::string("[Login] Account result msg=") +
+                         legend::network::MessageIdName(innerMessageId) + " account=" +
+                         std::to_string(accountId) + " -> " + (success ? "success" : "failed"));
+            },
     });
 
     std::string error;

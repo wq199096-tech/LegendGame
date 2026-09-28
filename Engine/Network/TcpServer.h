@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 
 namespace legend::net {
 
@@ -44,7 +45,10 @@ private:
     asio::ip::tcp::socket m_nextSocket;
     AcceptHandler m_onAccept;
     std::atomic<std::uint64_t> m_nextConnectionId{1}; // 指令二十七：单调分配
-    std::map<std::uint64_t, TcpConnectionPtr> m_connections; // strand 内访问
+    // 阶段10：m_connections 由 io 线程（accept/内部关闭回调）与持有者线程
+    //（Stop）并发访问——加锁（Stop 遍历 vs RemoveConnection erase 竞态修复）
+    std::mutex m_connectionsMutex;
+    std::map<std::uint64_t, TcpConnectionPtr> m_connections;
     std::atomic<bool> m_accepting{false};
 };
 

@@ -1,11 +1,30 @@
 # ---------------------------------------------------------------------------
+# LegendClientAccount：客户端账号/角色控制器 + 网络客户端（阶段10 指令五十七）
+# 独立静态库：LegendClient 与 LegendAccountTests 共用（不依赖 SDL）。
+# ---------------------------------------------------------------------------
+add_library(LegendClientAccount STATIC
+    Network/GameNetworkClient.cpp
+    Account/AccountClientController.cpp
+    Account/CharacterSelectionController.cpp
+)
+target_include_directories(LegendClientAccount PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendClientAccount PUBLIC cxx_std_20)
+target_link_libraries(LegendClientAccount
+    PUBLIC
+        LegendNetworkTransport
+        LegendServerCommon
+)
+if(MSVC)
+    target_compile_options(LegendClientAccount PRIVATE /utf-8)
+endif()
+
+# ---------------------------------------------------------------------------
 # LegendClient：游戏客户端可执行程序
 # ---------------------------------------------------------------------------
 add_executable(LegendClient
     Source/Main.cpp
     Source/LegendApp.cpp
     Source/GameScene.cpp
-    Network/GameNetworkClient.cpp
     Network/ClientNetworkController.cpp
     Source/ProgressionChecks.cpp
     Source/EquipmentChecks.cpp
@@ -32,7 +51,7 @@ add_executable(LegendClient
     World/WorldActorManager.cpp
 )
 
-target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport)
+target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport LegendClientAccount)
 
 if(MSVC)
     target_compile_options(LegendClient PRIVATE /utf-8)

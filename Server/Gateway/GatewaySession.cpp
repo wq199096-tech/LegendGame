@@ -140,10 +140,48 @@ bool GatewaySession::HandlePostHandshake(const Packet& packet, std::string& erro
             return true;
         }
         default:
+            // 阶段10 指令五十四：Account 请求 -> 暂存待 GatewayServer 包装信封转发
+            //（Gateway 不解析/不修改业务 payload，不直接访问 SQLite/角色表）
+            if (legend::network::IsAccountMessageId(packet.header.messageId)) {
+                if (m_hasPendingAccountForward) {
+                    error = "account forward already pending";
+                    return false; // 单连接不允许积压（上一包尚未被取走）
+                }
+                m_pendingAccountPacket = packet;
+                m_hasPendingAccountForward = true;
+                return true;
+            }
             // 指令七十：未知 messageId -> Protocol Error 断开
             error = "unknown message id";
             return false;
     }
+}
+
+bool GatewaySession::TryBeginAccount(std::uint16_t innerMessageId, std::uint64_t requestId) {
+    // 阶段10 指令一百零二：同 Session 同种写请求未完成时拒绝重复。
+    return m_inflightAccount.emplace(innerMessageId, requestId).second;
+}
+
+void GatewaySession::EndAccount(std::uint16_t innerMessageId) {
+    m_inflightAccount.erase(innerMessageId);
+}
+
+void GatewaySession::CancelAllAccount() {
+    m_inflightAccount.clear();
+}
+
+bool GatewaySession::HasInflightAccount() const {
+    return !m_inflightAccount.empty();
+}
+
+bool GatewaySession::TakePendingAccountForward(legend::network::Packet& out) {
+    if (!m_hasPendingAccountForward) {
+        return false;
+    }
+    out = std::move(m_pendingAccountPacket);
+    m_pendingAccountPacket = legend::network::Packet{};
+    m_hasPendingAccountForward = false;
+    return true;
 }
 
 bool GatewaySession::TakePendingLogin(std::string& username, std::string& token) {

@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.24)
 
 project(LegendGame VERSION 0.2.0 LANGUAGES C CXX)
 
@@ -53,7 +53,53 @@ FetchContent_Declare(asio
     URL https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-30-2.zip
 )
 
+# 阶段10：SQLite amalgamation（账号/角色持久化；zip 无 CMakeLists，
+# 用 FetchContent_Populate + 手工静态库，用户无需安装任何数据库软件）
+FetchContent_Declare(sqlite3
+    URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip
+)
+
+# 阶段10：libsodium（Argon2id 密码哈希 + CSPRNG Session Token）
+# 注意：libsodium 上游不提供 CMake 构建，使用官方 MSVC 预编译包
+#（Debug/Release 动态库 + import lib + 头文件；windows-latest CI 兼容）
+FetchContent_Declare(libsodium
+    URL https://github.com/jedisct1/libsodium/releases/download/1.0.20-RELEASE/libsodium-1.0.20-msvc.zip
+    URL_HASH SHA256=2ff97f9e3f5b341bdc808e698057bea1ae454f99e29ff6f9b62e14d0eb1b1baa
+)
+
 FetchContent_MakeAvailable(SDL nlohmann_json imgui asio)
+
+# SQLite amalgamation：无 CMakeLists，手动编入静态库（线程安全默认 1）
+FetchContent_GetProperties(sqlite3)
+if(NOT sqlite3_POPULATED)
+    FetchContent_Populate(sqlite3)
+    add_library(sqlite3_core STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
+    target_include_directories(sqlite3_core PUBLIC ${sqlite3_SOURCE_DIR})
+    if(MSVC)
+        # amalgamation 体量大且来自第三方，关闭非致命告警
+        target_compile_options(sqlite3_core PRIVATE /W0)
+    endif()
+endif()
+
+FetchContent_GetProperties(libsodium)
+if(NOT libsodium_POPULATED)
+    FetchContent_Populate(libsodium)
+endif()
+if(NOT TARGET sodium)
+    add_library(sodium SHARED IMPORTED GLOBAL)
+    set_target_properties(sodium PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES ${libsodium_SOURCE_DIR}/include
+        IMPORTED_CONFIGURATIONS "Debug;Release;MinSizeRel;RelWithDebInfo"
+        IMPORTED_LOCATION_DEBUG ${libsodium_SOURCE_DIR}/x64/Debug/v143/dynamic/libsodium.dll
+        IMPORTED_IMPLIB_DEBUG ${libsodium_SOURCE_DIR}/x64/Debug/v143/dynamic/libsodium.lib
+        IMPORTED_LOCATION_RELEASE ${libsodium_SOURCE_DIR}/x64/Release/v143/dynamic/libsodium.dll
+        IMPORTED_IMPLIB_RELEASE ${libsodium_SOURCE_DIR}/x64/Release/v143/dynamic/libsodium.lib
+        IMPORTED_LOCATION_MINSIZEREL ${libsodium_SOURCE_DIR}/x64/Release/v143/dynamic/libsodium.dll
+        IMPORTED_IMPLIB_MINSIZEREL ${libsodium_SOURCE_DIR}/x64/Release/v143/dynamic/libsodium.lib
+        IMPORTED_LOCATION_RELWITHDEBINFO ${libsodium_SOURCE_DIR}/x64/Release/v143/dynamic/libsodium.dll
+        IMPORTED_IMPLIB_RELWITHDEBINFO ${libsodium_SOURCE_DIR}/x64/Release/v143/dynamic/libsodium.lib
+    )
+endif()
 
 # asio standalone：header-only 使用（不执行其 CMakeLists，避免安装/示例副作用）
 add_library(asio_headers INTERFACE)
@@ -78,4 +124,7 @@ add_subdirectory(Engine/Network)
 add_subdirectory(Server)
 add_subdirectory(Client)
 add_subdirectory(Tools/MapEditor)
+# 阶段10 指令一百零五/一百零七：根目录 enable_testing —— ctest 从 Build 根
+# 即可发现 NetworkTests + AccountTests（原先只在 Tests 子目录生效，根 ctest 找不到测试）
+enable_testing()
 add_subdirectory(Tests)

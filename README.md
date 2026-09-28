@@ -1,10 +1,12 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Character Entity System V0.3**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Account & Character Core V0.10**。
 
 - 语言：C++20
-- 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui）
+- 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
 - 渲染：OpenGL 3.3 Core（自带精简 GL 函数加载器，不依赖 GLEW/GLAD）
+- 网络：WinSock2 + asio standalone（TcpConnection/TcpClient/TcpServer，LegendGateway + LegendLoginServer）
+- 账号：SQLite3 持久化（账号/角色/Session），密码 Argon2id（libsodium），Session Token CSPRNG
 - 地图：数据驱动（JSON），Tile/Object/Collision/Occlusion 四层，Chunk 可视剔除 + SpriteBatch 批渲染 + Y-Sort
 - 角色：Entity/Character/Controller 体系，8 方向移动，SpriteSheet + UVRect 动画（Idle/Walk × 8 方向 = 16 Clip）
 - 图片解码：stb_image.h（单头文件，公有领域，位于 ThirdParty/stb）
@@ -64,6 +66,51 @@ Build\bin\Debug\LegendMapEditor.exe
 ```
 
 建议在工程根目录下运行（这样能读到 `Assets/`，日志写在 `Logs/latest.log`）。
+
+## 账号与角色系统（阶段10：Account & Character Core V0.10）
+
+**服务器启动顺序**：
+
+```bat
+Build\bin\Debug\LegendLoginServer.exe          :: 127.0.0.1:7100
+Build\bin\Debug\LegendGateway.exe              :: 127.0.0.1:7000
+Build\bin\Debug\LegendClient.exe
+```
+
+**Account Database（SQLite3）**：
+
+- 数据库文件：`data/legend_account.db`（`data/` 目录不存在时自动创建；Schema 自动初始化到 version 1）
+- 表：`accounts` / `characters` / `sessions`（软删除：`characters.deleted=1`，物理行保留）
+- **删除该数据库文件会清空全部账号/角色/Session 数据**
+- 密码使用 **Argon2id**（libsodium `crypto_pwhash`，hash 内含 salt 与参数），绝不保存明文
+- Session Token：256-bit CSPRNG（`randombytes_buf`），数据库只保存 SHA-256 hash，有效期默认 24 小时
+- 连续登录失败 5 次锁定 60 秒；每账号最多 4 个角色；角色选择返回 60 秒一次性 selectionTicket
+
+> **DEV ONLY — DO NOT EXPOSE TO INTERNET**：当前 TCP 链路无 TLS，密码明文过网，
+> 全部服务仅绑定 127.0.0.1，仅供本机开发。公网部署必须等后续 TLS 阶段。
+
+**客户端调试键（阶段10）**：
+
+| 按键 | 功能 |
+| --- | --- |
+| F8 | Network Debug（阶段9 保留） |
+| F9 | 连接 / 断开 Gateway |
+| F10 | 自动登录开发账号 dev_user（不存在则自动注册；正式 Account 测试不依赖此快捷键） |
+| Shift+F10 | LegacyDevLogin 测试（test/dev_token，阶段9 兼容链路） |
+| F11 | Account Debug（AccountState/AccountId/Session/角色数/选中角色/最近错误） |
+
+**测试**：
+
+```bat
+cd Build
+ctest -C Debug --output-on-failure     :: NetworkTests（阶段9 回归）+ AccountTests（阶段10）
+```
+
+LegendAccountTests 覆盖：Schema/Migration、注册（含大小写不敏感重名）、Argon2id 密码哈希、
+登录失败计数与锁定、Session 创建/恢复/过期/吊销、角色列表/创建/上限/删除（软删除）/归属校验/选择、
+SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发同名注册/并发建角（事务上限）、
+断线期间 DB 操作安全、服务器重启持久化、日志不落密码/Token/Ticket。
+
 
 ## Engine V0.2 操作说明
 

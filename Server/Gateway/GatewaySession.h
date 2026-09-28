@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace legend::gateway {
@@ -23,6 +24,7 @@ enum class GatewaySessionState {
 
 // 阶段9 指令四十七/七十五~八十：单个 Client 连接的会话。
 // 不持有业务指针（指令五十七）；token 不落日志也不长期保存（指令五十二）。
+// 阶段10 指令五十四：Account 消息只暂存转发（Gateway 不解析业务 payload）。
 class GatewaySession {
 public:
     GatewaySession(legend::net::TcpConnectionPtr connection, std::uint64_t connectionId);
@@ -40,6 +42,17 @@ public:
     // 一次性取出待转发登录数据（GatewayServer 检测到 LoginPending 后调用；
     // token 只在内存暂存，不落日志——指令五十二）
     bool TakePendingLogin(std::string& username, std::string& token);
+
+    // 阶段10 指令一百零二：写请求 in-flight 去重。
+    // 返回 false = 同类请求已在途（调用方应回 RequestPending 错误响应）。
+    bool TryBeginAccount(std::uint16_t innerMessageId, std::uint64_t requestId);
+    void EndAccount(std::uint16_t innerMessageId);
+    // 连接断开时清理全部 in-flight（响应到达时自然丢弃）。
+    void CancelAllAccount();
+    bool HasInflightAccount() const;
+
+    // 一次性取出待转发的 Account 包（GatewayServer 包装信封后转发）。
+    bool TakePendingAccountForward(legend::network::Packet& out);
 
     GatewaySessionState State() const { return m_state; }
     std::uint64_t ConnectionId() const { return m_connectionId; }
@@ -66,6 +79,11 @@ private:
     std::string m_displayName;
     std::uint32_t m_lastPingSequence = 0;
     std::chrono::steady_clock::time_point m_lastPacketTime{std::chrono::steady_clock::now()};
+
+    // 阶段10：待转发 Account 包（io 线程内访问）与 in-flight 写请求表
+    bool m_hasPendingAccountForward = false;
+    legend::network::Packet m_pendingAccountPacket;
+    std::map<std::uint16_t, std::uint64_t> m_inflightAccount; // innerMessageId -> requestId
 };
 
 } // namespace legend::gateway

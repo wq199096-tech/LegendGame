@@ -4,6 +4,11 @@ Build/
 # 运行时日志
 Logs/
 
+# 阶段10：运行时数据与测试产物（不得入库）
+data/
+testdata/
+testlogs/
+
 # IDE / 编辑器
 .vs/
 .vscode/

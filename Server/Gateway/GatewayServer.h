@@ -4,14 +4,17 @@
 #include "Engine/Network/TcpClient.h"
 #include "Engine/Network/TcpServer.h"
 #include "Server/Gateway/GatewaySession.h"
+#include "Shared/Account/AccountError.h"
 
 #include <asio.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -54,7 +57,10 @@ public:
 
     std::size_t ClientCount() const;
     // 阶段9.1指令三十四：测试只读统计（DisconnectCleanup 验证 Pending 清空）
-    std::size_t PendingLoginCount() const { return m_pendingLogins.size(); }
+    std::size_t PendingLoginCount() const {
+        std::lock_guard<std::mutex> lock(m_mapsMutex);
+        return m_pendingLogins.size();
+    }
     bool IsLoginConnected() const { return m_loginAvailable.load(); }
     void SetHooks(Hooks hooks) { m_hooks = std::move(hooks); }
 
@@ -65,6 +71,13 @@ private:
         std::chrono::steady_clock::time_point createdAt{std::chrono::steady_clock::now()};
     };
 
+    // 阶段10：Account 请求 pending（信封转发后等待 LoginServer 响应）
+    struct PendingAccount {
+        std::uint64_t clientConnectionId = 0;
+        std::uint16_t innerMessageId = 0;
+        std::chrono::steady_clock::time_point createdAt{std::chrono::steady_clock::now()};
+    };
+
     void OnClientAccepted(legend::net::TcpConnectionPtr connection);
     void OnClientPacket(std::uint64_t connectionId, const legend::network::Packet& packet);
     void OnClientClosed(std::uint64_t connectionId, const std::error_code& ec);
@@ -72,9 +85,18 @@ private:
     void ConnectToLogin();
     void ScheduleLoginReconnect();
     void OnLoginConnected(legend::net::TcpConnectionPtr connection);
-    void OnLoginClosed(const std::error_code& ec);
+    void HandleLoginLinkClosed(); // 阶段10：Login 链路关闭统一入口（self 保活）
     void OnLoginPacket(std::uint64_t linkId, const legend::network::Packet& packet);
     void HandleLoginGatewayResponse(const legend::network::Packet& packet);
+
+    // 阶段10：Account 信封转发 / 响应回送 / 超时合成错误响应
+    void ForwardAccountPacket(std::uint64_t clientConnectionId,
+                              const legend::network::Packet& packet);
+    void HandleAccountResponse(const legend::network::Packet& packet);
+    void SendAccountErrorResponse(std::uint64_t clientConnectionId, std::uint64_t requestId,
+                                  std::uint16_t innerMessageId,
+                                  legend::account::AccountErrorCode errorCode,
+                                  const std::string& message);
 
     void ForwardLogin(std::uint64_t clientConnectionId, const std::string& username,
                       const std::string& token);
@@ -98,6 +120,10 @@ private:
 
     std::map<std::uint64_t, std::shared_ptr<GatewaySession>> m_sessions; // connectionId -> session
     std::map<std::uint64_t, PendingLogin> m_pendingLogins;               // requestId -> pending
+    std::map<std::uint64_t, PendingAccount> m_pendingAccounts;           // requestId -> pending
+    // 阶段10：三张表由 io 线程（收包/关闭/超时回调）与主线程（Stop clear）并发
+    // 访问——加锁（数据竞态修复；io 侧单线程，锁仅用于与 Stop 的互斥）
+    mutable std::mutex m_mapsMutex;
     std::uint64_t m_nextRequestId = 1; // 指令五十八：单调增长
 
     asio::steady_timer m_reconnectTimer;

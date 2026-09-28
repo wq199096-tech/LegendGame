@@ -359,7 +359,9 @@ void RunTcpConnectionChecks() {
         server->StartAccepting([](TcpConnectionPtr) {});
         asio::io_context clientIo;
         // 阶段9.3 修复：clientIo 必须运行——Start/Close 全部经 strand post，
-        // io 不运行则 posted 回调永不执行（closeCount 恒 0）
+        // io 不运行则 posted 回调永不执行（closeCount 恒 0）。
+        // 阶段10 修复：work_guard 防 run() 在首个 handler post 前空转返回（竞态）。
+        auto clientIoWork = asio::make_work_guard(clientIo);
         std::thread clientIoThread([&clientIo] { clientIo.run(); });
         asio::ip::tcp::socket socket(clientIo);
         std::error_code ec;

@@ -1324,7 +1324,11 @@ void GameScene::LogMapStats(double deltaTime) {
         // 阶段7：装备槽数（Debug 阶段窗口标题显示）
         GetEquipmentStatusText() +
         // 阶段8：MP / 技能栏 CD（Debug 阶段窗口标题显示）
-        GetSkillStatusText();
+        GetSkillStatusText() +
+        // 阶段10：F11 Account Debug（指令六十/一百一十一：最基础文本面板）
+        (m_networkController && m_networkController->AccountDebugVisible()
+             ? m_networkController->AccountStatusText()
+             : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame
     if (m_characterDebug && m_player) {

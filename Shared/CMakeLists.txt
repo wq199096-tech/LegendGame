@@ -9,6 +9,8 @@ add_library(LegendSharedNetwork STATIC
     Network/PacketCodec.cpp
     Network/NetworkErrors.cpp
     Network/Protocol.cpp
+    Network/MessageId.cpp
+    Account/AccountProtocol.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})

@@ -53,7 +53,10 @@ void TcpServer::DoAccept() {
             // 内部 close observer 负责连接表清理（指令一百一十七）
             connection->SetInternalCloseHandler(
                 [self](std::uint64_t closedId) { self->RemoveConnection(closedId); });
-            self->m_connections[id] = connection;
+            {
+                std::lock_guard<std::mutex> lock(self->m_connectionsMutex);
+                self->m_connections[id] = connection;
+            }
             if (self->m_onAccept) {
                 self->m_onAccept(connection); // 业务层自行调用一次 Start
             }
@@ -68,6 +71,7 @@ std::uint64_t TcpServer::AllocateConnectionId() {
 }
 
 void TcpServer::RemoveConnection(std::uint64_t id) {
+    std::lock_guard<std::mutex> lock(m_connectionsMutex);
     m_connections.erase(id);
 }
 
@@ -78,14 +82,21 @@ void TcpServer::Stop() {
     m_onAccept = nullptr;
     std::error_code ignored;
     m_acceptor.close(ignored);
-    for (auto& [id, connection] : m_connections) {
+    // 阶段10：连接表并发修复——先在锁内摘下全部连接，再逐个同步关闭
+    //（原实现在遍历/清表与 io 线程 RemoveConnection 之间存在数据竞态）
+    std::map<std::uint64_t, TcpConnectionPtr> connections;
+    {
+        std::lock_guard<std::mutex> lock(m_connectionsMutex);
+        connections.swap(m_connections);
+    }
+    for (auto& [id, connection] : connections) {
         // 阶段9.3 UAF 修复：先经 strand 摘除连接全部回调再关闭——
         // Server（LoginServer/GatewayServer）销毁后，挂起的 Fail 不得再
         // 触达已释放的 TcpServer（RemoveConnection heap-use-after-free）
         // Stop3: synchronous close - FIN is on the wire when Stop returns.
         connection->CloseBlocking();
     }
-    m_connections.clear();
+    connections.clear();
 }
 
 } // namespace legend::net

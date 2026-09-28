@@ -3,6 +3,7 @@
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
 
+#include "Shared/Account/AccountProtocol.h" // 阶段10：Account payload 编解码
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
 #include "Shared/Network/Protocol.h" // 阶段9.2指令一：Shared Protocol 统一
@@ -30,6 +31,7 @@ enum class NetworkState {
 };
 
 // 阶段9 指令三十二：NetworkEvent（network thread -> 主线程事件队列）。
+// 阶段10 指令五十八：扩展 Register/Login/Resume/Character* Response 事件。
 struct NetworkEvent {
     enum class Type {
         Connected,
@@ -40,6 +42,14 @@ struct NetworkEvent {
         LoginResponse,
         HeartbeatTimeout,
         ProtocolError, // 阶段9.2指令十：未知 MessageId
+        // 阶段10 指令五十八：Account / Character 响应
+        RegisterResponse,
+        AccountLoginResponse,
+        SessionResumeResponse,
+        CharacterListResponse,
+        CharacterCreateResponse,
+        CharacterDeleteResponse,
+        CharacterSelectResponse,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -48,6 +58,16 @@ struct NetworkEvent {
     std::uint16_t errorCode = 0;              // 阶段9.2指令五：LoginErrorCode 全链
     std::string displayName;
     float rttMs = -1.0f;
+
+    // ---- 阶段10：Account / Character 字段（按事件类型取用） ----
+    std::uint64_t requestId = 0;              // 指令一百零一：响应回传请求 id
+    bool success = false;
+    std::string sessionToken;                 // 仅存内存，不落日志（指令六十九）
+    std::int64_t expiresAt = 0;               // unix 秒
+    std::vector<legend::account::CharacterSummary> characters;
+    legend::account::CharacterSummary character;
+    std::uint64_t characterId = 0;
+    std::string selectionTicket;              // 仅存内存（指令六十九）
 };
 
 // 阶段9 指令三十一/三十三：GameNetworkClient——网络线程收包只 Push 事件，
@@ -71,6 +91,8 @@ public:
     void Connect(const std::string& host, std::uint16_t port); // 异步，不阻塞主循环
     void Disconnect(bool notifyServer); // 指令六十七：ClientQuit 发 DisconnectNotice
     void SendLogin(const std::string& username, const std::string& token);
+    // 阶段10 指令五十七：Account 请求统一发送入口（payload 由控制器编码）。
+    void SendAccountPacket(std::uint16_t messageId, const std::vector<std::uint8_t>& payload);
 
     void PollEvents(std::deque<NetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);          // 主线程：超时检测
