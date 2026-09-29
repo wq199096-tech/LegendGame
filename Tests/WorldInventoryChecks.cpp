@@ -850,17 +850,29 @@ void RunInventoryDropChecks() {
                     return !m || !m->Alive();
                 },
                 12000);
-            const auto* drop = dotKilled ? servers.world->FindItemDrop(dropIdBefore) : nullptr;
-            dotOwnerId = drop ? drop->ownerCharacterId : 0;
+            // CI 慢机加固：drop 由 io 线程在 KillMonster 内写入，测试线程直读存在
+            // 可见性/调度延迟（曾致 dotKilled=1 但 drop=0 的三连级联）→ 轮询等待。
+            std::uint32_t dropItemDefinitionId = 0;
+            const bool dropAppeared = WaitUntil(
+                [&] {
+                    const auto* d = servers.world->FindItemDrop(dropIdBefore);
+                    if (!d) {
+                        return false;
+                    }
+                    dropItemDefinitionId = d->itemDefinitionId;
+                    dotOwnerId = d->ownerCharacterId;
+                    return true;
+                },
+                3000);
             static char dotDiag[224];
             std::snprintf(dotDiag, sizeof(dotDiag),
                           "DotKillDropOwnerCheck: offline DOT killer keeps drop ownership "
                           "[lowered=%d alive=%d hp=%d dotKilled=%d drop=%d ownerMatch=%d]",
                           lowered ? 1 : 0, aliveAfterLoop ? 1 : 0, hpAfterLoop,
-                          dotKilled ? 1 : 0, drop != nullptr ? 1 : 0,
+                          dotKilled ? 1 : 0, dropAppeared ? 1 : 0,
                           dotOwnerId == seedA.characterId ? 1 : 0);
-            Check(dotDiag, dotKilled && drop != nullptr &&
-                               drop->itemDefinitionId == kItemSlimeCoreId &&
+            Check(dotDiag, dotKilled && dropAppeared &&
+                               dropItemDefinitionId == kItemSlimeCoreId &&
                                dotOwnerId == seedA.characterId);
         }
 
