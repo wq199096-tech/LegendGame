@@ -41,11 +41,29 @@ jobs:
 
       # 阶段9.3指令三十一 + 阶段10指令一百零七 + 阶段11指令一百一十三：
       # CTest Runtime 硬门禁（禁止 continue-on-error）
+      # 阶段19：输出落盘 + 失败时上传日志 artifact（公开仓库可匿名下载排查）。
       - name: Run runtime tests (CTest hard gate)
         shell: pwsh
         run: |
-          ctest --test-dir build -C Debug --output-on-failure
-          if ($LASTEXITCODE -ne 0) { Write-Error 'Runtime tests failed'; exit 1 }
+          ctest --test-dir build -C Debug --output-on-failure 2>&1 | Tee-Object -FilePath ctest.log
+          $code = $LASTEXITCODE
+          exit $code
+      - name: Upload test log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log
+          path: ctest.log
+          if-no-files-found: warn
+      - name: Runtime gate result
+        shell: pwsh
+        run: |
+          if (Select-String -Path ctest.log -Pattern 'tests failed|tests passed but with|errors while running' -Quiet) {
+            Write-Error 'Runtime tests failed'; exit 1
+          }
+          $last = Select-String -Path ctest.log -Pattern 'tests passed' | Select-Object -Last 1
+          if (-not $last) { Write-Error 'Runtime tests failed (no summary)'; exit 1 }
+          Write-Host $last.Line
           Write-Host 'NETWORK RUNTIME TEST PASS'
           Write-Host 'ACCOUNT RUNTIME TEST PASS'
           Write-Host 'WORLD RUNTIME TEST PASS'
