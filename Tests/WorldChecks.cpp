@@ -26,6 +26,8 @@ void RunWorldInventoryChecks();
 void RunWorldQuestChecks();
 void RunWorldNpcChecks();
 void RunWorldMapChecks(); // 阶段21：多地图 / Portal / 复活
+void RunWorldDataChecks(); // 阶段22：Data/World 数据层
+void RunMapEditorDataChecks(); // 阶段22：World Editor 文档模型
 }
 
 namespace {
@@ -877,6 +879,8 @@ int main() {
 
     // ---- 阶段21 多地图 / Portal / 复活检查（独立 servers 生命周期） ----
     RunWorldMapChecks();
+    RunWorldDataChecks();
+    RunMapEditorDataChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

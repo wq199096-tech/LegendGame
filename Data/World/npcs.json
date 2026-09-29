@@ -1,0 +1,80 @@
+{
+  "npcs": [
+    {
+      "dialogueId": 5001,
+      "dialogueText": "The slimes have been restless lately. Will you help us?",
+      "dialogueTitle": "Village Elder",
+      "enabled": true,
+      "interactionRange": 120.0,
+      "mapId": 1,
+      "name": "Village Elder",
+      "npcDefinitionId": 5001,
+      "questIds": [
+        4001,
+        4002,
+        4003,
+        4005
+      ],
+      "shopId": 0,
+      "teleportId": 0,
+      "type": "QuestGiver",
+      "visualId": 5001,
+      "x": 300.0,
+      "y": 300.0
+    },
+    {
+      "dialogueId": 5002,
+      "dialogueText": "Welcome! Finest goods in the village.",
+      "dialogueTitle": "General Merchant",
+      "enabled": true,
+      "interactionRange": 120.0,
+      "mapId": 1,
+      "name": "General Merchant",
+      "npcDefinitionId": 5002,
+      "questIds": [],
+      "shopId": 6001,
+      "teleportId": 0,
+      "type": "Merchant",
+      "visualId": 5002,
+      "x": 450.0,
+      "y": 300.0
+    },
+    {
+      "dialogueId": 5003,
+      "dialogueText": "I can take you anywhere, for a price.",
+      "dialogueTitle": "Wayfarer",
+      "enabled": true,
+      "interactionRange": 120.0,
+      "mapId": 1,
+      "name": "Wayfarer",
+      "npcDefinitionId": 5003,
+      "questIds": [],
+      "shopId": 0,
+      "teleportId": 7001,
+      "type": "Teleporter",
+      "visualId": 5003,
+      "x": 600.0,
+      "y": 300.0
+    },
+    {
+      "dialogueId": 5004,
+      "dialogueText": "Looking for adventure? The far plains await.",
+      "dialogueTitle": "Explorer Guide",
+      "enabled": true,
+      "interactionRange": 120.0,
+      "mapId": 1,
+      "name": "Explorer Guide",
+      "npcDefinitionId": 5004,
+      "questIds": [
+        4004
+      ],
+      "shopId": 0,
+      "teleportId": 7002,
+      "type": "MultiFunction",
+      "visualId": 5004,
+      "x": 750.0,
+      "y": 300.0
+    }
+  ],
+  "schemaVersion": 1
+}

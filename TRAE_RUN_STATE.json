@@ -1,0 +1,18 @@
+{
+  "project": "LegendGame",
+  "branch": "main",
+  "stage": 22,
+  "status": "running",
+  "currentTask": "Stage22 local suite verification + CI green for feat(editor): add data-driven world editor v1",
+  "lastCompletedTask": "Stage22 code complete: Shared/WorldData + MonsterSpawnRegistry + Registry data-driven refactor + World Editor V1 + WorldDataChecks/MapEditorDataChecks (local build all green, editor smoke PASSED)",
+  "nextTask": "After CI green: enter Stage23 (Game Data / Content Editor V1) per unattended mode",
+  "headSha": "e362dfa",
+  "lastCheckpointSha": "e362dfa",
+  "buildStatus": "local Debug build all green (Editor/WorldCore/WorldServer/WorldTests)",
+  "networkTests": "pending rerun after stage22 build",
+  "accountTests": "pending rerun after stage22 build",
+  "worldTests": "running (352 PASS / 0 FAIL mid-run)",
+  "actionsRunId": "36609036863",
+  "actionsStatus": "in_progress (stage21 DotKill fix e362dfa)",
+  "resumeRequired": true
+}

@@ -6,6 +6,7 @@
 #include "Server/WorldServer/Combat/DamageCalculator.h"
 #include "Server/WorldServer/Map/MapRegistry.h"
 #include "Server/WorldServer/Map/RespawnService.h"
+#include "Server/WorldServer/Monster/MonsterSpawnRegistry.h"
 #include "Server/WorldServer/Npc/NpcRegistry.h"
 #include "Server/WorldServer/Npc/ShopService.h"
 #include "Server/WorldServer/Npc/TeleportService.h"
@@ -14,12 +15,14 @@
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
+#include "Shared/Monster/MonsterSpawnDefinition.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/Protocol.h"
 #include "Shared/World/WorldError.h"
 #include "Shared/World/WorldProtocol.h"
 #include "Shared/World/WorldTypes.h"
+#include "Shared/WorldData/WorldDataJson.h"
 #include "Shared/WorldMap/MapTypes.h"
 
 #include <algorithm>
@@ -87,6 +90,40 @@ bool WorldServer::Start(std::string& error) {
         error = "world database open failed: " + error;
         return false;
     }
+    // 阶段22 22.11/22.12/23.23：世界数据加载。
+    // 目录存在 → LoadWorldData + ValidateWorldData（错误明确拒绝启动，不静默回退）；
+    // 目录不存在 → 出厂默认（MakeDefaultWorldData——开发/测试环境；日志提示）。
+    // 加载后补跨系统校验（spawn zone 边界/quest/shop/teleport 引用）。
+    {
+        const std::string& dataDir = m_config.worldDataDir;
+        if (std::filesystem::exists(std::filesystem::path(dataDir))) {
+            WorldDataSet data;
+            std::string dataError;
+            if (!LoadWorldData(dataDir, data, dataError)) {
+                error = "world data load failed from '" + dataDir + "': " + dataError;
+                m_database.Close();
+                return false;
+            }
+            if (!ValidateWorldData(data, dataError)) {
+                error = "world data validation failed: " + dataError;
+                m_database.Close();
+                return false;
+            }
+            MapRegistry::LoadFromDefinitions(std::move(data.maps));
+            NpcRegistry::LoadFromDefinitions(std::move(data.npcs),
+                                             std::move(data.dialogues));
+            MonsterSpawnRegistry::LoadFromDefinitions(std::move(data.monsterSpawns));
+            PortalRegistry::LoadFromDefinitions(std::move(data.portals));
+            LOG_INFO("[World] World data loaded from '" + dataDir + "'.");
+        } else {
+            MapRegistry::LoadDefaults();
+            NpcRegistry::LoadDefaults();
+            MonsterSpawnRegistry::LoadDefaults();
+            PortalRegistry::LoadDefaults();
+            LOG_WARN("[World] World data dir '" + dataDir +
+                     "' not found; using built-in default world data.");
+        }
+    }
     if (!legend::account::InitializeSchema(m_database, error)) {
         error = "world database schema init failed: " + error;
         m_database.Close();
@@ -113,6 +150,12 @@ bool WorldServer::Start(std::string& error) {
     }
     if (!PortalRegistry::Instance().ValidatePortals(MapRegistry::Instance(), error)) {
         error = "portal registry validation failed: " + error;
+        m_database.Close();
+        return false;
+    }
+    // 阶段22 22.12：刷怪区配置校验（monster 类型/zone 完全在地图边界内）。
+    if (!MonsterSpawnRegistry::Instance().ValidateSpawns(MapRegistry::Instance(), error)) {
+        error = "monster spawn registry validation failed: " + error;
         m_database.Close();
         return false;
     }
@@ -1205,44 +1248,37 @@ std::vector<std::uint64_t> WorldServer::MonsterEntityIds() const {
 }
 
 void WorldServer::SpawnInitialMonsters() {
-    // 指令十五/十六：阶段21 指令十一——按地图布局生成 Training Slime：
-    // Map2 x20 / Map3 x10；Map1 生产无野外 Slime（legacyMap1TestSpawn 开启时
-    // 沿用阶段13 的 20 点表，兼容历史测试）。
+    // 阶段22 22.7/22.11：刷怪全部来自 MonsterSpawnRegistry（Data/World/monster_spawns.json
+    // 或出厂默认）；GenerateSpawnPoints 确定性展开（与编辑器/测试三方一致）。
+    // legacyMap1TestSpawn（阶段13 兼容开关）仍用固定 20 点表占用 slotId 1~20。
     const MonsterDefinition* definition = FindMonsterDefinition(kTrainingSlimeTypeId);
     if (!definition) {
         LOG_ERROR("[World] Monster definition missing (Training Slime).");
         return;
     }
     m_respawnManager.Reset();
+    std::uint32_t nextSlotId = 1;
     if (m_config.legacyMap1TestSpawn) {
         const std::vector<MonsterSpawnPoint> legacyPoints(
             kInitialMonsterSpawnTable, kInitialMonsterSpawnTable + kInitialMonsterCount);
         m_respawnManager.InitializeFromPoints(legacyPoints, definition->monsterTypeId,
-                                              kDefaultMapId, m_config.respawnDelayMs, 1);
+                                              kDefaultMapId, m_config.respawnDelayMs,
+                                              nextSlotId);
+        nextSlotId += static_cast<std::uint32_t>(legacyPoints.size());
     }
-    // Map2 Slime Meadow：20 只（避开 Portal 8002/8003 与入口 (200,500)）。
-    {
-        const MonsterSpawnPoint map2Points[kMap2SlimeCount] = {
-            {500.0f, 800.0f},   {600.0f, 900.0f},   {700.0f, 800.0f},   {800.0f, 900.0f},
-            {900.0f, 700.0f},   {1000.0f, 800.0f},  {1100.0f, 700.0f},  {1200.0f, 800.0f},
-            {500.0f, 1200.0f},  {700.0f, 1300.0f},  {900.0f, 1200.0f},  {1100.0f, 1300.0f},
-            {1300.0f, 1200.0f}, {1500.0f, 1300.0f}, {1300.0f, 700.0f},  {1500.0f, 800.0f},
-            {1600.0f, 1300.0f}, {1000.0f, 1500.0f}, {1200.0f, 1600.0f}, {1400.0f, 1500.0f},
-        };
-        const std::vector<MonsterSpawnPoint> points(map2Points, map2Points + kMap2SlimeCount);
-        m_respawnManager.InitializeFromPoints(points, definition->monsterTypeId, 2,
-                                              m_config.respawnDelayMs, 100);
-    }
-    // Map3 Ancient Ruins：10 只（0~2400 x 0~1800 内；避开 Portal 8004/入口）。
-    {
-        const MonsterSpawnPoint map3Points[kMap3SlimeCount] = {
-            {500.0f, 600.0f},   {700.0f, 700.0f},  {900.0f, 600.0f},   {1100.0f, 800.0f},
-            {1300.0f, 600.0f},  {1500.0f, 800.0f}, {900.0f, 1100.0f},  {1200.0f, 1200.0f},
-            {1600.0f, 1300.0f}, {2000.0f, 1000.0f},
-        };
-        const std::vector<MonsterSpawnPoint> points(map3Points, map3Points + kMap3SlimeCount);
-        m_respawnManager.InitializeFromPoints(points, definition->monsterTypeId, 3,
-                                              m_config.respawnDelayMs, 200);
+    std::uint32_t spawnZoneCount = 0;
+    for (const auto& spawn : MonsterSpawnRegistry::Instance().AllSpawns()) {
+        if (!spawn.enabled) {
+            continue;
+        }
+        const std::vector<MonsterSpawnPoint> points = GenerateSpawnPoints(spawn);
+        if (points.empty()) {
+            continue;
+        }
+        m_respawnManager.InitializeFromPoints(points, spawn.monsterDefinitionId, spawn.mapId,
+                                              spawn.respawnSeconds * 1000, nextSlotId);
+        nextSlotId += static_cast<std::uint32_t>(points.size());
+        ++spawnZoneCount;
     }
     for (const auto& slot : m_respawnManager.Slots()) {
         const std::uint64_t entityId = m_nextMonsterEntityId++;
@@ -1255,7 +1291,8 @@ void WorldServer::SpawnInitialMonsters() {
     }
     LOG_INFO("[World] Spawned " + std::to_string(m_monsters.Count()) + " " +
              definition->name + " monsters (" + std::to_string(m_respawnManager.SlotCount()) +
-             " spawn slots, legacyMap1=" + (m_config.legacyMap1TestSpawn ? "on" : "off") + ").");
+             " spawn slots from " + std::to_string(spawnZoneCount) + " zones, legacyMap1=" +
+             (m_config.legacyMap1TestSpawn ? "on" : "off") + ").");
 }
 
 // 阶段17 指令二十七/二十八：按 slot 生成新怪（满 HP/无状态/Idle/target=0/满 Combat 状态；

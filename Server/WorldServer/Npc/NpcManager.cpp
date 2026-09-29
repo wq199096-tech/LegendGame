@@ -8,6 +8,10 @@ namespace legend::world {
 std::size_t NpcManager::SpawnFromRegistry() {
     const auto& registry = NpcRegistry::Instance();
     for (const auto& definition : registry.AllNpcs()) {
+        // 阶段22 22.6：disabled 的 NPC 定义不生成实体。
+        if (!definition.enabled) {
+            continue;
+        }
         NpcEntity entity(m_nextEntityId++, &definition);
         m_npcs.emplace(entity.EntityId(), std::move(entity));
     }

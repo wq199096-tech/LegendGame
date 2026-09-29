@@ -1,5 +1,7 @@
 #include "Server/WorldServer/Map/MapRegistry.h"
 
+#include "Shared/WorldData/WorldDataJson.h"
+
 #include <cmath>
 
 namespace legend::world {
@@ -9,51 +11,14 @@ const MapRegistry& MapRegistry::Instance() {
     return registry;
 }
 
+MapRegistry& MapRegistry::Mutable() {
+    // Instance 返回同一实例的 const 引用；Load* 通过 Mutable 注入数据。
+    return const_cast<MapRegistry&>(Instance());
+}
+
 MapRegistry::MapRegistry() {
-    // 指令三：Map1 Greenfield Village（Town；阶段20 的 4 NPC 保留在此图）。
-    MapDefinition map1;
-    map1.mapId = 1;
-    map1.name = "Greenfield Village";
-    map1.type = MapType::Town;
-    map1.minX = 0.0f;
-    map1.minY = 0.0f;
-    map1.maxX = 2000.0f;
-    map1.maxY = 2000.0f;
-    map1.spawnX = 300.0f;
-    map1.spawnY = 300.0f;
-    map1.respawnX = 300.0f;
-    map1.respawnY = 300.0f;
-    m_maps.push_back(map1);
-
-    // 指令三：Map2 Slime Meadow（Field；Training Slime x20）。
-    MapDefinition map2;
-    map2.mapId = 2;
-    map2.name = "Slime Meadow";
-    map2.type = MapType::Field;
-    map2.minX = 0.0f;
-    map2.minY = 0.0f;
-    map2.maxX = 2000.0f;
-    map2.maxY = 2000.0f;
-    map2.spawnX = 200.0f;
-    map2.spawnY = 500.0f;
-    map2.respawnX = 200.0f;
-    map2.respawnY = 500.0f;
-    m_maps.push_back(map2);
-
-    // 指令三：Map3 Ancient Ruins（Field；Training Slime x10）。
-    MapDefinition map3;
-    map3.mapId = 3;
-    map3.name = "Ancient Ruins";
-    map3.type = MapType::Field;
-    map3.minX = 0.0f;
-    map3.minY = 0.0f;
-    map3.maxX = 2400.0f;
-    map3.maxY = 1800.0f;
-    map3.spawnX = 200.0f;
-    map3.spawnY = 300.0f;
-    map3.respawnX = 200.0f;
-    map3.respawnY = 300.0f;
-    m_maps.push_back(map3);
+    // 阶段22 22.11：硬编码迁入 Data/World（出厂数据由 MakeDefaultWorldData 提供，
+    // WorldServer::Initialize 启动时统一 LoadDefaults/LoadFromJsonDir）。
 }
 
 const MapDefinition* MapRegistry::FindMap(std::uint16_t mapId) const {
@@ -98,6 +63,14 @@ bool MapRegistry::ValidateMaps(std::string& error) const {
         }
     }
     return true;
+}
+
+void MapRegistry::LoadFromDefinitions(std::vector<MapDefinition> maps) {
+    Mutable().m_maps = std::move(maps);
+}
+
+void MapRegistry::LoadDefaults() {
+    LoadFromDefinitions(MakeDefaultWorldData().maps);
 }
 
 } // namespace legend::world

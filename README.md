@@ -629,3 +629,45 @@ Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites
   真实链路（跨图隔离四件套/边界钳制/Portal AOI+全验证链+防重放/统一切图/持久化与重启恢复/
   非法存档修正/死亡封锁/复活全家桶/保护/怪物丢目标/NPC 传送回归），并入 LegendWorldTests；
   历史套件兼容：WorldTestServers 默认 legacyMap1TestSpawn=true（Map1 保留阶段13 布怪）
+
+## V0.22 — World Editor V1 + Data Driven World（阶段22）
+
+把世界配置从 C++ 硬编码升级为「PC 可视化编辑器 + JSON 数据驱动」（22.1~22.22）：
+
+- **LegendGame World Editor**（升级自 LegendMapEditor.exe，仍是 8 exe 之一）：
+  - 双工作区：`View > World Workspace / Tile Map Workspace`（原 Tile 编辑能力保留）
+  - World 三栏布局：左 World Tree（Maps/NPCs/Monster Spawns/Portals + Add 按钮）、
+    中 World Canvas、右 Properties Inspector；底部 Validation / Console / Status；顶部菜单
+    File / Edit / View / World / Run
+  - Canvas：Pan（中/右键拖）、Zoom（滚轮，鼠标锚点）、100 单位网格、世界/鼠标坐标、
+    点击选择、拖拽移动（release 一次 Mutate——Undo 栈不被刷糊）；不同对象不同 Debug 图形
+    （Map 边框+Spawn/Respawn 十字、NPC 圆点+名字、Spawn 圆环+中心、Portal 发光菱形）
+  - 编辑：Delete / Ctrl+D / Ctrl+Z / Ctrl+Y 快捷键；Undo/Redo 快照式 100 步；
+    Dirty 标题 `*` + 关闭确认弹窗；Inspector 逐字段编辑（目标地图 ComboBox，22.8）
+  - Validation：每次修改实时重算（Shared 层 ValidateWorldData 全规则）；Error 存在时
+    Save 禁用（底部按钮 + Ctrl+S + File 菜单三处一致）；`World > Validate World` 手动触发
+  - 保存：原子保存（serialize → temp → reparse 验证 → replace）+ `.backup/` 轮换 10 份
+  - `Run > Launch WorldServer`：启动同目录 LegendWorldServer.exe（工作目录=仓库根）
+  - Smoke：`LEGEND_EDITOR_SMOKE=world` 环境变量 → 加载+校验+roundtrip 保存+自动退出（exit 0/1）
+- **Data/World（入库 JSON，schemaVersion=1 每文件）**：
+  `world_manifest.json / maps.json / npcs.json / monster_spawns.json / portals.json`
+  （.gitignore 用 `/data/* + !/Data/**` 组合——Windows 大小写不敏感防误吞）
+- **数据层**：`Shared/WorldData/WorldDataJson.{h,cpp}`（nlohmann/json；Load/Validate/Save/
+  Roundtrip/MakeDefaultWorldData 单一事实）+ `Shared/Monster/MonsterSpawnDefinition.h`
+  （刷怪区定义 + `GenerateSpawnPoints` 确定性布点展开：Editor/Server/Tests 三方一致）
+- **Registry 改造（22.11）**：MapRegistry/NpcRegistry/PortalRegistry/MonsterSpawnRegistry
+  生产从 Data/World 读取（`WorldServer::Start` 统一加载+ValidateWorldData+注入）；
+  目录缺失 → 出厂默认（MakeDefaultWorldData）；**存在但损坏 → 明确报错拒绝启动（不静默回退）**
+- **22.12 启动校验**：schemaVersion/重复 ID/引用存在/地图边界/坐标越界/负数费用/非法
+  等级·半径·count·respawn/Town 图存在/NPC enabled 开关（disabled 不生成实体）
+- **22.18 迁移**：Maps 1~3 / NPC 5001~5004（含对话文本内嵌 npcs.json）/
+  Spawns Map2 x20 + Map3 x10（zone 展开，slotId 全局递增）/
+  Portals 8001~8004；表现与阶段21 硬编码一致（Monster Spawn zone 确定性展开点避开 Portal 与入口）
+- **测试（并入 LegendWorldTests，不新增 CTest 套件）**：
+  `WorldDataChecks.cpp`（默认数据/Validate 17 项规则/Load 错误路径（bad JSON/缺文件/
+  schema/字段类型——错误信息带 文件名+类型+ID+字段）/roundtrip/原子保存无 tmp 残留/
+  backup 轮换上限/Registry 注入/WorldServer 读真实 Data（spawn slots 按 JSON 计数）/
+  坏数据拒绝启动）+ `MapEditorDataChecks.cpp`（文档模型：Mutate/Undo/Redo/100 步上限/
+  Duplicate 自动 ID/Remove 级联对话/Validation 禁存/roundtrip/backup/Load 拦截）
+- **GUI 人工确认项（22.20）**：Canvas 交互手感/Inspector 字段布局/拖拽缩放流畅度
+  需人工目验；程序 Smoke（LEGEND_EDITOR_SMOKE=world）+ 数据层 Roundtrip 已自动化

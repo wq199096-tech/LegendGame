@@ -1,0 +1,57 @@
+{
+  "portals": [
+    {
+      "destinationMapId": 2,
+      "destinationX": 200.0,
+      "destinationY": 500.0,
+      "enabled": true,
+      "goldCost": 0,
+      "interactionRadius": 100.0,
+      "minLevel": 1,
+      "portalId": 8001,
+      "sourceMapId": 1,
+      "x": 1000.0,
+      "y": 300.0
+    },
+    {
+      "destinationMapId": 1,
+      "destinationX": 900.0,
+      "destinationY": 300.0,
+      "enabled": true,
+      "goldCost": 0,
+      "interactionRadius": 100.0,
+      "minLevel": 1,
+      "portalId": 8002,
+      "sourceMapId": 2,
+      "x": 150.0,
+      "y": 500.0
+    },
+    {
+      "destinationMapId": 3,
+      "destinationX": 200.0,
+      "destinationY": 300.0,
+      "enabled": true,
+      "goldCost": 10,
+      "interactionRadius": 100.0,
+      "minLevel": 2,
+      "portalId": 8003,
+      "sourceMapId": 2,
+      "x": 1800.0,
+      "y": 1000.0
+    },
+    {
+      "destinationMapId": 2,
+      "destinationX": 1700.0,
+      "destinationY": 1000.0,
+      "enabled": true,
+      "goldCost": 0,
+      "interactionRadius": 100.0,
+      "minLevel": 1,
+      "portalId": 8004,
+      "sourceMapId": 3,
+      "x": 150.0,
+      "y": 300.0
+    }
+  ],
+  "schemaVersion": 1
+}

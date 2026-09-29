@@ -13,9 +13,12 @@ namespace legend::world {
 class QuestRegistry;
 
 // ---------------------------------------------------------------------------
-// 阶段20 指令九/十：NpcRegistry —— 4 个固定测试 NPC（5001~5004）硬编码注册表
+// 阶段20 指令九/十 → 阶段22 22.11 改造：NpcRegistry —— NPC 定义注册表
 // （附带 Dialogue 基础文本注册表，dialogueId = npcDefinitionId）。
-// 只读单例；启动 ValidateNpcs 校验（npcId 唯一/任务存在于 QuestRegistry/shop/teleport 引用有效）。
+// 生产从 Data/World/npcs.json 加载（WorldServer::Initialize 统一注入）；
+// 目录缺失时用 MakeDefaultWorldData 的出厂配置（22.18 迁移源）。
+// 只读访问走 Instance()；数据注入走静态 Load*。
+// 启动 ValidateNpcs 校验（npcId 唯一/任务存在于 QuestRegistry/shop/teleport 引用有效）。
 // ---------------------------------------------------------------------------
 class NpcRegistry {
 public:
@@ -33,7 +36,14 @@ public:
     // 启动校验（指令十二类比）。
     bool ValidateNpcs(const QuestRegistry& questRegistry, std::string& error) const;
 
+    // 数据注入（WorldServer::Initialize / 测试 fixture）。
+    static void LoadFromDefinitions(std::vector<NpcDefinition> npcs,
+                                    std::vector<DialogueDefinition> dialogues);
+    static void LoadDefaults();
+
 private:
+    static NpcRegistry& Mutable();
+
     std::vector<NpcDefinition> m_npcs;
     std::vector<DialogueDefinition> m_dialogues;
 };

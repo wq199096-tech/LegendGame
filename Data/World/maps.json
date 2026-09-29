@@ -1,0 +1,44 @@
+{
+  "maps": [
+    {
+      "mapId": 1,
+      "maxX": 2000.0,
+      "maxY": 2000.0,
+      "minX": 0.0,
+      "minY": 0.0,
+      "name": "Greenfield Village",
+      "respawnX": 300.0,
+      "respawnY": 300.0,
+      "spawnX": 300.0,
+      "spawnY": 300.0,
+      "type": "Town"
+    },
+    {
+      "mapId": 2,
+      "maxX": 2000.0,
+      "maxY": 2000.0,
+      "minX": 0.0,
+      "minY": 0.0,
+      "name": "Slime Meadow",
+      "respawnX": 200.0,
+      "respawnY": 500.0,
+      "spawnX": 200.0,
+      "spawnY": 500.0,
+      "type": "Field"
+    },
+    {
+      "mapId": 3,
+      "maxX": 2400.0,
+      "maxY": 1800.0,
+      "minX": 0.0,
+      "minY": 0.0,
+      "name": "Ancient Ruins",
+      "respawnX": 200.0,
+      "respawnY": 300.0,
+      "spawnX": 200.0,
+      "spawnY": 300.0,
+      "type": "Field"
+    }
+  ],
+  "schemaVersion": 1
+}

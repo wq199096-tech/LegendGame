@@ -1,0 +1,27 @@
+{
+  "monsterSpawns": [
+    {
+      "centerX": 900.0,
+      "centerY": 950.0,
+      "count": 20,
+      "enabled": true,
+      "mapId": 2,
+      "monsterDefinitionId": 1,
+      "radius": 400.0,
+      "respawnSeconds": 8,
+      "spawnId": 2001
+    },
+    {
+      "centerX": 950.0,
+      "centerY": 820.0,
+      "count": 10,
+      "enabled": true,
+      "mapId": 3,
+      "monsterDefinitionId": 1,
+      "radius": 350.0,
+      "respawnSeconds": 8,
+      "spawnId": 3001
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -169,6 +169,8 @@ struct WorldTestServers {
     // 阶段21 指令十一：Legacy Test Spawn（默认开启——阶段13~20 套件依赖 Map1 Slime；
     // 新地图布局检查用 Map2/Map3 的怪，与此开关无关）。
     bool legacyMap1TestSpawn = true;
+    // 阶段22 22.19：World 数据目录（空 = 生产默认 "Data/World"；测试指向临时 JSON）。
+    std::string worldDataDir;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -208,6 +210,12 @@ struct WorldTestServers {
         world->GetConfig().questSnapshotIntervalMs = questSnapshotIntervalMs;
         world->GetConfig().npcSessionTtlSeconds = npcSessionTtlSeconds;
         world->GetConfig().legacyMap1TestSpawn = legacyMap1TestSpawn;
+        if (!worldDataDir.empty()) {
+            world->GetConfig().worldDataDir = worldDataDir; // 阶段22：真实 Data 链路测试
+        } else {
+            // 测试环境通常无 Data/World 工作目录 → 显式指向不存在的路径走默认数据。
+            world->GetConfig().worldDataDir = "testdata/missing_world_data_dir";
+        }
         std::string error;
         if (!world->Start(error)) {
             std::printf("[TestServers] world start failed: %s\n", error.c_str());

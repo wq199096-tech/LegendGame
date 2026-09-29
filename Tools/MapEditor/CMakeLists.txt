@@ -29,9 +29,10 @@ endif()
 add_executable(LegendMapEditor
     Source/Main.cpp
     Source/EditorApp.cpp
+    Source/WorldDocument.cpp
 )
 
-target_link_libraries(LegendMapEditor PRIVATE legend_engine legend_imgui)
+target_link_libraries(LegendMapEditor PRIVATE legend_engine legend_imgui LegendSharedNetwork)
 
 if(MSVC)
     target_compile_options(LegendMapEditor PRIVATE /utf-8)

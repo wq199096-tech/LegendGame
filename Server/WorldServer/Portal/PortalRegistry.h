@@ -12,9 +12,10 @@ namespace legend::world {
 class MapRegistry;
 
 // ---------------------------------------------------------------------------
-// 阶段21 指令十四/十六/七十：PortalRegistry —— 4 个固定传送门（代码硬编码）。
-// 只读单例；启动 ValidatePortals 校验（portalId 唯一/源与目标地图存在/
-// 源与目标坐标在对应地图边界内）。
+// 阶段21 指令十四/十六/七十 → 阶段22 22.11 改造：PortalRegistry —— 传送门注册表。
+// 生产从 Data/World/portals.json 加载（WorldServer::Initialize 统一注入）；
+// 目录缺失时用 MakeDefaultWorldData 的出厂配置（22.18 迁移源）。
+// 只读访问走 Instance()；数据注入走静态 Load*。
 // ---------------------------------------------------------------------------
 class PortalRegistry {
 public:
@@ -28,7 +29,13 @@ public:
 
     bool ValidatePortals(const MapRegistry& maps, std::string& error) const;
 
+    // 数据注入（WorldServer::Initialize / 测试 fixture）。
+    static void LoadFromDefinitions(std::vector<PortalDefinition> portals);
+    static void LoadDefaults();
+
 private:
+    static PortalRegistry& Mutable();
+
     std::vector<PortalDefinition> m_portals;
 };
 

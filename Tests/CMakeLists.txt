@@ -52,10 +52,13 @@ add_executable(LegendWorldTests
     WorldQuestChecks.cpp
     WorldNpcChecks.cpp
     WorldMapChecks.cpp
+    WorldDataChecks.cpp
+    MapEditorDataChecks.cpp
+    ../Tools/MapEditor/Source/WorldDocument.cpp
 )
 target_include_directories(LegendWorldTests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldTests PRIVATE cxx_std_20)
-target_link_libraries(LegendWorldTests PRIVATE LegendGatewayCore LegendLoginCore LegendWorldCore LegendClientAccount)
+target_link_libraries(LegendWorldTests PRIVATE LegendGatewayCore LegendLoginCore LegendWorldCore LegendClientAccount LegendSharedNetwork)
 
 if(MSVC)
     target_compile_options(LegendWorldTests PRIVATE /utf-8)

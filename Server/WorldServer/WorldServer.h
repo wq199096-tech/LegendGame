@@ -135,6 +135,9 @@ public:
         // 阶段21 指令十一：Legacy Test Spawn——生产按新地图布局（Map1 无野外 Slime）；
         // 历史测试依赖 Map1 Slime（NPC/战斗/技能套件），测试环境开启此开关。
         bool legacyMap1TestSpawn = false;
+        // 阶段22 22.11/22.12：世界数据目录（maps/npcs/monster_spawns/portals JSON）。
+        // 存在 → 加载+校验（失败拒绝启动）；不存在 → 出厂默认（MakeDefaultWorldData）。
+        std::string worldDataDir = "Data/World";
     };
 
     struct Hooks {

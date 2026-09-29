@@ -4,6 +4,7 @@
 #include "Server/WorldServer/Quest/QuestRegistry.h"
 #include "Server/WorldServer/Npc/ShopService.h"
 #include "Server/WorldServer/Npc/TeleportService.h"
+#include "Shared/WorldData/WorldDataJson.h"
 
 namespace legend::world {
 
@@ -12,75 +13,13 @@ const NpcRegistry& NpcRegistry::Instance() {
     return registry;
 }
 
+NpcRegistry& NpcRegistry::Mutable() {
+    return const_cast<NpcRegistry&>(Instance());
+}
+
 NpcRegistry::NpcRegistry() {
-    // ------------------------------------------------------------------
-    // 阶段20 指令九：4 个固定测试 NPC。
-    // ------------------------------------------------------------------
-    {
-        NpcDefinition npc;
-        npc.npcDefinitionId = 5001;
-        npc.name = "Village Elder";
-        npc.npcType = NpcType::QuestGiver;
-        npc.mapId = 1;
-        npc.spawnX = 300.0f;
-        npc.spawnY = 300.0f;
-        npc.interactionRange = 120.0f;
-        npc.dialogueId = 5001;
-        npc.shopId = 0;
-        npc.teleportId = 0;
-        npc.questIds = {4001, 4002, 4003, 4005};
-        npc.visualId = 5001;
-        m_npcs.push_back(std::move(npc));
-    }
-    {
-        NpcDefinition npc;
-        npc.npcDefinitionId = 5002;
-        npc.name = "General Merchant";
-        npc.npcType = NpcType::Merchant;
-        npc.mapId = 1;
-        npc.spawnX = 450.0f;
-        npc.spawnY = 300.0f;
-        npc.interactionRange = 120.0f;
-        npc.dialogueId = 5002;
-        npc.shopId = 6001;
-        npc.teleportId = 0;
-        npc.visualId = 5002;
-        m_npcs.push_back(std::move(npc));
-    }
-    {
-        NpcDefinition npc;
-        npc.npcDefinitionId = 5003;
-        npc.name = "Wayfarer";
-        npc.npcType = NpcType::Teleporter;
-        npc.mapId = 1;
-        npc.spawnX = 600.0f;
-        npc.spawnY = 300.0f;
-        npc.interactionRange = 120.0f;
-        npc.dialogueId = 5003;
-        npc.teleportId = 7001;
-        npc.visualId = 5003;
-        m_npcs.push_back(std::move(npc));
-    }
-    {
-        NpcDefinition npc;
-        npc.npcDefinitionId = 5004;
-        npc.name = "Explorer Guide";
-        npc.npcType = NpcType::MultiFunction;
-        npc.mapId = 1;
-        npc.spawnX = 750.0f;
-        npc.spawnY = 300.0f;
-        npc.interactionRange = 120.0f;
-        npc.dialogueId = 5004;
-        npc.teleportId = 7002;
-        npc.questIds = {4004};
-        npc.visualId = 5004;
-        m_npcs.push_back(std::move(npc));
-    }
-    // Dialogue 基础文本（dialogueId = npcDefinitionId）。
-    m_dialogues.push_back({5001, "Village Elder", "The slimes have been restless lately. Will you help us?"});
-    m_dialogues.push_back({5002, "General Merchant", "Welcome! Finest goods in the village."});
-    m_dialogues.push_back({5003, "Wayfarer", "I can take you anywhere, for a price."});
-    m_dialogues.push_back({5004, "Explorer Guide", "Looking for adventure? The far plains await."});
+    // 阶段22 22.11：硬编码迁入 Data/World（出厂数据由 MakeDefaultWorldData 提供，
+    // WorldServer::Initialize 启动时统一 LoadDefaults/LoadFromDefinitions）。
 }
 
 const NpcDefinition* NpcRegistry::FindNpc(NpcDefinitionId npcDefinitionId) const {
@@ -140,6 +79,17 @@ bool NpcRegistry::ValidateNpcs(const QuestRegistry& questRegistry, std::string& 
         }
     }
     return true;
+}
+
+void NpcRegistry::LoadFromDefinitions(std::vector<NpcDefinition> npcs,
+                                      std::vector<DialogueDefinition> dialogues) {
+    Mutable().m_npcs = std::move(npcs);
+    Mutable().m_dialogues = std::move(dialogues);
+}
+
+void NpcRegistry::LoadDefaults() {
+    WorldDataSet defaults = MakeDefaultWorldData();
+    LoadFromDefinitions(std::move(defaults.npcs), std::move(defaults.dialogues));
 }
 
 } // namespace legend::world
