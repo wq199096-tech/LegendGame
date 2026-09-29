@@ -1265,9 +1265,9 @@ void RunStatusChainChecks() {
         // 可见集内（指令一百一十七/六十：绝不发全世界状态）。
         // 阶段21：历史快照不参与校验——多地图布局下怪物游荡会穿越 AOI 边界，
         // "当时可见"无法回溯验证；只校验本检查期间（baseline 后）新到达的快照
-        //（C 自身快照 2s 周期必达，窗口内必有新样本）。
-        const std::size_t cSnapBaseline =
-            CountEventsOf(clientC, WorldNetworkEvent::Type::StatusSnapshotEvent);
+        //（C 自身快照 2s 周期必达，窗口内必有新样本）。baseline 用 counts（DrainEvents 递增）。
+        const int cSnapBaseline = clientC.counts[WorldTestClient::IndexOf(
+            WorldNetworkEvent::Type::StatusSnapshotEvent)];
         clientC.DrainEvents();
         const auto cVisible = RunOnWorldIo(servers.worldService, [&] {
             auto p = servers.world->FindPlayerByCharacter(seedC.characterId);
@@ -1281,16 +1281,15 @@ void RunStatusChainChecks() {
         const bool gotNewSnap = WaitUntil(
             [&] {
                 clientC.DrainEvents();
-                return CountEventsOf(clientC,
-                                     WorldNetworkEvent::Type::StatusSnapshotEvent) >
-                       cSnapBaseline;
+                return clientC.counts[WorldTestClient::IndexOf(
+                           WorldNetworkEvent::Type::StatusSnapshotEvent)] > cSnapBaseline;
             },
             4000);
         bool noFar = true;
         const auto& cSnapEvents = clientC.recorded[WorldTestClient::IndexOf(
             WorldNetworkEvent::Type::StatusSnapshotEvent)];
-        for (std::size_t i = cSnapBaseline; i < cSnapEvents.size(); ++i) {
-            const auto& e = cSnapEvents[i];
+        for (int i = cSnapBaseline; i < static_cast<int>(cSnapEvents.size()); ++i) {
+            const auto& e = cSnapEvents[static_cast<std::size_t>(i)];
             if (e.status.targetType == kTypeMonster &&
                 std::find(cVisible.begin(), cVisible.end(), e.status.targetEntityId) ==
                     cVisible.end()) {
