@@ -1355,7 +1355,11 @@ void RunSkillChainChecksMain() {
     {
         // A Mana = 60：刷 100 个 QS -> 仅第 1 个被接受（60->50），其余 99 个在 1.5s CD
         // 内到达 -> Cooldown。恰一次伤害（48 >= 22 -> slime2 被击杀）；Mana 不为负。
+        // 阶段19：ManaSnapshot 以刷包前基线过滤（否则 events.back() 可能取到刷包前
+        // mana=60 的旧快照——CI 慢机上为真实竞态）。
         const int deathsBefore = CountMonsterDeathsFor(clientA, 2);
+        const std::size_t manaBaseline = clientA.recorded[WorldTestClient::IndexOf(
+            WorldNetworkEvent::Type::ManaSnapshot)].size();
         for (int i = 0; i < 100; ++i) {
             clientA.controller.SendSkillCast(kSkillIdQuickStrike, kTargetMonster, 2);
         }
@@ -1365,16 +1369,18 @@ void RunSkillChainChecksMain() {
         const int deathsAfter = CountMonsterDeathsFor(clientA, 2);
         bool ok = monster2 != nullptr && !monster2->Alive() && monster2->CurrentHp() == 0;
         ok = ok && deathsAfter == deathsBefore + 1; // 恰一次伤害（一次击杀）
-        // Mana 不为负：ManaSnapshot（A Mana = 50，恰好一次扣费）
+        // Mana 不为负：基线之后的 ManaSnapshot（A Mana = 50，恰好一次扣费）。
         WorldNetworkEvent snap;
         const bool gotSnap = WaitUntil(
             [&] {
                 clientA.DrainEvents();
                 const auto& events =
                     clientA.recorded[WorldTestClient::IndexOf(WorldNetworkEvent::Type::ManaSnapshot)];
-                if (!events.empty()) {
-                    snap = events.back();
-                    return true;
+                for (std::size_t i = manaBaseline; i < events.size(); ++i) {
+                    if (events[i].currentMana == 50) {
+                        snap = events[i];
+                        return true;
+                    }
                 }
                 return false;
             },
@@ -1383,10 +1389,11 @@ void RunSkillChainChecksMain() {
         if (!ok) {
             auto monster2b = servers.world->FindMonster(2);
             std::printf("[Diag] RequestSpam: gotSnap=%d snapMana=%u m2alive=%d m2hp=%u "
-                        "deathsBefore=%d deathsAfter=%d\n",
+                        "deathsBefore=%d deathsAfter=%d manaBaseline=%zu\n",
                         static_cast<int>(gotSnap), snap.currentMana,
                         monster2b ? static_cast<int>(monster2b->Alive()) : -1,
-                        monster2b ? monster2b->CurrentHp() : 0u, deathsBefore, deathsAfter);
+                        monster2b ? monster2b->CurrentHp() : 0u, deathsBefore, deathsAfter,
+                        manaBaseline);
         }
         Check("SkillRequestSpamCheck: 100 requests rate-limited by 1.5s cd -> exactly 1 hit, "
               "mana 60->50 (no underflow)",
