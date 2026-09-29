@@ -1262,7 +1262,12 @@ void RunStatusChainChecks() {
             selfSnap, 6000);
         ok = ok && selfGot;
         // C：只收到自己（+可见实体）快照——Monster 快照的 target 必须在 C 的服务器
-        // 可见集内（指令一百一十七/六十：绝不发全世界状态；怪游荡进 600 内属合法可见）。
+        // 可见集内（指令一百一十七/六十：绝不发全世界状态）。
+        // 阶段21：历史快照不参与校验——多地图布局下怪物游荡会穿越 AOI 边界，
+        // "当时可见"无法回溯验证；只校验本检查期间（baseline 后）新到达的快照
+        //（C 自身快照 2s 周期必达，窗口内必有新样本）。
+        const std::size_t cSnapBaseline =
+            CountEventsOf(clientC, WorldNetworkEvent::Type::StatusSnapshotEvent);
         clientC.DrainEvents();
         const auto cVisible = RunOnWorldIo(servers.worldService, [&] {
             auto p = servers.world->FindPlayerByCharacter(seedC.characterId);
@@ -1272,16 +1277,27 @@ void RunStatusChainChecks() {
             return std::vector<std::uint64_t>(p->VisibleMonsters().begin(),
                                               p->VisibleMonsters().end());
         });
+        // 等至少一条新快照（2s 快照周期），保证校验窗口非空。
+        const bool gotNewSnap = WaitUntil(
+            [&] {
+                clientC.DrainEvents();
+                return CountEventsOf(clientC,
+                                     WorldNetworkEvent::Type::StatusSnapshotEvent) >
+                       cSnapBaseline;
+            },
+            4000);
         bool noFar = true;
-        for (const auto& e : clientC.recorded[WorldTestClient::IndexOf(
-                                 WorldNetworkEvent::Type::StatusSnapshotEvent)]) {
+        const auto& cSnapEvents = clientC.recorded[WorldTestClient::IndexOf(
+            WorldNetworkEvent::Type::StatusSnapshotEvent)];
+        for (std::size_t i = cSnapBaseline; i < cSnapEvents.size(); ++i) {
+            const auto& e = cSnapEvents[i];
             if (e.status.targetType == kTypeMonster &&
                 std::find(cVisible.begin(), cVisible.end(), e.status.targetEntityId) ==
                     cVisible.end()) {
                 noFar = false; // 快照包含 C 看不见的怪 -> 全图广播泄漏
             }
         }
-        ok = ok && noFar;
+        ok = ok && noFar && gotNewSnap;
         if (!ok) {
             int cMonsterSnap = 0;
             for (const auto& e : clientC.recorded[WorldTestClient::IndexOf(
