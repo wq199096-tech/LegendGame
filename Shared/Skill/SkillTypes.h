@@ -78,6 +78,7 @@ enum class SkillCancelReason : std::uint8_t {
     Dead = 2,           // 指令十七：死亡打断
     TargetInvalid = 3,  // 指令十八/四十二/四十三：完成时目标重验失败
     ServerCleanup = 4,  // 指令七十九：服务器 Stop 清理（不发网络包）
+    Teleported = 5,     // 阶段20 指令七十二：NPC 传送打断
 };
 
 inline const char* SkillCancelReasonName(std::uint8_t reason) {
@@ -86,6 +87,7 @@ inline const char* SkillCancelReasonName(std::uint8_t reason) {
         case SkillCancelReason::Dead: return "Dead";
         case SkillCancelReason::TargetInvalid: return "TargetInvalid";
         case SkillCancelReason::ServerCleanup: return "ServerCleanup";
+        case SkillCancelReason::Teleported: return "Teleported";
     }
     return "Unknown";
 }

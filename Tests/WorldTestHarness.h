@@ -164,6 +164,8 @@ struct WorldTestServers {
     std::uint64_t dropRollerSeed = 0;
     // 阶段19：QuestSnapshot 周期（默认生产 10s；测试可缩短验证周期纠偏）。
     int questSnapshotIntervalMs = 10000;
+    // 阶段20：NPC 会话 TTL（默认生产 30s；NPC 测试缩短验证过期失效）。
+    double npcSessionTtlSeconds = 30.0;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -201,6 +203,7 @@ struct WorldTestServers {
         world->GetConfig().testForceDropAll = testForceDropAll;
         world->GetConfig().dropRollerSeed = dropRollerSeed;
         world->GetConfig().questSnapshotIntervalMs = questSnapshotIntervalMs;
+        world->GetConfig().npcSessionTtlSeconds = npcSessionTtlSeconds;
         std::string error;
         if (!world->Start(error)) {
             std::printf("[TestServers] world start failed: %s\n", error.c_str());
@@ -308,7 +311,11 @@ struct WorldTestClient {
     static constexpr int kEventCapacity = 64;
     std::deque<WorldNetworkEvent> recorded[kEventCapacity];
     int counts[kEventCapacity] = {};
-    WorldNetworkEvent lastEvent[kEventCapacity];
+    // 阶段20：WorldNetworkEvent 因 NPC/Shop/Teleport payload 膨胀（~KB 级/事件），
+    // 64 份按值数组使每个栈上客户端占 ~100KB；Monster 套件 12 个栈上客户端会
+    // 直接溢出 1MB 默认主线程栈（函数序言 __chkstk 阶段崩溃，任何 printf 之前）。
+    // lastEvent 改为堆分配（用法仍是 lastEvent[idx] 索引读写）。
+    std::vector<WorldNetworkEvent> lastEvent = std::vector<WorldNetworkEvent>(kEventCapacity);
 
     static int IndexOf(WorldNetworkEvent::Type type) { return static_cast<int>(type); }
 

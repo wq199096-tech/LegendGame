@@ -10,6 +10,7 @@ add_library(LegendClientAccount STATIC
     WorldNetwork/WorldNetworkClient.cpp
     WorldNetwork/WorldClientController.cpp
     WorldNetwork/ClientQuestModel.cpp
+    WorldNetwork/RemoteNpcManager.cpp
     WorldNetwork/RemotePlayerEntity.cpp
     WorldNetwork/RemotePlayerManager.cpp
     WorldNetwork/RemoteMonsterEntity.cpp

@@ -614,12 +614,62 @@ void GameScene::Update(float deltaTime) {
     }
 
     // ---- 阶段6：E 拾取最近 GroundLoot（<=80 world units） ----
+    // ---- 阶段20 指令十七：E 优先 NPC 交互（visible NPC <=120）——否则回落拾取 ----
     if (input.IsKeyPressed(SDL_SCANCODE_E) && m_player != nullptr) {
-        const int picked = m_worldActors.GetLoot().PickupNearest(
-            m_player->GetPosition(), 80.0f, m_player->GetInventory(),
-            m_worldActors.GetItemDatabase());
-        if (picked == 0) {
-            LOG_INFO("[Pickup] nothing picked (no loot in range or inventory full).");
+        bool npcInteracted = false;
+        if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+            auto& world = m_networkController->World();
+            // 联机世界：优先 NPC（服务器重新验证一切）。
+            npcInteracted = world.SendInteractNearestNpc(world.ServerPositionX(),
+                                                         world.ServerPositionY());
+            if (npcInteracted) {
+                LOG_INFO("[Npc] E -> interact nearest visible NPC (<=120).");
+            }
+        }
+        if (!npcInteracted) {
+            const int picked = m_worldActors.GetLoot().PickupNearest(
+                m_player->GetPosition(), 80.0f, m_player->GetInventory(),
+                m_worldActors.GetItemDatabase());
+            if (picked == 0) {
+                LOG_INFO("[Pickup] nothing picked (no loot in range or inventory full).");
+            }
+        }
+    }
+
+    // ---- 阶段20 指令八十/八十一：NPC 对话/商店 Debug 键 ----
+    // 对话打开时：数字键 1~9 选择 Option（优先于技能键）；B 买 / S 卖 / T 传送选项。
+    if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+        auto& world = m_networkController->World();
+        if (world.Dialogue().Active()) {
+            for (int digit = 1; digit <= 9; ++digit) {
+                const SDL_Scancode scancode =
+                    static_cast<SDL_Scancode>(SDL_SCANCODE_1 + (digit - 1));
+                if (input.IsKeyPressed(scancode)) {
+                    if (world.SendDialogueOptionByIndex(static_cast<std::size_t>(digit))) {
+                        LOG_INFO("[Npc] dialogue option " + std::to_string(digit) + " selected.");
+                    }
+                    break;
+                }
+            }
+        } else if (world.Shop().Active()) {
+            // 指令八十一：B = Buy（第一件 canBuy 条目）；S = Sell（背包第一件实例）。
+            if (input.IsKeyPressed(SDL_SCANCODE_B)) {
+                if (world.SendBuySelected(1)) {
+                    LOG_INFO("[Npc] shop buy requested.");
+                }
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_S)) {
+                std::uint32_t sellSlot = 0;
+                if (world.FindFirstBagSlotOf(legend::world::kItemSlimeCoreId, sellSlot) ||
+                    world.FindFirstBagSlotOf(legend::world::kItemRustySwordId, sellSlot) ||
+                    world.FindFirstBagSlotOf(legend::world::kItemClothArmorId, sellSlot)) {
+                    const auto& slot = world.Inventory().Slot(sellSlot);
+                    if (world.SendSellSelected(slot.instanceId, 1)) {
+                        LOG_INFO("[Npc] shop sell requested (instance " +
+                                 std::to_string(slot.instanceId) + ").");
+                    }
+                }
+            }
         }
     }
 
@@ -754,6 +804,8 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     DrawRemotePlayers(m_mapRenderer.GetBatch());
     // 阶段13 指令五十六/五十七：远程怪物 Debug 绘制
     DrawRemoteMonsters(m_mapRenderer.GetBatch());
+    // 阶段20 指令十六/三十四：NPC Debug 绘制（Quad + 名字 + 任务 Marker !/?/灰点）
+    DrawRemoteNpcs(m_mapRenderer.GetBatch());
 
     if (m_collisionDebug) {
         m_mapRenderer.RenderCollisionOverlay(*m_map);
@@ -863,6 +915,51 @@ void GameScene::DrawRemotePlayers(legend::render::SpriteBatch& batch) {
             batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -96.0f),
                            {24.0f / 64.0f, 8.0f / 64.0f}, 0.0f,
                            legend::math::Color(1.0f, 0.85f, 0.20f, 0.95f)); // 金色
+        }
+    }
+}
+
+// 阶段20 指令十六/三十四：NPC Debug 绘制——蓝色系 Quad（与玩家绿/怪物红区分）；
+// 类型着色：QuestGiver 青 / Merchant 黄 / Teleporter 紫 / MultiFunction 白；
+// 任务 Marker（per-player）：ReadyToTurnIn 金条(?) / Available 黄条(!) / InProgress 灰点。
+// NPC 名字走 F8/F12 状态文本（无世界空间文字渲染器；Spawn 日志已输出名字）。
+void GameScene::DrawRemoteNpcs(legend::render::SpriteBatch& batch) {
+    if (!m_networkController || !m_whiteTexture) {
+        return;
+    }
+    const auto& world = m_networkController->World();
+    if (!world.IsWorldReady()) {
+        return;
+    }
+    for (const auto& [npcEntityId, npc] : world.Npcs().All()) {
+        if (!npc.alive) {
+            continue;
+        }
+        const legend::math::Vector2 feet(npc.x, npc.y);
+        legend::math::Color bodyColor(0.30f, 0.55f, 0.95f, 0.95f); // QuestGiver 青
+        if (npc.type == legend::world::NpcType::Merchant) {
+            bodyColor = legend::math::Color(0.95f, 0.80f, 0.20f, 0.95f); // Merchant 黄
+        } else if (npc.type == legend::world::NpcType::Teleporter) {
+            bodyColor = legend::math::Color(0.70f, 0.35f, 0.95f, 0.95f); // Teleporter 紫
+        } else if (npc.type == legend::world::NpcType::MultiFunction) {
+            bodyColor = legend::math::Color(0.90f, 0.90f, 0.95f, 0.95f); // MultiFunction 白
+        }
+        // 身体（24x28 Debug Quad，高于玩家方便辨认）。
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -40.0f),
+                       {26.0f / 64.0f, 30.0f / 64.0f}, 0.0f, bodyColor);
+        // 任务 Marker（指令三十四）：Ready 金 / Available 黄 / InProgress 灰点。
+        if (npc.questMarker == legend::world::NpcQuestMarker::ReadyToTurnIn) {
+            batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -70.0f),
+                           {10.0f / 64.0f, 14.0f / 64.0f}, 0.0f,
+                           legend::math::Color(1.0f, 0.85f, 0.10f, 1.0f)); // 金（?）
+        } else if (npc.questMarker == legend::world::NpcQuestMarker::Available) {
+            batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -70.0f),
+                           {8.0f / 64.0f, 14.0f / 64.0f}, 0.0f,
+                           legend::math::Color(1.0f, 1.0f, 0.30f, 1.0f)); // 黄（!）
+        } else if (npc.questMarker == legend::world::NpcQuestMarker::InProgress) {
+            batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -64.0f),
+                           {6.0f / 64.0f, 6.0f / 64.0f}, 0.0f,
+                           legend::math::Color(0.55f, 0.55f, 0.55f, 1.0f)); // 灰点
         }
     }
 }
@@ -1603,6 +1700,10 @@ void GameScene::LogMapStats(double deltaTime) {
         // 阶段19 指令五十一：F8 Quest Debug（状态/进度来自服务器事件镜像）
         (m_networkController && m_networkController->World().QuestDebugVisible()
              ? m_networkController->World().QuestStatusText()
+             : std::string()) +
+        // 阶段20：F8 面板追加 NPC 名字/Marker/对话/商店 Debug 文本
+        (m_networkController && m_networkController->World().QuestDebugVisible()
+             ? m_networkController->World().NpcStatusText()
              : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame

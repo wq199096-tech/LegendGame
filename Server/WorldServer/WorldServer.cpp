@@ -4,6 +4,9 @@
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
 #include "Server/WorldServer/Combat/CombatService.h"
 #include "Server/WorldServer/Combat/DamageCalculator.h"
+#include "Server/WorldServer/Npc/NpcRegistry.h"
+#include "Server/WorldServer/Npc/ShopService.h"
+#include "Server/WorldServer/Npc/TeleportService.h"
 #include "Server/WorldServer/Quest/QuestRegistry.h"
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
@@ -91,6 +94,13 @@ bool WorldServer::Start(std::string& error) {
         m_database.Close();
         return false;
     }
+    // 阶段20：启动校验 NPC 定义（引用任务/shop/teleport/dialogue 有效）+ 生成 4 个 NPC。
+    if (!NpcRegistry::Instance().ValidateNpcs(QuestRegistry::Instance(), error)) {
+        error = "npc registry validation failed: " + error;
+        m_database.Close();
+        return false;
+    }
+    SpawnInitialNpcs();
     m_dbWorker.Start();
     if (!m_server->Listen(m_config.listenPort, error)) {
         m_dbWorker.Stop();
@@ -245,6 +255,18 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
             HandleQuestTurnInRequest(connectionId, packet); // 阶段19 指令三十三
         } else if (messageId == MessageId::QuestAbandonRequest) {
             HandleQuestAbandonRequest(connectionId, packet); // 阶段19 指令四十三
+        } else if (messageId == MessageId::NpcInteractRequest) {
+            HandleNpcInteractRequest(connectionId, packet); // 阶段20 指令十八
+        } else if (messageId == MessageId::DialogueOptionRequest) {
+            HandleDialogueOptionRequest(connectionId, packet); // 阶段20 指令二十五
+        } else if (messageId == MessageId::ShopOpenRequest) {
+            HandleShopOpenRequest(connectionId, packet); // 阶段20 指令三十九
+        } else if (messageId == MessageId::ShopBuyRequest) {
+            HandleShopBuyRequest(connectionId, packet); // 阶段20 指令四十二
+        } else if (messageId == MessageId::ShopSellRequest) {
+            HandleShopSellRequest(connectionId, packet); // 阶段20 指令四十九
+        } else if (messageId == MessageId::TeleportRequest) {
+            HandleTeleportRequest(connectionId, packet); // 阶段20 指令六十三
         }
     }
 }
@@ -973,6 +995,8 @@ void WorldServer::RunAoiTick() {
         UpdatePlayerMonsterVisibility(player, false);
         // 阶段18 指令十八：掉落 AOI 差量（同一 tick，独立 resolver + Spatial Grid）。
         UpdatePlayerItemDropVisibility(player, false);
+        // 阶段20 指令十一/十四：NPC AOI 差量（同一 tick；NPC 不全图广播）。
+        UpdatePlayerNpcVisibility(player, false);
     }
 }
 
@@ -1009,6 +1033,8 @@ void WorldServer::InitializePlayerVisibility(const std::shared_ptr<PlayerSession
     UpdatePlayerMonsterVisibility(player, true);
     // 阶段18 指令十八：进入世界初始掉落可见性（只发 <=600 的初始 spawn）。
     UpdatePlayerItemDropVisibility(player, true);
+    // 阶段20 指令十一：进入世界初始 NPC 可见性（NpcSpawn + per-player Marker）。
+    UpdatePlayerNpcVisibility(player, true);
 }
 
 void WorldServer::NotifyPlayerGoneToObservers(std::uint64_t characterId,
@@ -1568,6 +1594,8 @@ void WorldServer::KillPlayer(const std::shared_ptr<PlayerSession>& victim,
         }
         ClearStatusOnDeath(CombatEntityType::Player, victim->CharacterId(),
                            victim->StatusEffects(), statusReceivers);
+        // 阶段20 指令二十二：玩家死亡 → Dialogue/Shop Session 失效。
+        CloseNpcSessions(victim);
     }
     // 指令四十九：PlayerDeath 广播（观察者 ∪ 受害者本人）。
     PlayerDeathPayload death;
@@ -3684,6 +3712,34 @@ bool WorldServer::TestMarkPlayerDead(std::uint64_t characterId) {
     return true;
 }
 
+bool WorldServer::TestRevivePlayer(std::uint64_t characterId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player) {
+            player->Revive(); // 测试白盒：复活 + 满血（防死亡级联影响后续检查）
+        }
+    });
+    return true;
+}
+
+bool WorldServer::TestBuffPlayerHp(std::uint64_t characterId, std::uint32_t hp) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, hp]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player) {
+            player->TestBuffHp(hp); // 测试白盒：抬高 HP 上限（防死亡级联）
+        }
+    });
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // 阶段19：服务器权威任务（Quest Core V0.19）
 // 职责分离（指令一百四十四）：QuestRegistry 定义 / QuestService 规则 /
@@ -3731,8 +3787,16 @@ void WorldServer::HandleQuestAcceptRequest(std::uint64_t connectionId,
                                 QuestResultCode::NotInWorld);
         return;
     }
+    // 阶段20 指令二十九：核心校验/接取抽为 AcceptQuestForPlayer（NPC Option 复用同一套）。
+    const QuestResultCode code = AcceptQuestForPlayer(player, request.questId);
+    SendQuestAcceptResponse(player, request.requestId, request.questId, code == QuestResultCode::Success,
+                            code);
+}
+
+QuestResultCode WorldServer::AcceptQuestForPlayer(const std::shared_ptr<PlayerSession>& player,
+                                                  QuestId questId) {
     // 指令二十：校验链。
-    const QuestDefinition* definition = QuestRegistry::Instance().FindQuest(request.questId);
+    const QuestDefinition* definition = QuestRegistry::Instance().FindQuest(questId);
     QuestResultCode code = QuestResultCode::Success;
     if (definition == nullptr) {
         code = QuestResultCode::UnknownQuest;
@@ -3744,9 +3808,9 @@ void WorldServer::HandleQuestAcceptRequest(std::uint64_t connectionId,
                !player->Quests().IsCompleted(definition->prerequisiteQuestId)) {
         // 指令六十五/六十六：ReadyToTurnIn / Abandoned 都不算 Completed。
         code = QuestResultCode::PrerequisiteNotMet;
-    } else if (player->Quests().IsActiveOrReady(request.questId)) {
+    } else if (player->Quests().IsActiveOrReady(questId)) {
         code = QuestResultCode::AlreadyAccepted;
-    } else if (player->Quests().IsCompleted(request.questId)) {
+    } else if (player->Quests().IsCompleted(questId)) {
         // 指令二十：任务没有 Completed 且不可重复（阶段19 全部不可重复）。
         code = QuestResultCode::AlreadyCompleted;
     } else if (player->Quests().CountActive() >= kMaxActiveQuests) {
@@ -3754,24 +3818,21 @@ void WorldServer::HandleQuestAcceptRequest(std::uint64_t connectionId,
         code = QuestResultCode::QuestLogFull;
     }
     if (code != QuestResultCode::Success) {
-        SendQuestAcceptResponse(player, request.requestId, request.questId, false, code);
-        return;
+        return code;
     }
     // 指令二十三：接取初始化（InProgress + 全部进度 0 + ReachLevel/Collect
     // 立即初始校验）。
     auto changes = QuestService::AcceptQuest(QuestRegistry::Instance(), player->Quests(),
-                                             request.questId, player->Level(),
+                                             questId, player->Level(),
                                              OwnedCountFnFor(player), legend::account::UnixNow());
     auto stateChanges = QuestService::EvaluateQuestCompletion(
         QuestRegistry::Instance(), player->Quests(), legend::account::UnixNow());
-    player->RememberQuestRequest(request.requestId); // 指令五十九：只缓存成功请求
-    LOG_INFO("[Quest] accepted quest=" + std::to_string(request.questId) + " char=" +
+    LOG_INFO("[Quest] accepted quest=" + std::to_string(questId) + " char=" +
              player->CharacterName());
     // 指令十七：接取写 DB（先于进度写——DbWorker FIFO 保证顺序）。
     {
         auto self = shared_from_this();
         const std::uint64_t characterId = player->CharacterId();
-        const QuestId questId = request.questId;
         std::vector<std::uint32_t> objectiveIds;
         for (const auto& objective : definition->objectives) {
             objectiveIds.push_back(objective.objectiveId);
@@ -3787,11 +3848,11 @@ void WorldServer::HandleQuestAcceptRequest(std::uint64_t connectionId,
             }
         });
     }
-    SendQuestAcceptResponse(player, request.requestId, request.questId, true,
-                            QuestResultCode::Success);
-    SendQuestStateChanged(player, request.questId, QuestState::NotAccepted,
-                          QuestState::InProgress); // 指令三十二
+    SendQuestStateChanged(player, questId, QuestState::NotAccepted, QuestState::InProgress); // 指令三十二
     HandleQuestObjectiveChanges(player, changes, stateChanges);
+    // 阶段20 指令三十三：任务状态变化 → 重算相关 NPC per-player Marker。
+    SendNpcQuestMarkersFor(player);
+    return QuestResultCode::Success;
 }
 
 void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
@@ -3817,15 +3878,25 @@ void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
                                 QuestResultCode::DuplicateRequest);
         return;
     }
+    // 阶段20 指令三十：核心抽取为 BeginQuestTurnIn（NPC TurnIn Option 复用同一套）。
+    const QuestResultCode code =
+        BeginQuestTurnIn(player, request.questId, request.requestId, true);
+    if (code != QuestResultCode::Success) {
+        SendQuestTurnInResponse(player, request.requestId, request.questId, false, code);
+    }
+}
+
+QuestResultCode WorldServer::BeginQuestTurnIn(const std::shared_ptr<PlayerSession>& player,
+                                              QuestId questId, std::uint64_t requestId,
+                                              bool sendResponsePacket) {
     // 指令三十四：TurnIn 校验（状态必须 ReadyToTurnIn）。
     const QuestResultCode validateCode = QuestService::ValidateTurnIn(
-        player->Quests(), request.questId, QuestRegistry::Instance());
+        player->Quests(), questId, QuestRegistry::Instance());
     if (validateCode != QuestResultCode::Success) {
-        SendQuestTurnInResponse(player, request.requestId, request.questId, false, validateCode);
-        return;
+        return validateCode;
     }
     const QuestDefinition* definition =
-        QuestRegistry::Instance().FindQuest(request.questId);
+        QuestRegistry::Instance().FindQuest(questId);
     // 指令三十九：奖励含物品且背包无空间 -> InventoryFull（任务仍 ReadyToTurnIn，
     // 不先发 EXP/Gold 再因 Item 失败）。
     InventoryContainer trial = player->Inventory();
@@ -3835,15 +3906,15 @@ void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
             trial.Add(m_itemRegistry, definition->reward.itemDefinitionId,
                       definition->reward.itemQuantity, 0, 0);
         if (addResult.code == InventoryAddCode::Full) {
-            SendQuestTurnInResponse(player, request.requestId, request.questId, false,
-                                    QuestResultCode::InventoryFull);
-            return;
+            return QuestResultCode::InventoryFull;
         }
         rewardSlotIndex = static_cast<std::int64_t>(addResult.slotIndex);
     }
     // 指令六十：立即缓存 requestId（先于 DB 提交）——连发重放不重复进入结算管线
     //（请求风暴下首个提交未完成时，后续同 id 必须被拒绝）。
-    player->RememberQuestRequest(request.requestId);
+    if (requestId != 0) {
+        player->RememberQuestRequest(requestId);
+    }
     // 指令三十五/三十六/三十七：奖励复用 ProgressionService/InventoryService，
     // 不写第三套经验金币系统；EXP 奖励可能触发升级（支持跨多级）。
     const auto progression =
@@ -3852,13 +3923,9 @@ void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
     const std::int64_t newGold = AddGold(player->Gold(),
                                          static_cast<std::int64_t>(definition->reward.gold));
     const std::uint32_t oldLevel = player->Level();
-    const std::int64_t oldExp = player->Experience();
-    const std::int64_t oldGold = player->Gold();
     // 指令四十：原子 TurnIn 事务（Quest Completed + 成长写回 + 物品入库）。
     auto self = shared_from_this();
     const std::uint64_t characterId = player->CharacterId();
-    const QuestId questId = request.questId;
-    const std::uint64_t requestId = request.requestId;
     QuestRepository::TurnInTransaction tx;
     tx.characterId = characterId;
     tx.questId = questId;
@@ -3870,12 +3937,12 @@ void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
     tx.rewardItemQuantity = definition->reward.itemQuantity;
     tx.rewardItemSlotIndex = rewardSlotIndex;
     tx.rewardItemCreatedAt = tx.turnedInAt;
-    m_dbWorker.Post([self, characterId, questId, requestId, tx, definition, oldLevel, oldExp,
-                     oldGold]() {
+    m_dbWorker.Post([self, characterId, questId, requestId, tx, definition, oldLevel,
+                     sendResponsePacket]() {
         std::string dbError;
         const auto result = QuestRepository::RunTurnInTransaction(self->m_database, tx, dbError);
         self->m_service.Post([self, characterId, questId, requestId, tx, result, definition,
-                              oldLevel, oldExp, oldGold, dbError]() {
+                              oldLevel, dbError, sendResponsePacket]() {
             if (self->m_stopped.load()) {
                 return;
             }
@@ -3888,8 +3955,10 @@ void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
                 LOG_ERROR("[Quest] TurnIn transaction failed char=" +
                           std::to_string(characterId) + " quest=" + std::to_string(questId) +
                           ": " + dbError);
-                self->SendQuestTurnInResponse(player, requestId, questId, false,
-                                              QuestResultCode::InternalError);
+                if (sendResponsePacket && requestId != 0) {
+                    self->SendQuestTurnInResponse(player, requestId, questId, false,
+                                                  QuestResultCode::InternalError);
+                }
                 return;
             }
             // ---- 成功：更新内存并广播（指令四十） ----
@@ -3946,15 +4015,20 @@ void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
                 }
             }
             self->SendQuestStateChanged(player, questId, oldState, QuestState::Completed);
-            self->SendQuestTurnInResponse(player, requestId, questId, true,
-                                          QuestResultCode::Success);
+            if (sendResponsePacket && requestId != 0) {
+                self->SendQuestTurnInResponse(player, requestId, questId, true,
+                                              QuestResultCode::Success);
+            }
             self->SendProgressionSnapshot(player);
+            // 阶段20 指令三十三：任务状态变化 → 重算相关 NPC per-player Marker。
+            self->SendNpcQuestMarkersFor(player);
             LOG_INFO("[Quest] turned in quest=" + std::to_string(questId) + " char=" +
                      player->CharacterName() + " reward exp=" +
                      std::to_string(definition->reward.exp) + " gold=" +
                      std::to_string(definition->reward.gold));
         });
     });
+    return QuestResultCode::Success;
 }
 
 void WorldServer::HandleQuestAbandonRequest(std::uint64_t connectionId,
@@ -4009,6 +4083,8 @@ void WorldServer::HandleQuestAbandonRequest(std::uint64_t connectionId,
     SendQuestAbandonResponse(player, request.requestId, request.questId, true,
                              QuestResultCode::Success);
     SendQuestStateChanged(player, request.questId, oldState, QuestState::Abandoned);
+    // 阶段20 指令三十三/七十六：Abandon 影响任务状态 → 重算相关 NPC per-player Marker。
+    SendNpcQuestMarkersFor(player);
 }
 
 void WorldServer::SendQuestAcceptResponse(const std::shared_ptr<PlayerSession>& player,
@@ -4175,10 +4251,16 @@ void WorldServer::HandleQuestObjectiveChanges(
                     self->m_database, characterId, change.questId,
                     static_cast<std::int8_t>(change.newState), legend::account::UnixNow(),
                     false, error)) {
-                LOG_ERROR("[Quest] UpdateQuestState failed char=" + std::to_string(characterId) +
-                          " quest=" + std::to_string(change.questId) + ": " + error);
+                LOG_ERROR("[Quest] UpdateQuestState failed char=" +
+                          std::to_string(characterId) + " quest=" +
+                          std::to_string(change.questId) + ": " + error);
             }
         });
+    }
+    // 阶段20 指令三十三：任务状态变化（Kill/Collect/Reach 推进 -> ReadyToTurnIn 等）
+    // 同样必须重算相关 NPC per-player Marker。
+    if (!stateChanges.empty()) {
+        SendNpcQuestMarkersFor(player);
     }
 }
 
@@ -4372,6 +4454,1058 @@ bool WorldServer::TestAcceptQuest(std::uint64_t characterId, QuestId questId) {
         self->HandleQuestObjectiveChanges(player, changes, stateChanges);
         LOG_INFO("[Quest] test-accepted quest=" + std::to_string(questId) + " char #" +
                  std::to_string(characterId));
+    });
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 阶段20：NPC / Dialogue / Shop / Teleport 编排（Quest Interaction Core V0.20）。
+// 100% 服务器权威（指令二）：Client 只表达意图，所有结果由 WorldServer 重新验证。
+// ---------------------------------------------------------------------------
+
+void WorldServer::SpawnInitialNpcs() {
+    const std::size_t spawned = m_npcs.SpawnFromRegistry();
+    m_npcs.AddToGrid(m_npcGrid);
+    LOG_INFO("[Npc] spawned " + std::to_string(spawned) + " NPCs");
+}
+
+void WorldServer::UpdatePlayerNpcVisibility(const std::shared_ptr<PlayerSession>& player,
+                                            bool initialVisibility) {
+    // 指令十一/十四：NPC 只通过 AOI 同步（Enter 600 / Leave 700 滞回；不全图广播）。
+    const auto candidates = m_npcGrid.QueryRange(player->PositionX(), player->PositionY(),
+                                                 m_config.aoiLeaveRadius);
+    const float enterRadiusSq = m_config.aoiEnterRadius * m_config.aoiEnterRadius;
+    const float leaveRadiusSq = m_config.aoiLeaveRadius * m_config.aoiLeaveRadius;
+    // Enter：范围候选中未可见且 <= EnterRadius 的 NPC。
+    for (const std::uint64_t npcEntityId : candidates) {
+        if (player->VisibleNpcs().count(npcEntityId) != 0) {
+            continue;
+        }
+        const NpcEntity* npc = m_npcs.Find(npcEntityId);
+        if (npc == nullptr || !npc->Active() || npc->MapId() != player->MapId()) {
+            continue;
+        }
+        const float dx = npc->X() - player->PositionX();
+        const float dy = npc->Y() - player->PositionY();
+        if (dx * dx + dy * dy > enterRadiusSq) {
+            continue;
+        }
+        SendNpcSpawn(player, *npc);
+        player->AddVisibleNpc(npcEntityId);
+        // 指令三十三：Marker 是 per-player——Spawn 后立即下发该玩家的 Marker。
+        if (npc->Definition() != nullptr) {
+            SendNpcQuestMarkerUpdate(player, *npc,
+                                     NpcInteractionService::ComputeQuestMarker(
+                                         *player, *npc->Definition()));
+        }
+    }
+    // Leave：已可见但超出 LeaveRadius 的 NPC（初始可见性阶段无 leave）。
+    if (!initialVisibility) {
+        std::vector<std::uint64_t> leaves;
+        for (const std::uint64_t npcEntityId : player->VisibleNpcs()) {
+            const NpcEntity* npc = m_npcs.Find(npcEntityId);
+            if (npc == nullptr || !npc->Active() || npc->MapId() != player->MapId()) {
+                leaves.push_back(npcEntityId);
+                continue;
+            }
+            const float dx = npc->X() - player->PositionX();
+            const float dy = npc->Y() - player->PositionY();
+            if (dx * dx + dy * dy > leaveRadiusSq) {
+                leaves.push_back(npcEntityId);
+            }
+        }
+        for (const std::uint64_t npcEntityId : leaves) {
+            SendNpcDespawn(player, npcEntityId, NpcDespawnReason::LeftAOI);
+            player->EraseVisibleNpc(npcEntityId);
+        }
+    }
+}
+
+void WorldServer::SendNpcSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                               const NpcEntity& npc) {
+    const NpcDefinition* definition = npc.Definition();
+    if (definition == nullptr) {
+        return;
+    }
+    std::vector<std::uint8_t> payload;
+    if (EncodeNpcSpawn(payload, npc.EntityId(), definition->npcDefinitionId, definition->name,
+                       npc.MapId(), npc.X(), npc.Y(), static_cast<std::uint8_t>(definition->npcType),
+                       definition->visualId)) {
+        Packet packet;
+        packet.header.messageId = static_cast<std::uint16_t>(MessageId::NpcSpawn);
+        packet.payload = std::move(payload);
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
+void WorldServer::SendNpcDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                                 std::uint64_t npcEntityId, NpcDespawnReason reason) {
+    std::vector<std::uint8_t> payload;
+    if (EncodeNpcDespawn(payload, npcEntityId, static_cast<std::uint8_t>(reason))) {
+        Packet packet;
+        packet.header.messageId = static_cast<std::uint16_t>(MessageId::NpcDespawn);
+        packet.payload = std::move(payload);
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
+void WorldServer::SendNpcQuestMarkerUpdate(const std::shared_ptr<PlayerSession>& player,
+                                           const NpcEntity& npc, NpcQuestMarker marker) {
+    // 指令三十三/一百二十五类比：Marker 是 per-player（任务状态属于每个玩家），只发本人。
+    NpcQuestMarkerUpdatePayload out;
+    out.npcEntityId = npc.EntityId();
+    out.npcDefinitionId = npc.DefinitionId();
+    out.marker = static_cast<std::uint8_t>(marker);
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::NpcQuestMarkerUpdate);
+    if (EncodeNpcQuestMarkerUpdate(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendNpcQuestMarkersFor(const std::shared_ptr<PlayerSession>& player) {
+    // 指令七十六：Quest 状态变化（Accept/Progress/Ready/TurnIn/Abandon/Level/
+    // Inventory）后重算该玩家可见 NPC 的 Marker（仅相关 NPC 需要重算——4 个 NPC
+    // 全量重算代价可忽略）。
+    for (const std::uint64_t npcEntityId : player->VisibleNpcs()) {
+        const NpcEntity* npc = m_npcs.Find(npcEntityId);
+        if (npc == nullptr || npc->Definition() == nullptr) {
+            continue;
+        }
+        SendNpcQuestMarkerUpdate(player, *npc,
+                                 NpcInteractionService::ComputeQuestMarker(*player,
+                                                                           *npc->Definition()));
+    }
+}
+
+void WorldServer::SendDialogueToPlayer(const std::shared_ptr<PlayerSession>& player,
+                                       const DialoguePayload& payload) {
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::DialoguePayload);
+    if (EncodeDialoguePayload(payload, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::CloseNpcSessions(const std::shared_ptr<PlayerSession>& player) {
+    player->ClearDialogueSession();
+    player->ClearShopSession();
+}
+
+void WorldServer::HandleNpcInteractRequest(std::uint64_t connectionId,
+                                           const legend::network::Packet& packet) {
+    // 指令八十八：Malformed 回 MalformedRequest（requestId 尽力回显），不断开。
+    NpcInteractRequestPayload request;
+    std::string decodeError;
+    if (!DecodeNpcInteractRequest(packet.payload.data(), packet.payload.size(), request,
+                                  decodeError)) {
+        LOG_INFO("[Npc] Malformed NpcInteractRequest from #" + std::to_string(connectionId));
+        SendNpcInteractResponse(nullptr, request.requestId, false, NpcResultCode::MalformedRequest,
+                                request.npcEntityId, 0, 0);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendNpcInteractResponse(nullptr, request.requestId, false, NpcResultCode::NotInWorld,
+                                request.npcEntityId, 0, 0);
+        return;
+    }
+    // 指令五十七：防重放。
+    if (player->IsRecentNpcRequest(request.requestId)) {
+        SendNpcInteractResponse(player, request.requestId, false,
+                                NpcResultCode::DuplicateRequest, request.npcEntityId, 0, 0);
+        return;
+    }
+    // 指令七十四：死亡玩家不能 NPC 交互。
+    if (!player->Alive()) {
+        SendNpcInteractResponse(player, request.requestId, false, NpcResultCode::Dead,
+                                request.npcEntityId, 0, 0);
+        return;
+    }
+    const NpcEntity* npc = m_npcs.Find(request.npcEntityId);
+    if (npc == nullptr) {
+        SendNpcInteractResponse(player, request.requestId, false, NpcResultCode::NpcNotFound,
+                                request.npcEntityId, 0, 0);
+        return;
+    }
+    // 指令十九：服务器验证链（NPC active/same map/visibleNpcs/权威距离）。
+    const NpcResultCode code = NpcInteractionService::ValidateInteraction(*player, *npc, std::chrono::steady_clock::now());
+    if (code != NpcResultCode::Success) {
+        SendNpcInteractResponse(player, request.requestId, false, code, request.npcEntityId, 0, 0);
+        return;
+    }
+    // 指令二十一：创建 Dialogue Session（服务器单调 sessionId；PlayerSession 保存）。
+    ActiveDialogueSession session;
+    session.sessionId = m_nextDialogueSessionId++;
+    session.npcEntityId = npc->EntityId();
+    session.openedAt = std::chrono::steady_clock::now();
+    player->SetDialogueSession(session);
+    player->RememberNpcRequest(request.requestId); // 指令五十七：只缓存成功请求
+    LOG_INFO("[Npc] interact char=" + player->CharacterName() + " npc=" +
+             std::to_string(request.npcEntityId) + " session=" +
+             std::to_string(session.sessionId));
+    SendNpcInteractResponse(player, request.requestId, true, NpcResultCode::Success,
+                            request.npcEntityId, session.sessionId,
+                            npc->Definition() ? npc->Definition()->dialogueId : 0);
+    // 指令二十五：返回 Dialogue（一层菜单，动态生成）。
+    if (npc->Definition() != nullptr) {
+        SendDialogueToPlayer(player, NpcInteractionService::BuildDialogue(*player, *npc,
+                                                                          session.sessionId));
+    }
+}
+
+void WorldServer::HandleDialogueOptionRequest(std::uint64_t connectionId,
+                                              const legend::network::Packet& packet) {
+    DialogueOptionRequestPayload request;
+    std::string decodeError;
+    if (!DecodeDialogueOptionRequest(packet.payload.data(), packet.payload.size(), request,
+                                     decodeError)) {
+        LOG_INFO("[Npc] Malformed DialogueOptionRequest from #" + std::to_string(connectionId));
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        return;
+    }
+    // 指令五十七：防重放。
+    if (player->IsRecentNpcRequest(request.requestId)) {
+        return;
+    }
+    const NpcEntity* npc = m_npcs.Find(player->DialogueSession().npcEntityId);
+    if (npc == nullptr) {
+        // 会话指向的 NPC 不存在 → 会话失效（指令二十二）。
+        CloseNpcSessions(player);
+        SendDialogueToPlayer(player, DialoguePayload{});
+        return;
+    }
+    // 指令二十二/七十四：会话有效性（含 TTL/走远/死亡）。
+    if (!player->Alive()) {
+        CloseNpcSessions(player);
+        SendDialogueToPlayer(player, DialoguePayload{});
+        return;
+    }
+    const NpcResultCode sessionCode = NpcInteractionService::ValidateDialogueSession(
+        *player, request.dialogueSessionId, *npc, m_config.npcSessionTtlSeconds,
+        std::chrono::steady_clock::now());
+    if (sessionCode != NpcResultCode::Success) {
+        CloseNpcSessions(player);
+        SendDialogueToPlayer(player, DialoguePayload{});
+        return;
+    }
+    // 指令二十五：Option 必须是服务器生成的菜单项（重新生成 + optionId 匹配）。
+    DialoguePayload menu =
+        NpcInteractionService::BuildDialogue(*player, *npc, request.dialogueSessionId);
+    const DialogueOptionData* chosen = nullptr;
+    for (const auto& option : menu.options) {
+        if (option.optionId == request.optionId) {
+            chosen = &option;
+            break;
+        }
+    }
+    if (chosen == nullptr) {
+        SendDialogueToPlayer(player, DialoguePayload{});
+        return;
+    }
+    player->RememberNpcRequest(request.requestId);
+    player->TouchDialogueSession(); // 刷新会话活跃时间（TTL 从最近交互起算）
+    const auto optionType = static_cast<DialogueOptionType>(chosen->type);
+    LOG_INFO("[Npc] option char=" + player->CharacterName() + " npc=" +
+             std::to_string(npc->EntityId()) + " optionId=" + std::to_string(chosen->optionId) +
+             " type=" + DialogueOptionTypeName(chosen->type) + " ref=" +
+             std::to_string(chosen->referenceId));
+    if (optionType == DialogueOptionType::Close) {
+        // Close：关闭会话（Dialogue/Shop Session 全失效）。
+        CloseNpcSessions(player);
+        SendDialogueToPlayer(player, DialoguePayload{});
+        return;
+    }
+    if (optionType == DialogueOptionType::Quest) {
+        // 指令二十九/三十：复用阶段19 QuestService（不写第二套 Quest 逻辑）。
+        const QuestId questId = chosen->referenceId;
+        const PlayerQuestState* state = player->Quests().Find(questId);
+        const bool ready = state != nullptr && state->state == QuestState::ReadyToTurnIn;
+        QuestResultCode code = QuestResultCode::NotAccepted;
+        if (ready) {
+            code = BeginQuestTurnIn(player, questId, 0, false);
+        } else {
+            code = AcceptQuestForPlayer(player, questId);
+        }
+        if (code == QuestResultCode::Success) {
+            // FIFO：TurnIn 的 DB 回调先于本刷新执行（菜单反映最新状态）。
+            auto self = shared_from_this();
+            const std::uint64_t npcEntityId = npc->EntityId();
+            const std::uint64_t sessionId = request.dialogueSessionId;
+            m_service.Post([self, characterId = player->CharacterId(), npcEntityId, sessionId]() {
+                if (self->m_stopped.load()) {
+                    return;
+                }
+                auto player = self->m_players.FindByCharacter(characterId);
+                const NpcEntity* npc = self->m_npcs.Find(npcEntityId);
+                if (!player || npc == nullptr ||
+                    player->DialogueSession().sessionId != sessionId) {
+                    return;
+                }
+                self->SendDialogueToPlayer(player, NpcInteractionService::BuildDialogue(
+                                                        *player, *npc, sessionId));
+            });
+        } else {
+            // 失败：关闭菜单（选项语义不再可用）。
+            CloseNpcSessions(player);
+            SendDialogueToPlayer(player, DialoguePayload{});
+        }
+        return;
+    }
+    if (optionType == DialogueOptionType::Shop) {
+        // 指令三十九：Open Shop 必须经有效 Dialogue Session（此处会话已验证）。
+        const NpcDefinition* definition = npc->Definition();
+        const ShopDefinition* shop =
+            definition ? ShopRegistry::Instance().FindShop(definition->shopId) : nullptr;
+        if (shop == nullptr) {
+            SendDialogueToPlayer(player, DialoguePayload{});
+            return;
+        }
+        ActiveShopSession shopSession;
+        shopSession.sessionId = m_nextShopSessionId++;
+        shopSession.npcEntityId = npc->EntityId();
+        shopSession.shopId = shop->shopId;
+        shopSession.openedAt = std::chrono::steady_clock::now();
+        player->SetShopSession(shopSession);
+        SendShopOpenResponse(player, request.requestId, true, ShopResultCode::Success,
+                             shopSession.sessionId, shop->shopId, npc->EntityId(), shop);
+        return;
+    }
+    if (optionType == DialogueOptionType::Teleport) {
+        (void)TeleportPlayerViaNpc(player, request.requestId, request.dialogueSessionId,
+                                   chosen->referenceId);
+        return;
+    }
+}
+
+void WorldServer::HandleShopOpenRequest(std::uint64_t connectionId,
+                                        const legend::network::Packet& packet) {
+    // 指令三十九：Shop 必须经 Dialogue Session 打开——独立 ShopOpenRequest 同样
+    // 需要有效会话（不允许凭空发 shopId 打开远程商店）。
+    ShopOpenRequestPayload request;
+    std::string decodeError;
+    if (!DecodeShopOpenRequest(packet.payload.data(), packet.payload.size(), request,
+                               decodeError)) {
+        LOG_INFO("[Npc] Malformed ShopOpenRequest from #" + std::to_string(connectionId));
+        SendShopOpenResponse(nullptr, request.requestId, false, ShopResultCode::MalformedRequest,
+                             0, 0, 0, nullptr);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendShopOpenResponse(nullptr, request.requestId, false, ShopResultCode::NotInWorld, 0, 0,
+                             0, nullptr);
+        return;
+    }
+    if (player->IsRecentNpcRequest(request.requestId)) {
+        SendShopOpenResponse(player, request.requestId, false, ShopResultCode::DuplicateRequest, 0,
+                             0, 0, nullptr);
+        return;
+    }
+    const NpcEntity* npc = m_npcs.Find(player->DialogueSession().npcEntityId);
+    if (npc == nullptr || !player->Alive() ||
+        NpcInteractionService::ValidateDialogueSession(
+            *player, request.dialogueSessionId, *npc, m_config.npcSessionTtlSeconds,
+            std::chrono::steady_clock::now()) != NpcResultCode::Success) {
+        CloseNpcSessions(player);
+        SendShopOpenResponse(player, request.requestId, false, ShopResultCode::SessionNotFound, 0,
+                             0, 0, nullptr);
+        return;
+    }
+    const NpcDefinition* definition = npc->Definition();
+    const ShopDefinition* shop =
+        definition ? ShopRegistry::Instance().FindShop(definition->shopId) : nullptr;
+    if (shop == nullptr) {
+        SendShopOpenResponse(player, request.requestId, false, ShopResultCode::ShopNotFound, 0, 0,
+                             0, nullptr);
+        return;
+    }
+    player->RememberNpcRequest(request.requestId);
+    ActiveShopSession shopSession;
+    shopSession.sessionId = m_nextShopSessionId++;
+    shopSession.npcEntityId = npc->EntityId();
+    shopSession.shopId = shop->shopId;
+    shopSession.openedAt = std::chrono::steady_clock::now();
+    player->SetShopSession(shopSession);
+    SendShopOpenResponse(player, request.requestId, true, ShopResultCode::Success,
+                         shopSession.sessionId, shop->shopId, npc->EntityId(), shop);
+}
+
+void WorldServer::HandleShopBuyRequest(std::uint64_t connectionId,
+                                       const legend::network::Packet& packet) {
+    ShopBuyRequestPayload request;
+    std::string decodeError;
+    if (!DecodeShopBuyRequest(packet.payload.data(), packet.payload.size(), request, decodeError)) {
+        LOG_INFO("[Npc] Malformed ShopBuyRequest from #" + std::to_string(connectionId));
+        SendShopBuyResponse(nullptr, request.requestId, false, ShopResultCode::MalformedRequest, 0,
+                            0, 0);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendShopBuyResponse(nullptr, request.requestId, false, ShopResultCode::NotInWorld, 0, 0, 0);
+        return;
+    }
+    if (player->IsRecentNpcRequest(request.requestId)) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::DuplicateRequest, 0,
+                            0, 0);
+        return;
+    }
+    // 指令四十一：Shop Session 有效性（TTL/存活/同图/距离）。
+    const NpcEntity* npc = m_npcs.Find(player->ShopSession().npcEntityId);
+    if (npc == nullptr || !player->Alive()) {
+        CloseNpcSessions(player);
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::SessionNotFound, 0,
+                            0, 0);
+        return;
+    }
+    const auto& shopSession = player->ShopSession();
+    if (shopSession.sessionId == 0 || shopSession.sessionId != request.shopSessionId) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::SessionNotFound, 0,
+                            0, 0);
+        return;
+    }
+    const auto elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - shopSession.openedAt)
+            .count();
+    if (elapsed > m_config.npcSessionTtlSeconds) {
+        CloseNpcSessions(player);
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::SessionExpired, 0, 0,
+                            0);
+        return;
+    }
+    // 指令六十四/四十四：离开 NPC 交互范围失效。
+    {
+        const float dx = npc->X() - player->PositionX();
+        const float dy = npc->Y() - player->PositionY();
+        const NpcDefinition* definition = npc->Definition();
+        const float range =
+            definition ? definition->interactionRange : kNpcDefaultInteractionRange;
+        if (npc->MapId() != player->MapId() || dx * dx + dy * dy > range * range) {
+            CloseNpcSessions(player);
+            SendShopBuyResponse(player, request.requestId, false, ShopResultCode::TooFar, 0, 0, 0);
+            return;
+        }
+    }
+    // 指令三十八：价格 100% 服务器权威（ShopRegistry 取价；Client 只传 id + quantity）。
+    const ShopDefinition* shop = ShopRegistry::Instance().FindShop(shopSession.shopId);
+    const ShopEntry* entry = shop ? shop->FindEntry(request.itemDefinitionId) : nullptr;
+    if (shop == nullptr || entry == nullptr) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::ItemNotInShop, 0, 0,
+                            0);
+        return;
+    }
+    if (!entry->canBuy) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::CannotBuy, 0, 0, 0);
+        return;
+    }
+    // 指令四十三：quantity 1~99；装备 quantity 必须 1。
+    const ItemDefinition* itemDef = m_itemRegistry.Find(request.itemDefinitionId);
+    std::uint32_t quantity = request.quantity;
+    if (quantity < kBuyQuantityMin || quantity > kBuyQuantityMax) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::InvalidQuantity, 0,
+                            0, 0);
+        return;
+    }
+    if (itemDef != nullptr && itemDef->type != ItemType::Material && quantity != 1) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::InvalidQuantity, 0,
+                            0, 0);
+        return;
+    }
+    // 指令四十五：uint64 中间计算防溢出。
+    const std::uint64_t totalCost =
+        static_cast<std::uint64_t>(entry->buyPrice) * static_cast<std::uint64_t>(quantity);
+    if (totalCost > static_cast<std::uint64_t>(player->Gold())) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::NotEnoughGold, 0, 0,
+                            0);
+        return;
+    }
+    // 指令四十四/四十六：背包空间预检（试算；Material 并入堆叠优先）。
+    InventoryContainer trial = player->Inventory();
+    const auto addResult = trial.Add(m_itemRegistry, request.itemDefinitionId, quantity, 0, 0);
+    if (addResult.code == InventoryAddCode::Full) {
+        SendShopBuyResponse(player, request.requestId, false, ShopResultCode::InventoryFull, 0, 0,
+                            0);
+        return;
+    }
+    // 指令四十六/五十七：预检通过 → 立即缓存 requestId（DB 提交前）→ 原子事务
+    //（Gold 扣除 + Inventory 写入一次提交）→ 成功后更新内存并广播。
+    player->RememberNpcRequest(request.requestId);
+    const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(totalCost);
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    const bool mergedIntoStack = addResult.code == InventoryAddCode::Merged;
+    const std::uint32_t bagSlotIndex = addResult.slotIndex;
+    std::uint64_t mergeInstanceId = 0;
+    std::uint32_t mergeQuantity = 0;
+    if (mergedIntoStack) {
+        const InventoryEntry* current = trial.At(bagSlotIndex);
+        if (current) {
+            mergeInstanceId = current->instanceId;
+            mergeQuantity = current->quantity;
+        }
+    }
+    m_dbWorker.Post([self, characterId, requestId = request.requestId, newGold,
+                     itemDefinitionId = request.itemDefinitionId, quantity, bagSlotIndex,
+                     mergedIntoStack, mergeInstanceId, mergeQuantity, totalCost]() {
+        // DB 线程：BEGIN → Gold 扣除 → Inventory 写入 → COMMIT（指令四十六原子性）。
+        std::string error;
+        bool ok = self->m_database.Execute("BEGIN IMMEDIATE;", error);
+        if (ok) {
+            {
+                account::Statement stmt;
+                ok = stmt.Prepare(self->m_database.Handle(),
+                                  "UPDATE characters SET gold = ? WHERE id = ?;", error);
+                if (ok) {
+                    stmt.BindInt64(1, newGold);
+                    stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+                    stmt.Step(error);
+                    ok = error.empty();
+                }
+            }
+            std::uint64_t newInstanceId = 0;
+            if (ok) {
+                if (mergedIntoStack) {
+                    ok = mergeInstanceId != 0 &&
+                         InventoryRepository::UpdateQuantity(self->m_database, mergeInstanceId,
+                                                             mergeQuantity);
+                } else {
+                    newInstanceId = InventoryRepository::InsertItem(
+                        self->m_database, characterId, itemDefinitionId, quantity,
+                        static_cast<std::int64_t>(bagSlotIndex), legend::account::UnixNow());
+                    ok = newInstanceId != 0;
+                }
+            }
+            if (!ok) {
+                self->m_database.Execute("ROLLBACK;", error);
+                self->m_service.Post([self, characterId, requestId]() {
+                    if (self->m_stopped.load()) {
+                        return;
+                    }
+                    auto player = self->m_players.FindByCharacter(characterId);
+                    if (player) {
+                        self->SendShopBuyResponse(player, requestId, false,
+                                                  ShopResultCode::InternalError, 0, 0, 0);
+                    }
+                });
+                return;
+            }
+            self->m_database.Execute("COMMIT;", error);
+            const std::uint64_t instanceId = newInstanceId;
+            self->m_service.Post([self, characterId, requestId, newGold, itemDefinitionId,
+                                  quantity, bagSlotIndex, mergedIntoStack, instanceId,
+                                  totalCost]() {
+                if (self->m_stopped.load()) {
+                    return;
+                }
+                auto player = self->m_players.FindByCharacter(characterId);
+                if (!player) {
+                    return; // 玩家已离线：DB 事务已提交，重进加载
+                }
+                // 成功后更新内存（指令四十六）。
+                player->SetProgression(player->Experience(), newGold);
+                if (mergedIntoStack) {
+                    InventoryEntry* entry = player->Inventory().MutableAt(bagSlotIndex);
+                    if (entry) {
+                        entry->quantity += quantity;
+                    }
+                } else {
+                    InventoryEntry entry;
+                    entry.instanceId = instanceId;
+                    entry.definitionId = itemDefinitionId;
+                    entry.quantity = quantity;
+                    player->Inventory().PutAt(bagSlotIndex, entry);
+                }
+                // 指令四十八：InventoryDelta + BuyResponse(newGold)。
+                const InventoryEntry* current = player->Inventory().At(bagSlotIndex);
+                if (current) {
+                    self->SendInventoryDelta(player, 1, *current, bagSlotIndex);
+                }
+                self->SendShopBuyResponse(player, requestId, true, ShopResultCode::Success,
+                                          itemDefinitionId, quantity,
+                                          static_cast<std::uint32_t>(totalCost));
+                // 指令八十五：购买 Slime Core 触发 Collect 任务重算（持有数量型）。
+                self->HandleQuestInventoryChanged(player);
+                self->SendProgressionSnapshot(player);
+                self->SendNpcQuestMarkersFor(player);
+            });
+        }
+    });
+}
+
+void WorldServer::HandleShopSellRequest(std::uint64_t connectionId,
+                                        const legend::network::Packet& packet) {
+    ShopSellRequestPayload request;
+    std::string decodeError;
+    if (!DecodeShopSellRequest(packet.payload.data(), packet.payload.size(), request,
+                               decodeError)) {
+        LOG_INFO("[Npc] Malformed ShopSellRequest from #" + std::to_string(connectionId));
+        SendShopSellResponse(nullptr, request.requestId, false, ShopResultCode::MalformedRequest,
+                             0, 0, 0);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendShopSellResponse(nullptr, request.requestId, false, ShopResultCode::NotInWorld, 0, 0,
+                             0);
+        return;
+    }
+    if (player->IsRecentNpcRequest(request.requestId)) {
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::DuplicateRequest, 0,
+                             0, 0);
+        return;
+    }
+    // 指令四十一/四十四：Shop Session 有效性（同 Buy）。
+    const NpcEntity* npc = m_npcs.Find(player->ShopSession().npcEntityId);
+    if (npc == nullptr || !player->Alive()) {
+        CloseNpcSessions(player);
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::SessionNotFound, 0,
+                             0, 0);
+        return;
+    }
+    const auto& shopSession = player->ShopSession();
+    if (shopSession.sessionId == 0 || shopSession.sessionId != request.shopSessionId) {
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::SessionNotFound, 0,
+                             0, 0);
+        return;
+    }
+    const auto elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - shopSession.openedAt)
+            .count();
+    if (elapsed > m_config.npcSessionTtlSeconds) {
+        CloseNpcSessions(player);
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::SessionExpired, 0,
+                             0, 0);
+        return;
+    }
+    {
+        const float dx = npc->X() - player->PositionX();
+        const float dy = npc->Y() - player->PositionY();
+        const NpcDefinition* definition = npc->Definition();
+        const float range =
+            definition ? definition->interactionRange : kNpcDefaultInteractionRange;
+        if (npc->MapId() != player->MapId() || dx * dx + dy * dy > range * range) {
+            CloseNpcSessions(player);
+            SendShopSellResponse(player, request.requestId, false, ShopResultCode::TooFar, 0, 0,
+                                 0);
+            return;
+        }
+    }
+    // 指令五十：从背包实例取真实 definitionId（不能 Client 告诉服务器物品是什么）。
+    InventoryEntry* entry = nullptr;
+    std::uint32_t entrySlotIndex = 0;
+    for (std::size_t i = 0; i < player->Inventory().SlotCount(); ++i) {
+        InventoryEntry* slot = player->Inventory().MutableAt(i);
+        if (slot != nullptr && slot->quantity > 0 && slot->instanceId == request.inventoryInstanceId) {
+            entry = slot;
+            entrySlotIndex = static_cast<std::uint32_t>(i);
+            break;
+        }
+    }
+    if (entry == nullptr || entry->instanceId == 0) {
+        // 装备中的物品不在背包容器（指令五十一：必须先 Unequip 才能卖）。
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::ItemNotFound, 0, 0,
+                             0);
+        return;
+    }
+    const ShopDefinition* shop = ShopRegistry::Instance().FindShop(shopSession.shopId);
+    const ShopEntry* shopEntry = shop ? shop->FindEntry(entry->definitionId) : nullptr;
+    if (shopEntry == nullptr || !shopEntry->canSell) {
+        // 指令八十四：Shop 只收 canSell=true 的物品。
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::CannotSell, 0, 0, 0);
+        return;
+    }
+    // 指令五十二：Material 允许部分 stack 卖出；装备 quantity=1。
+    const std::uint32_t quantity = request.quantity;
+    if (quantity == 0 || quantity > entry->quantity) {
+        SendShopSellResponse(player, request.requestId, false, ShopResultCode::InvalidQuantity, 0,
+                             0, 0);
+        return;
+    }
+    const std::uint64_t goldReceived =
+        static_cast<std::uint64_t>(shopEntry->sellPrice) * static_cast<std::uint64_t>(quantity);
+    const std::int64_t newGold = player->Gold() + static_cast<std::int64_t>(goldReceived);
+    player->RememberNpcRequest(request.requestId);
+    const std::uint32_t definitionId = entry->definitionId;
+    const std::uint64_t instanceId = entry->instanceId;
+    const bool wholeStack = quantity == entry->quantity;
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    m_dbWorker.Post([self, characterId, requestId = request.requestId, newGold, instanceId,
+                     quantity, wholeStack, definitionId, goldReceived]() {
+        // 指令五十四：DB 事务 —— Inventory 扣除 + Gold 增加一次提交；失败全部回滚。
+        std::string error;
+        bool ok = self->m_database.Execute("BEGIN IMMEDIATE;", error);
+        if (ok) {
+            {
+                account::Statement stmt;
+                ok = stmt.Prepare(self->m_database.Handle(),
+                                  "UPDATE characters SET gold = ? WHERE id = ?;", error);
+                if (ok) {
+                    stmt.BindInt64(1, newGold);
+                    stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+                    stmt.Step(error);
+                    ok = error.empty();
+                }
+            }
+            if (ok) {
+                if (wholeStack) {
+                    ok = InventoryRepository::DeleteItem(self->m_database, instanceId);
+                } else {
+                    account::Statement stmt2;
+                    ok = stmt2.Prepare(self->m_database.Handle(),
+                                       "UPDATE inventory_items SET quantity = quantity - ? "
+                                       "WHERE instance_id = ?;",
+                                       error);
+                    if (ok) {
+                        stmt2.BindInt64(1, static_cast<std::int64_t>(quantity));
+                        stmt2.BindInt64(2, static_cast<std::int64_t>(instanceId));
+                        stmt2.Step(error);
+                        ok = error.empty();
+                    }
+                }
+            }
+            if (!ok) {
+                self->m_database.Execute("ROLLBACK;", error);
+                self->m_service.Post([self, characterId, requestId]() {
+                    if (self->m_stopped.load()) {
+                        return;
+                    }
+                    auto player = self->m_players.FindByCharacter(characterId);
+                    if (player) {
+                        self->SendShopSellResponse(player, requestId, false,
+                                                   ShopResultCode::InternalError, 0, 0, 0);
+                    }
+                });
+                return;
+            }
+            self->m_database.Execute("COMMIT;", error);
+            self->m_service.Post([self, characterId, requestId, newGold, instanceId, quantity,
+                                  wholeStack, definitionId, goldReceived]() {
+                if (self->m_stopped.load()) {
+                    return;
+                }
+                auto player = self->m_players.FindByCharacter(characterId);
+                if (!player) {
+                    return;
+                }
+                // 成功后更新内存。
+                player->SetProgression(player->Experience(), newGold);
+                for (std::size_t i = 0; i < player->Inventory().SlotCount(); ++i) {
+                    InventoryEntry* slot = player->Inventory().MutableAt(i);
+                    if (slot != nullptr && slot->instanceId == instanceId) {
+                        if (wholeStack) {
+                            player->Inventory().TakeAt(i, *slot);
+                        } else {
+                            slot->quantity -= quantity;
+                        }
+                        self->SendInventoryDelta(player, wholeStack ? 2 : 1, *slot,
+                                                 static_cast<std::uint32_t>(i));
+                        break;
+                    }
+                }
+                self->SendShopSellResponse(player, requestId, true, ShopResultCode::Success,
+                                           definitionId, quantity,
+                                           static_cast<std::uint32_t>(goldReceived));
+                // 指令八十六：InProgress 的 Collect 按持有量下降（Ready 冻结不回退）。
+                self->HandleQuestInventoryChanged(player);
+                self->SendProgressionSnapshot(player);
+                self->SendNpcQuestMarkersFor(player);
+            });
+        }
+    });
+}
+
+void WorldServer::HandleTeleportRequest(std::uint64_t connectionId,
+                                        const legend::network::Packet& packet) {
+    TeleportRequestPayload request;
+    std::string decodeError;
+    if (!DecodeTeleportRequest(packet.payload.data(), packet.payload.size(), request,
+                               decodeError)) {
+        LOG_INFO("[Npc] Malformed TeleportRequest from #" + std::to_string(connectionId));
+        SendTeleportResponse(nullptr, request.requestId, false,
+                             TeleportResultCode::MalformedRequest, 1, 0.0f, 0.0f, 0, 0);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendTeleportResponse(nullptr, request.requestId, false, TeleportResultCode::NotInWorld, 1,
+                             0.0f, 0.0f, 0, 0);
+        return;
+    }
+    if (player->IsRecentNpcRequest(request.requestId)) {
+        SendTeleportResponse(player, request.requestId, false,
+                             TeleportResultCode::DuplicateRequest, player->MapId(),
+                             player->PositionX(), player->PositionY(), 0, player->Gold());
+        return;
+    }
+    (void)TeleportPlayerViaNpc(player, request.requestId, request.dialogueSessionId,
+                               request.teleportId);
+}
+
+bool WorldServer::TeleportPlayerViaNpc(const std::shared_ptr<PlayerSession>& player,
+                                       std::uint64_t requestId, std::uint64_t dialogueSessionId,
+                                       std::uint32_t teleportId) {
+    if (!player->Alive()) {
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::Dead,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    // 指令六十二/六十四：必须经有效 Dialogue Session + NPC 确实提供该传送。
+    const NpcEntity* npc = m_npcs.Find(player->DialogueSession().npcEntityId);
+    if (npc == nullptr ||
+        NpcInteractionService::ValidateDialogueSession(
+            *player, dialogueSessionId, *npc, m_config.npcSessionTtlSeconds,
+            std::chrono::steady_clock::now()) != NpcResultCode::Success) {
+        CloseNpcSessions(player);
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::SessionNotFound,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    const NpcDefinition* definition = npc->Definition();
+    const TeleportDefinition* teleport = TeleportRegistry::Instance().FindTeleport(teleportId);
+    if (teleport == nullptr) {
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::TeleportNotFound,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    if (definition == nullptr || definition->teleportId != teleportId) {
+        // 指令六十四：对应 NPC 确实提供该 Teleport。
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::NotOfferedByNpc,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    if (player->Level() < teleport->minLevel) {
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::LevelTooLow,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    if (static_cast<std::uint64_t>(player->Gold()) < teleport->goldCost) {
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::NotEnoughGold,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    if (requestId != 0) {
+        player->RememberNpcRequest(requestId);
+    }
+    // ---- 服务器权威执行（指令六十五~七十三）----
+    // 指令七十二：Cast 中传送 → 先取消（Teleported）。
+    if (player->IsCasting()) {
+        CancelActiveCast(player, SkillCancelReason::Teleported);
+    }
+    // 扣 Gold（内存）。
+    const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(teleport->goldCost);
+    player->SetProgression(player->Experience(), newGold);
+    // 指令六十八：金币扣除必须落库（服务器权威价格/费用的持久化证据）。
+    {
+        auto self = shared_from_this();
+        const std::uint64_t characterId = player->CharacterId();
+        const std::int64_t persistedGold = newGold;
+        m_dbWorker.Post([self, characterId, persistedGold]() {
+            std::string error;
+            account::Statement stmt;
+            if (!stmt.Prepare(self->m_database.Handle(),
+                              "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
+                LOG_ERROR("[Npc] teleport gold prepare failed: " + error);
+                return;
+            }
+            stmt.BindInt64(1, persistedGold);
+            stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+            stmt.Step(error);
+            if (!error.empty()) {
+                LOG_ERROR("[Npc] teleport gold update failed: " + error);
+            }
+        });
+    }
+    // 指令六十六：旧区域观察者收到 PlayerDespawn（ChangedMap）。
+    m_mapManager.RemovePlayer(player->ConnectionId(), player->MapId());
+    NotifyPlayerGoneToObservers(player->CharacterId(), PlayerDespawnReason::ChangedMap);
+    player->ClearVisiblePlayers();
+    player->ClearVisibleMonsters();
+    player->ClearVisibleNpcs();
+    player->ClearVisibleItemDrops();
+    // 指令六十五：权威 map/position 更新（直接设置——不触发普通移动限制，指令七十）。
+    player->SetMapId(teleport->destinationMapId);
+    player->SetPosition(teleport->destinationX, teleport->destinationY);
+    m_mapManager.AddPlayer(player);
+    m_spatialGrid.UpdatePlayerCell(player);
+    // 指令六十七：重新初始化 Player/Monster/NPC/WorldItem AOI。
+    InitializePlayerVisibility(player);
+    // 指令七十三：Dialogue/Shop Session 全部关闭。
+    CloseNpcSessions(player);
+    // 指令六十九：立即向本人发送权威位置（不等 100ms 普通 Snapshot）。
+    {
+        PlayerPositionSnapshotPayload pos;
+        pos.characterId = player->CharacterId();
+        pos.positionX = player->PositionX();
+        pos.positionY = player->PositionY();
+        pos.lastProcessedInputSequence = player->LastProcessedInputSequence();
+        pos.serverTime = ServerTimeMs();
+        Packet posPacket;
+        posPacket.header.messageId =
+            static_cast<std::uint16_t>(MessageId::PlayerPositionSnapshot);
+        if (EncodePlayerPositionSnapshot(pos, posPacket.payload)) {
+            SendPacketToPlayer(player, posPacket);
+        }
+    }
+    SendTeleportResponse(player, requestId, true, TeleportResultCode::Success,
+                         teleport->destinationMapId, teleport->destinationX,
+                         teleport->destinationY, teleport->goldCost, newGold);
+    SendProgressionSnapshot(player);
+    LOG_INFO("[Npc] teleported char=" + player->CharacterName() + " -> map=" +
+             std::to_string(teleport->destinationMapId) + " (" +
+             std::to_string(teleport->destinationX) + "," + std::to_string(teleport->destinationY) +
+             ") cost=" + std::to_string(teleport->goldCost));
+    // 指令六十五：位置持久化。
+    SavePlayerPositionNow(player->CharacterId(), player->MapId(), player->PositionX(),
+                          player->PositionY());
+    // 指令七十一：传送完成调用 QuestService::OnPlayerMoved（可完成 Explorer ReachArea）。
+    HandleQuestPlayerMoved(player);
+    return true;
+}
+
+void WorldServer::SendNpcInteractResponse(const std::shared_ptr<PlayerSession>& player,
+                                          std::uint64_t requestId, bool success,
+                                          NpcResultCode code, std::uint64_t npcEntityId,
+                                          std::uint64_t dialogueSessionId,
+                                          std::uint32_t dialogueId) {
+    NpcInteractResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.npcEntityId = npcEntityId;
+    out.dialogueSessionId = dialogueSessionId;
+    out.dialogueId = dialogueId;
+    out.message = NpcResultCodeName(static_cast<std::uint8_t>(code));
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::NpcInteractResponse);
+    if (EncodeNpcInteractResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendShopOpenResponse(const std::shared_ptr<PlayerSession>& player,
+                                       std::uint64_t requestId, bool success,
+                                       ShopResultCode code, std::uint64_t shopSessionId,
+                                       std::uint32_t shopId, std::uint64_t npcEntityId,
+                                       const ShopDefinition* shop) {
+    ShopOpenResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.shopSessionId = shopSessionId;
+    out.shopId = shopId;
+    out.npcEntityId = npcEntityId;
+    if (shop != nullptr) {
+        for (const auto& entry : shop->entries) {
+            out.entries.push_back({entry.itemDefinitionId, entry.buyPrice, entry.sellPrice,
+                                   entry.canBuy, entry.canSell});
+        }
+    }
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::ShopOpenResponse);
+    if (EncodeShopOpenResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendShopBuyResponse(const std::shared_ptr<PlayerSession>& player,
+                                      std::uint64_t requestId, bool success,
+                                      ShopResultCode code, std::uint32_t itemDefinitionId,
+                                      std::uint32_t quantity, std::uint32_t goldSpent) {
+    // 指令四十七：BuyItemResponse（newGold 从 PlayerSession 权威值回填）。
+    ShopBuyResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.itemDefinitionId = itemDefinitionId;
+    out.quantity = quantity;
+    out.goldSpent = goldSpent;
+    out.newGold = player ? player->Gold() : 0;
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::ShopBuyResponse);
+    if (EncodeShopBuyResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendShopSellResponse(const std::shared_ptr<PlayerSession>& player,
+                                       std::uint64_t requestId, bool success,
+                                       ShopResultCode code, std::uint32_t itemDefinitionId,
+                                       std::uint32_t quantity, std::uint32_t goldReceived) {
+    ShopSellResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.itemDefinitionId = itemDefinitionId;
+    out.quantity = quantity;
+    out.goldReceived = goldReceived;
+    out.newGold = player ? player->Gold() : 0;
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::ShopSellResponse);
+    if (EncodeShopSellResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendTeleportResponse(const std::shared_ptr<PlayerSession>& player,
+                                       std::uint64_t requestId, bool success,
+                                       TeleportResultCode code, std::uint16_t mapId, float x,
+                                       float y, std::uint32_t goldCost, std::int64_t newGold) {
+    TeleportResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.mapId = mapId;
+    out.x = x;
+    out.y = y;
+    out.goldCost = goldCost;
+    out.newGold = newGold;
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::TeleportResponse);
+    if (EncodeTeleportResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+bool WorldServer::TestTeleportPlayer(std::uint64_t characterId, std::uint16_t mapId, float x,
+                                     float y) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, mapId, x, y]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (!player) {
+            return;
+        }
+        if (player->IsCasting()) {
+            self->CancelActiveCast(player, SkillCancelReason::Teleported);
+        }
+        self->m_mapManager.RemovePlayer(player->ConnectionId(), player->MapId());
+        self->NotifyPlayerGoneToObservers(player->CharacterId(), PlayerDespawnReason::ChangedMap);
+        player->ClearVisiblePlayers();
+        player->ClearVisibleMonsters();
+        player->ClearVisibleNpcs();
+        player->ClearVisibleItemDrops();
+        player->SetMapId(mapId);
+        player->SetPosition(x, y);
+        self->m_mapManager.AddPlayer(player);
+        self->m_spatialGrid.UpdatePlayerCell(player);
+        self->InitializePlayerVisibility(player);
+        self->CloseNpcSessions(player);
+        self->SavePlayerPositionNow(characterId, mapId, x, y);
+        self->HandleQuestPlayerMoved(player);
+        LOG_INFO("[Npc] test-teleported char #" + std::to_string(characterId));
     });
     return true;
 }

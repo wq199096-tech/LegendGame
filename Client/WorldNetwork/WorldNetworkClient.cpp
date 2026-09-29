@@ -255,6 +255,105 @@ void WorldNetworkClient::SendQuestAbandon(std::uint64_t requestId, std::uint32_t
     }
 }
 
+// ---------------------------------------------------------------------------
+// 阶段20：NPC / Dialogue / Shop / Teleport 请求（Client 只表达意图，指令二）
+// ---------------------------------------------------------------------------
+
+void WorldNetworkClient::SendNpcInteract(std::uint64_t requestId, std::uint64_t npcEntityId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::NpcInteractRequestPayload request;
+    request.requestId = requestId;
+    request.npcEntityId = npcEntityId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::NpcInteractRequest);
+    if (world::EncodeNpcInteractRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendDialogueOption(std::uint64_t requestId,
+                                            std::uint64_t dialogueSessionId,
+                                            std::uint32_t optionId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::DialogueOptionRequestPayload request;
+    request.requestId = requestId;
+    request.dialogueSessionId = dialogueSessionId;
+    request.optionId = optionId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::DialogueOptionRequest);
+    if (world::EncodeDialogueOptionRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendShopOpen(std::uint64_t requestId, std::uint64_t dialogueSessionId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::ShopOpenRequestPayload request;
+    request.requestId = requestId;
+    request.dialogueSessionId = dialogueSessionId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ShopOpenRequest);
+    if (world::EncodeShopOpenRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendShopBuy(std::uint64_t requestId, std::uint64_t shopSessionId,
+                                     std::uint32_t itemDefinitionId, std::uint32_t quantity) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::ShopBuyRequestPayload request;
+    request.requestId = requestId;
+    request.shopSessionId = shopSessionId;
+    request.itemDefinitionId = itemDefinitionId;
+    request.quantity = quantity;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ShopBuyRequest);
+    if (world::EncodeShopBuyRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendShopSell(std::uint64_t requestId, std::uint64_t shopSessionId,
+                                      std::uint64_t inventoryInstanceId, std::uint32_t quantity) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::ShopSellRequestPayload request;
+    request.requestId = requestId;
+    request.shopSessionId = shopSessionId;
+    request.inventoryInstanceId = inventoryInstanceId;
+    request.quantity = quantity;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ShopSellRequest);
+    if (world::EncodeShopSellRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendTeleport(std::uint64_t requestId, std::uint64_t dialogueSessionId,
+                                      std::uint32_t teleportId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::TeleportRequestPayload request;
+    request.requestId = requestId;
+    request.dialogueSessionId = dialogueSessionId;
+    request.teleportId = teleportId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::TeleportRequest);
+    if (world::EncodeTeleportRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
 void WorldNetworkClient::PollEvents(std::deque<WorldNetworkEvent>& out) {
     std::lock_guard<std::mutex> lock(m_eventMutex);
     while (!m_events.empty()) {
@@ -1139,6 +1238,133 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.progression.newExperience = payload.newExperience;
             event.progression.newGold = payload.newGold;
             event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // 阶段20：NPC / Dialogue / Shop / Teleport 事件（Client 只响应）。
+        // ------------------------------------------------------------------
+        case MessageId::NpcSpawn: {
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::NpcSpawnEvent;
+            std::string decodeError;
+            if (!world::DecodeNpcSpawn(packet.payload.data(), packet.payload.size(),
+                                       event.npcEntityId, event.npcDefinitionId, event.npcName,
+                                       event.mapId, event.positionX, event.positionY,
+                                       event.npcType, event.visualId, decodeError)) {
+                return;
+            }
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::NpcDespawn: {
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::NpcDespawnEvent;
+            std::string decodeError;
+            if (!world::DecodeNpcDespawn(packet.payload.data(), packet.payload.size(),
+                                         event.npcEntityId, event.npcDespawnReason,
+                                         decodeError)) {
+                return;
+            }
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::NpcInteractResponse: {
+            world::NpcInteractResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeNpcInteractResponse(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::NpcInteractResponseEvent;
+            event.requestId = payload.requestId;
+            event.success = payload.success;
+            event.questResultCode = payload.resultCode;
+            event.npcEntityId = payload.npcEntityId;
+            event.dialogueSessionId = payload.dialogueSessionId;
+            event.dialogueId = payload.dialogueId;
+            event.message = payload.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::DialoguePayload: {
+            world::DialoguePayload payload;
+            std::string decodeError;
+            if (!world::DecodeDialoguePayload(packet.payload.data(), packet.payload.size(),
+                                              payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::DialoguePayloadEvent;
+            event.dialoguePayload = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::NpcQuestMarkerUpdate: {
+            world::NpcQuestMarkerUpdatePayload payload;
+            std::string decodeError;
+            if (!world::DecodeNpcQuestMarkerUpdate(packet.payload.data(), packet.payload.size(),
+                                                   payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::NpcQuestMarkerEvent;
+            event.npcEntityId = payload.npcEntityId;
+            event.npcDefinitionId = payload.npcDefinitionId;
+            event.questMarker = static_cast<world::NpcQuestMarker>(payload.marker);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ShopOpenResponse: {
+            world::ShopOpenResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeShopOpenResponse(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ShopOpenResponseEvent;
+            event.shopOpen = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ShopBuyResponse: {
+            world::ShopBuyResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeShopBuyResponse(packet.payload.data(), packet.payload.size(),
+                                              payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ShopBuyResponseEvent;
+            event.shopBuy = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ShopSellResponse: {
+            world::ShopSellResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeShopSellResponse(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ShopSellResponseEvent;
+            event.shopSell = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::TeleportResponse: {
+            world::TeleportResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeTeleportResponse(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::TeleportResponseEvent;
+            event.teleport = std::move(payload);
             PushEvent(std::move(event));
             return;
         }

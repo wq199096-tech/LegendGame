@@ -31,6 +31,8 @@ QuestRegistry::QuestRegistry() {
         quest.objectives.push_back(kill);
         quest.reward.exp = 100;
         quest.reward.gold = 20;
+        quest.startNpcDefinitionId = 5001; // 阶段20 指令七十七：Village Elder
+        quest.turnInNpcDefinitionId = 5001;
         m_quests.push_back(std::move(quest));
     }
     // ------------------------------------------------------------------
@@ -53,6 +55,8 @@ QuestRegistry::QuestRegistry() {
         quest.objectives.push_back(collect);
         quest.reward.exp = 80;
         quest.reward.gold = 10;
+        quest.startNpcDefinitionId = 5001;
+        quest.turnInNpcDefinitionId = 5001;
         m_quests.push_back(std::move(quest));
     }
     // ------------------------------------------------------------------
@@ -75,6 +79,8 @@ QuestRegistry::QuestRegistry() {
         quest.objectives.push_back(reach);
         quest.reward.exp = 0;
         quest.reward.gold = 50;
+        quest.startNpcDefinitionId = 5001;
+        quest.turnInNpcDefinitionId = 5001;
         m_quests.push_back(std::move(quest));
     }
     // ------------------------------------------------------------------
@@ -101,6 +107,8 @@ QuestRegistry::QuestRegistry() {
         quest.objectives.push_back(area);
         quest.reward.exp = 50;
         quest.reward.gold = 10;
+        quest.startNpcDefinitionId = 5004; // Explorer Guide
+        quest.turnInNpcDefinitionId = 5004;
         m_quests.push_back(std::move(quest));
     }
     // ------------------------------------------------------------------
@@ -131,6 +139,8 @@ QuestRegistry::QuestRegistry() {
         quest.reward.gold = 30;
         quest.reward.itemDefinitionId = kItemRustySwordId;
         quest.reward.itemQuantity = 1;
+        quest.startNpcDefinitionId = 5001;
+        quest.turnInNpcDefinitionId = 5001;
         m_quests.push_back(std::move(quest));
     }
 }

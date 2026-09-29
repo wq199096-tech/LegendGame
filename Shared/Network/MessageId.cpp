@@ -87,6 +87,21 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::QuestStateChanged: return "QuestStateChanged";
         case MessageId::QuestSnapshot: return "QuestSnapshot";
         case MessageId::QuestRewardGranted: return "QuestRewardGranted";
+        case MessageId::NpcSpawn: return "NpcSpawn";
+        case MessageId::NpcDespawn: return "NpcDespawn";
+        case MessageId::NpcInteractRequest: return "NpcInteractRequest";
+        case MessageId::NpcInteractResponse: return "NpcInteractResponse";
+        case MessageId::DialogueOptionRequest: return "DialogueOptionRequest";
+        case MessageId::DialoguePayload: return "DialoguePayload";
+        case MessageId::NpcQuestMarkerUpdate: return "NpcQuestMarkerUpdate";
+        case MessageId::ShopOpenRequest: return "ShopOpenRequest";
+        case MessageId::ShopOpenResponse: return "ShopOpenResponse";
+        case MessageId::ShopBuyRequest: return "ShopBuyRequest";
+        case MessageId::ShopBuyResponse: return "ShopBuyResponse";
+        case MessageId::ShopSellRequest: return "ShopSellRequest";
+        case MessageId::ShopSellResponse: return "ShopSellResponse";
+        case MessageId::TeleportRequest: return "TeleportRequest";
+        case MessageId::TeleportResponse: return "TeleportResponse";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

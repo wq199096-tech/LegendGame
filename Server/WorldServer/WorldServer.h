@@ -15,6 +15,9 @@
 #include "Server/WorldServer/Monster/MonsterManager.h"
 #include "Server/WorldServer/Monster/MonsterRespawnManager.h"
 #include "Server/WorldServer/Monster/MonsterSpatialGrid.h"
+#include "Server/WorldServer/Npc/NpcManager.h"
+#include "Server/WorldServer/Npc/NpcSpatialGrid.h"
+#include "Server/WorldServer/Npc/NpcInteractionService.h"
 #include "Server/WorldServer/Progression/ProgressionService.h"
 #include "Server/WorldServer/Progression/RewardService.h"
 #include "Server/WorldServer/Quest/QuestRepository.h"
@@ -29,16 +32,24 @@
 
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/Dialogue/DialogueProtocol.h"
 #include "Shared/Item/ItemProtocol.h"
 #include "Shared/Item/ItemTypes.h"
 #include "Shared/Network/MessageId.h"
+#include "Shared/Npc/NpcError.h"
+#include "Shared/Npc/NpcProtocol.h"
 #include "Shared/Progression/ProgressionProtocol.h"
 #include "Shared/Quest/QuestProtocol.h"
 #include "Shared/Quest/QuestTypes.h"
+#include "Shared/Shop/ShopDefinition.h"
+#include "Shared/Shop/ShopProtocol.h"
+#include "Shared/Shop/ShopTypes.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/Status/StatusEffectProtocol.h"
 #include "Shared/Status/StatusEffectTypes.h"
+#include "Shared/Teleport/TeleportProtocol.h"
+#include "Shared/Teleport/TeleportTypes.h"
 #include "Shared/World/WorldError.h"
 
 #include <asio.hpp>
@@ -111,6 +122,8 @@ public:
         bool testForceDropAll = false;
         // 阶段19 指令四十七：QuestSnapshot 周期纠偏（10s，发给本人；测试可缩短）。
         int questSnapshotIntervalMs = 10000;
+        // 阶段20 指令二十二/四十一：NPC Dialogue/Shop Session TTL（默认 30s；测试可缩短）。
+        double npcSessionTtlSeconds = kNpcSessionTtlSeconds;
     };
 
     struct Hooks {
@@ -272,6 +285,8 @@ public:
     bool TestAddVisibleItemDrop(std::uint64_t characterId, std::uint64_t dropEntityId);
     bool TestFillInventory(std::uint64_t characterId);
     bool TestMarkPlayerDead(std::uint64_t characterId);
+    bool TestRevivePlayer(std::uint64_t characterId);
+    bool TestBuffPlayerHp(std::uint64_t characterId, std::uint32_t hp);
 
     // ------------------------------------------------------------------
     // 阶段19：服务器权威任务（100% WorldServer 权威，指令二；
@@ -318,6 +333,70 @@ public:
                                const std::unordered_map<std::uint32_t, std::uint32_t>& progress,
                                QuestState state);
     bool TestAcceptQuest(std::uint64_t characterId, QuestId questId);
+
+    // ------------------------------------------------------------------
+    // 阶段20：NPC / Dialogue / Shop / Teleport（100% 服务器权威；Client 只表达
+    // 意图——指令二）。
+    // ------------------------------------------------------------------
+    // NPC 访问器（测试/运维白盒）。
+    std::size_t NpcCount() const { return m_npcs.Count(); }
+    const NpcEntity* FindNpc(std::uint64_t npcEntityId) const { return m_npcs.Find(npcEntityId); }
+    // 指令三十一/三十三：per-player Marker（状态变化/Spawn 后重算并发送）。
+    void SendNpcQuestMarkersFor(const std::shared_ptr<PlayerSession>& player);
+    // 指令六十五~六十七：服务器权威传送（Teleport Option 触发）。
+    bool TestTeleportPlayer(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
+
+private:
+    // NPC 生成与 AOI。
+    void SpawnInitialNpcs();
+    void UpdatePlayerNpcVisibility(const std::shared_ptr<PlayerSession>& player,
+                                   bool initialVisibility);
+    void SendNpcSpawn(const std::shared_ptr<PlayerSession>& receiver, const NpcEntity& npc);
+    void SendNpcDespawn(const std::shared_ptr<PlayerSession>& receiver, std::uint64_t npcEntityId,
+                        NpcDespawnReason reason);
+    void SendNpcQuestMarkerUpdate(const std::shared_ptr<PlayerSession>& player,
+                                  const NpcEntity& npc, NpcQuestMarker marker);
+    void SendDialogueToPlayer(const std::shared_ptr<PlayerSession>& player,
+                              const DialoguePayload& payload);
+    void CloseNpcSessions(const std::shared_ptr<PlayerSession>& player);
+
+    // 请求入口（io 线程；Client 只表达意图，服务器全部重验）。
+    void HandleNpcInteractRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleDialogueOptionRequest(std::uint64_t connectionId,
+                                     const legend::network::Packet& packet);
+    void HandleShopOpenRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleShopBuyRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleShopSellRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleTeleportRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+
+    // 响应发送。
+    void SendNpcInteractResponse(const std::shared_ptr<PlayerSession>& player,
+                                 std::uint64_t requestId, bool success, NpcResultCode code,
+                                 std::uint64_t npcEntityId, std::uint64_t dialogueSessionId,
+                                 std::uint32_t dialogueId);
+    void SendShopOpenResponse(const std::shared_ptr<PlayerSession>& player, std::uint64_t requestId,
+                              bool success, ShopResultCode code, std::uint64_t shopSessionId,
+                              std::uint32_t shopId, std::uint64_t npcEntityId,
+                              const ShopDefinition* shop);
+    void SendShopBuyResponse(const std::shared_ptr<PlayerSession>& player, std::uint64_t requestId,
+                             bool success, ShopResultCode code, std::uint32_t itemDefinitionId,
+                             std::uint32_t quantity, std::uint32_t goldSpent);
+    void SendShopSellResponse(const std::shared_ptr<PlayerSession>& player, std::uint64_t requestId,
+                              bool success, ShopResultCode code, std::uint32_t itemDefinitionId,
+                              std::uint32_t quantity, std::uint32_t goldReceived);
+    void SendTeleportResponse(const std::shared_ptr<PlayerSession>& player,
+                              std::uint64_t requestId, bool success, TeleportResultCode code,
+                              std::uint16_t mapId, float x, float y, std::uint32_t goldCost,
+                              std::int64_t newGold);
+
+    // Quest Option 复用阶段19 核心（指令二十八：不写第二套 Quest 逻辑）。
+    QuestResultCode AcceptQuestForPlayer(const std::shared_ptr<PlayerSession>& player,
+                                         QuestId questId);
+    QuestResultCode BeginQuestTurnIn(const std::shared_ptr<PlayerSession>& player, QuestId questId,
+                                     std::uint64_t requestId, bool sendResponsePacket);
+    // Teleport Option 核心（指令六十三~七十三：验证 + 服务器权威执行）。
+    bool TeleportPlayerViaNpc(const std::shared_ptr<PlayerSession>& player, std::uint64_t requestId,
+                              std::uint64_t dialogueSessionId, std::uint32_t teleportId);
 
 private:
     struct PendingTicket {
@@ -498,6 +577,12 @@ private:
     // 阶段19：QuestRegistry 硬编码单例（QuestRegistry::Instance()）；
     // QuestSnapshot 周期纠偏 Timer（指令四十七：10s，Stop 时 cancel）。
     asio::steady_timer m_questSnapshotTimer;
+
+    // 阶段20：NPC 系统（NpcRegistry 单例；NPC 静态不移动/不死亡；runtime only）。
+    NpcManager m_npcs;
+    NpcSpatialGrid m_npcGrid;
+    std::uint64_t m_nextDialogueSessionId = 1; // 指令二十一：dialogueSessionId 单调
+    std::uint64_t m_nextShopSessionId = 1;     // 指令四十：shopSessionId 单调
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;

@@ -50,6 +50,7 @@ add_executable(LegendWorldTests
     WorldProgressionChecks.cpp
     WorldInventoryChecks.cpp
     WorldQuestChecks.cpp
+    WorldNpcChecks.cpp
 )
 target_include_directories(LegendWorldTests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldTests PRIVATE cxx_std_20)

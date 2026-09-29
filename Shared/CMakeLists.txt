@@ -19,6 +19,10 @@ add_library(LegendSharedNetwork STATIC
     Progression/ProgressionProtocol.cpp
     Item/ItemProtocol.cpp
     Quest/QuestProtocol.cpp
+    Npc/NpcProtocol.cpp
+    Dialogue/DialogueProtocol.cpp
+    Shop/ShopProtocol.cpp
+    Teleport/TeleportProtocol.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})

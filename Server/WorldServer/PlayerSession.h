@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Server/WorldServer/Item/InventoryContainer.h"
+#include "Server/WorldServer/Npc/NpcEntity.h"
 #include "Server/WorldServer/Quest/PlayerQuestContainer.h"
 #include "Server/WorldServer/Status/StatusEffectContainer.h"
 
@@ -53,6 +54,8 @@ public:
     std::uint16_t Gender() const { return m_gender; }
     std::uint32_t Level() const { return m_level; }
     std::uint16_t MapId() const { return m_mapId; }
+    // 阶段20 指令六十五：NPC 传送服务器权威更新 mapId（Client 不能决定）。
+    void SetMapId(std::uint16_t mapId) { m_mapId = mapId; }
 
     float PositionX() const { return m_positionX; }
     float PositionY() const { return m_positionY; }
@@ -142,6 +145,17 @@ public:
     }
     // 指令七十九：死亡时刻。
     std::chrono::steady_clock::time_point DeadSince() const { return m_deadSince; }
+    // 复活（生产复活流程尚未开放；当前仅供测试白盒使用）。
+    void Revive() {
+        m_alive = true;
+        m_currentHp = m_maxHp;
+        m_deadSince = {};
+    }
+    // 测试白盒：抬高 HP 上限并回满（NPC 交互套件防死亡级联；生产不可调用）。
+    void TestBuffHp(std::uint32_t hp) {
+        m_maxHp = hp;
+        m_currentHp = hp;
+    }
 
     // 指令二十七/七：玩家攻击冷却（steady_clock，服务器权威）。
     std::chrono::steady_clock::time_point LastAttackTime() const { return m_lastAttackTime; }
@@ -317,6 +331,41 @@ public:
             (m_recentQuestRequestCursor + 1) % m_recentQuestRequestIds.size();
     }
 
+    // ------------------------------------------------------------------
+    // 阶段20：NPC 可见集合 + Dialogue/Shop 会话 + NPC 请求防重放历史。
+    // ------------------------------------------------------------------
+    const std::unordered_set<std::uint64_t>& VisibleNpcs() const { return m_visibleNpcs; }
+    void AddVisibleNpc(std::uint64_t npcEntityId) { m_visibleNpcs.insert(npcEntityId); }
+    bool EraseVisibleNpc(std::uint64_t npcEntityId) { return m_visibleNpcs.erase(npcEntityId) != 0; }
+    void ClearVisibleNpcs() { m_visibleNpcs.clear(); }
+
+    // 指令二十一：Dialogue Session（服务器生成 sessionId；30s TTL）。
+    const ActiveDialogueSession& DialogueSession() const { return m_dialogueSession; }
+    void SetDialogueSession(const ActiveDialogueSession& session) { m_dialogueSession = session; }
+    void ClearDialogueSession() { m_dialogueSession = ActiveDialogueSession{}; }
+    // 阶段20：每次成功交互刷新活跃时间（TTL 从最近交互起算）。
+    void TouchDialogueSession() { m_dialogueSession.openedAt = std::chrono::steady_clock::now(); }
+
+    // 指令四十一：Shop Session（必须经有效 Dialogue Session 打开；30s TTL）。
+    const ActiveShopSession& ShopSession() const { return m_shopSession; }
+    void SetShopSession(const ActiveShopSession& session) { m_shopSession = session; }
+    void ClearShopSession() { m_shopSession = ActiveShopSession{}; }
+
+    // 指令五十七：最近 64 个成功 NPC 请求（Interact/Option/Buy/Sell/Teleport 防重放）。
+    bool IsRecentNpcRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentNpcRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberNpcRequest(std::uint64_t requestId) {
+        m_recentNpcRequestIds[m_recentNpcRequestCursor] = requestId;
+        m_recentNpcRequestCursor =
+            (m_recentNpcRequestCursor + 1) % m_recentNpcRequestIds.size();
+    }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -383,6 +432,13 @@ private:
     PlayerQuestContainer m_quests;
     std::array<std::uint64_t, kQuestRequestHistorySize> m_recentQuestRequestIds{};
     std::size_t m_recentQuestRequestCursor = 0;
+
+    // 阶段20：NPC 可见集合（io 线程权威维护）+ Dialogue/Shop 会话 + NPC 请求历史。
+    std::unordered_set<std::uint64_t> m_visibleNpcs;
+    ActiveDialogueSession m_dialogueSession;
+    ActiveShopSession m_shopSession;
+    std::array<std::uint64_t, kNpcRequestHistorySize> m_recentNpcRequestIds{};
+    std::size_t m_recentNpcRequestCursor = 0;
 };
 
 } // namespace legend::world

@@ -104,6 +104,22 @@ enum class MessageId : std::uint16_t {
     QuestStateChanged = 317,
     QuestSnapshot = 318,
     QuestRewardGranted = 319,
+    // 阶段20：NPC / Dialogue / Shop / Teleport（320~334）。
+    NpcSpawn = 320,
+    NpcDespawn = 321,
+    NpcInteractRequest = 322,
+    NpcInteractResponse = 323,
+    DialogueOptionRequest = 324,
+    DialoguePayload = 325,
+    NpcQuestMarkerUpdate = 326,
+    ShopOpenRequest = 327,
+    ShopOpenResponse = 328,
+    ShopBuyRequest = 329,
+    ShopBuyResponse = 330,
+    ShopSellRequest = 331,
+    ShopSellResponse = 332,
+    TeleportRequest = 333,
+    TeleportResponse = 334,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -238,6 +254,21 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::QuestStateChanged:
         case MessageId::QuestSnapshot:
         case MessageId::QuestRewardGranted:
+        case MessageId::NpcSpawn:
+        case MessageId::NpcDespawn:
+        case MessageId::NpcInteractRequest:
+        case MessageId::NpcInteractResponse:
+        case MessageId::DialogueOptionRequest:
+        case MessageId::DialoguePayload:
+        case MessageId::NpcQuestMarkerUpdate:
+        case MessageId::ShopOpenRequest:
+        case MessageId::ShopOpenResponse:
+        case MessageId::ShopBuyRequest:
+        case MessageId::ShopBuyResponse:
+        case MessageId::ShopSellRequest:
+        case MessageId::ShopSellResponse:
+        case MessageId::TeleportRequest:
+        case MessageId::TeleportResponse:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

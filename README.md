@@ -488,6 +488,7 @@ SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发
 坐标语义：`Character.Position = 脚底点（Feet）`，精灵按 pivot 向上绘制；
 移动管线：`InputManager → PlayerController → CharacterController → Character → Map Collision → Position`。
 
+
 Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites.ps1 可重新生成 NPC/怪物资源。
 
 ## 世界角色（阶段4：World Actor System V0.4）
@@ -556,3 +557,34 @@ Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites
 - 自动验收：LEGEND_AUTO_PROGRESSION_TEST=1（击杀 -> Exp -> GroundLoot -> 拾取 -> 升级 -> 成长 -> Respawn）；
   静态自检 [ExperienceCheck]/[LevelGrowthCheck]/[ItemDatabaseCheck]/[InventoryStackCheck]/[InventoryFullCheck]/
   [LootRollCheck]/[GroundLootPickupCheck]/[PartialPickupCheck]/[DeathRewardCheck]
+
+## NPC / Dialogue / Shop / Teleport Core（阶段20：Quest Interaction Core V0.20）
+
+服务器权威 NPC 交互核心：WorldServer 生成 NPC、按 AOI 同步、对话/商店/传送全部服务器验证，
+客户端只是状态镜像。任务 NPC 复用阶段19 QuestService（不写第二套任务逻辑）。
+
+- 固定 NPC（NpcRegistry 硬编码，启动 `ValidateNpcs` 校验引用一致性）：
+  5001 Village Elder（QuestGiver，300,300，任务 4001/4002/4003/4005）、
+  5002 General Merchant（Merchant，450,300，商店 6001）、
+  5003 Wayfarer（Teleporter，600,300，传送 7001）、
+  5004 Explorer Guide（MultiFunction，750,300，任务 4004 + 传送 7002）；interactionRange=120
+- NPC AOI：独立 `NpcSpatialGrid`（cellSize 400）+ Enter 600 / Leave 700 滞回；
+  `NpcSpawn=320` / `NpcDespawn=321` 单 NPC 包只发可见玩家（不全图广播）；
+  Spawn 后立即下发 per-player Quest Marker
+- 对话：`NpcInteract=322/323` 验证链（Malformed/Duplicate/Dead/NpcNotFound/NpcNotActive/WrongMap/NotVisible/TooFar）
+  → Dialogue Session（服务器单调 sessionId，TTL 30s；走远/死亡/断线/传送立即失效）；
+  `DialogueOption=324/Payload=325` 菜单服务器动态生成（Options ≤16，客户端只能选服务器生成的 optionId）
+- Quest Marker（per-player）：ReadyToTurnIn > Available > InProgress > None；
+  Quest 状态变化后对可见 NPC 全量重算（`NpcQuestMarkerUpdate=326`）
+- 商店 6001（ShopRegistry 服务器权威价格）：Slime Core 买10/卖3、Rusty Sword 100/30、Cloth Armor 120/40；
+  `ShopOpen=327/328`、`Buy=329/330`、`Sell=331/332`；购买/卖出走 BEGIN IMMEDIATE 原子事务，
+  requestId 在 DB 提交前缓存（连发只成交一次）；数量 1~99；金币不可为负；装备中物品不可卖
+- 传送 7001（→1500,1500，20 金）/ 7002（→300,300，免费）：`TeleportRequest=333/Response=334`；
+  传送重置 AOI（旧区域 Despawn + 新区域初始可见性）、取消读条（SkillCancelReason::Teleported）、
+  关闭对话/商店会话、立即下发权威位置快照、并触发 QuestService::OnPlayerMoved（ReachArea）
+- 客户端：RemoteNpcEntity/RemoteNpcManager（主线程镜像）、ClientDialogueModel/ClientShopModel；
+  NPC 按类型着色 Debug Quad + Marker（金条=ReadyToTurnIn / 黄条=Available / 灰点=InProgress）
+- 按键：**E** 交互最近 NPC（无 NPC 时回落拾取）；对话打开时 **1~9** 选择菜单项（优先于技能键）；
+  商店打开时 **B** 买选中项 / **S** 卖背包第一件可卖物；F8 面板显示 NPC/会话状态
+- 测试：Tests/WorldNpcChecks.cpp 纯逻辑（定义/协议 roundtrip/畸形/上限/Marker 优先级）+
+  真实链路（AOI/验证链/会话 TTL/Quest 接取交付 Marker/商店买卖/防重放/传送全系/死亡与离区失效），并入 LegendWorldTests

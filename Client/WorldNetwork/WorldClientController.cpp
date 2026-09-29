@@ -94,6 +94,9 @@ void WorldClientController::Disconnect() {
     m_inventory.Clear();
     m_equipment.Clear();
     m_quests.Clear();          // 阶段19：断开清空任务镜像（重进等 Snapshot）
+    m_npcs.Clear();            // 阶段20：断开清空 NPC/对话/商店镜像
+    m_dialogue.Clear();
+    m_shop.Clear();
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -104,6 +107,9 @@ void WorldClientController::OnDisconnected() {
     m_inventory.Clear();
     m_equipment.Clear();
     m_quests.Clear();          // 阶段19：断开清空任务镜像
+    m_npcs.Clear();            // 阶段20：断开清空 NPC 镜像
+    m_dialogue.Clear();
+    m_shop.Clear();
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -148,6 +154,7 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_inventory.Clear();
             m_equipment.Clear();
             m_quests.Clear(); // 阶段19：新会话清空任务镜像（等服务器 Snapshot）
+            m_npcs.Clear();   // 阶段20：新会话清空 NPC/对话/商店镜像（等服务器 Spawn）
             // 阶段14 指令十七/六十五：本地玩家 HP 初始化（服务器权威值）。
             m_localCurrentHp = event.currentHp;
             m_localMaxHp = event.maxHp;
@@ -591,6 +598,81 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                      std::to_string(event.questRewardItemDefinitionId) + " x" +
                      std::to_string(event.questRewardItemQuantity));
             break;
+        // ------------------------------------------------------------------
+        // 阶段20：NPC / Dialogue / Shop / Teleport 事件（Client 只是镜像）。
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::NpcSpawnEvent:
+            // 指令十五：只显示服务器 Spawn 过的 NPC。
+            m_npcs.HandleSpawn(event.npcEntityId, event.npcDefinitionId, event.npcName,
+                               event.mapId, event.positionX, event.positionY,
+                               static_cast<legend::world::NpcType>(event.npcType), event.visualId);
+            break;
+        case WorldNetworkEvent::Type::NpcDespawnEvent:
+            m_npcs.HandleDespawn(event.npcEntityId);
+            break;
+        case WorldNetworkEvent::Type::NpcInteractResponseEvent:
+            LOG_INFO("[Npc] Interact npc=" + std::to_string(event.npcEntityId) + " -> " +
+                     (event.success ? std::string("success session=") +
+                                          std::to_string(event.dialogueSessionId)
+                                    : std::string("failed: ") +
+                                          legend::world::NpcResultCodeName(
+                                              event.questResultCode)));
+            break;
+        case WorldNetworkEvent::Type::DialoguePayloadEvent:
+            // options 为空 = 服务器指示关闭。
+            m_dialogue.Apply(event.dialoguePayload);
+            if (!m_dialogue.Active()) {
+                m_shop.Clear();
+            }
+            break;
+        case WorldNetworkEvent::Type::NpcQuestMarkerEvent:
+            m_npcs.ApplyMarker(event.npcEntityId, event.questMarker);
+            break;
+        case WorldNetworkEvent::Type::ShopOpenResponseEvent:
+            if (event.shopOpen.success) {
+                m_shop.Apply(event.shopOpen);
+                LOG_INFO("[Npc] shop opened session=" +
+                         std::to_string(event.shopOpen.shopSessionId) + " entries=" +
+                         std::to_string(event.shopOpen.entries.size()));
+            } else {
+                LOG_WARN("[Npc] shop open failed code=" +
+                         std::to_string(static_cast<int>(event.shopOpen.resultCode)));
+            }
+            break;
+        case WorldNetworkEvent::Type::ShopBuyResponseEvent:
+            LOG_INFO(std::string("[Npc] buy ") + (event.shopBuy.success ? "ok" : "failed: ") +
+                     (event.shopBuy.success ? " item=" +
+                                                  std::to_string(event.shopBuy.itemDefinitionId) +
+                                                  " x" + std::to_string(event.shopBuy.quantity) +
+                                                  " cost=" +
+                                                  std::to_string(event.shopBuy.goldSpent)
+                                            : std::string(legend::world::ShopResultCodeName(
+                                                  event.shopBuy.resultCode))));
+            break;
+        case WorldNetworkEvent::Type::ShopSellResponseEvent:
+            LOG_INFO(std::string("[Npc] sell ") + (event.shopSell.success ? "ok" : "failed: ") +
+                     (event.shopSell.success ? " item=" +
+                                                   std::to_string(event.shopSell.itemDefinitionId) +
+                                                   " x" + std::to_string(event.shopSell.quantity) +
+                                                   " got=" +
+                                                   std::to_string(event.shopSell.goldReceived)
+                                             : std::string(legend::world::ShopResultCodeName(
+                                                   event.shopSell.resultCode))));
+            break;
+        case WorldNetworkEvent::Type::TeleportResponseEvent:
+            if (event.teleport.success) {
+                m_serverPositionX = event.teleport.x;
+                m_serverPositionY = event.teleport.y;
+                m_mapId = event.teleport.mapId;
+                LOG_INFO("[Npc] teleported to (" + std::to_string(event.teleport.x) + "," +
+                         std::to_string(event.teleport.y) + ") cost=" +
+                         std::to_string(event.teleport.goldCost));
+            } else {
+                LOG_WARN("[Npc] teleport failed: " +
+                         std::string(legend::world::TeleportResultCodeName(
+                             event.teleport.resultCode)));
+            }
+            break;
     }
 }
 
@@ -621,6 +703,123 @@ void WorldClientController::SendQuestAbandon(std::uint32_t questId) {
     }
     m_lastQuestRequestId = m_nextQuestRequestId++;
     m_client->SendQuestAbandon(m_lastQuestRequestId, questId);
+}
+
+// ---------------------------------------------------------------------------
+// 阶段20：NPC Debug 交互（E / 对话数字键 / 商店 B·S；全部只发 id——指令二）
+// ---------------------------------------------------------------------------
+
+bool WorldClientController::SendInteractNearestNpc(float selfX, float selfY) {
+    if (!IsWorldReady()) {
+        return false;
+    }
+    // 指令十七：最近 visible NPC 且距离<=120（Client 选最近仅便利；服务器重验）。
+    const std::uint64_t* bestId = nullptr;
+    float bestDistSq = 0.0f;
+    for (const auto& [npcEntityId, npc] : m_npcs.All()) {
+        if (!npc.alive) {
+            continue;
+        }
+        const float dx = npc.x - selfX;
+        const float dy = npc.y - selfY;
+        const float distSq = dx * dx + dy * dy;
+        if (distSq > legend::world::kNpcDefaultInteractionRange *
+                         legend::world::kNpcDefaultInteractionRange) {
+            continue;
+        }
+        if (bestId == nullptr || distSq < bestDistSq) {
+            bestId = &npcEntityId;
+            bestDistSq = distSq;
+        }
+    }
+    if (bestId == nullptr) {
+        return false;
+    }
+    m_lastNpcRequestId = m_nextNpcRequestId++;
+    m_client->SendNpcInteract(m_lastNpcRequestId, *bestId);
+    return true;
+}
+
+bool WorldClientController::SendDialogueOptionByIndex(std::size_t oneBased) {
+    if (!IsWorldReady() || !m_dialogue.Active()) {
+        return false;
+    }
+    world::DialogueOptionData option;
+    if (!m_dialogue.FindOptionByIndex(oneBased, option)) {
+        return false;
+    }
+    m_lastNpcRequestId = m_nextNpcRequestId++;
+    m_client->SendDialogueOption(m_lastNpcRequestId, m_dialogue.SessionId(), option.optionId);
+    return true;
+}
+
+void WorldClientController::SendShopOpenRequest() {
+    if (!IsWorldReady() || !m_dialogue.Active()) {
+        return;
+    }
+    m_lastNpcRequestId = m_nextNpcRequestId++;
+    m_client->SendShopOpen(m_lastNpcRequestId, m_dialogue.SessionId());
+}
+
+bool WorldClientController::SendBuySelected(std::uint32_t quantity) {
+    if (!IsWorldReady() || !m_shop.Active()) {
+        return false;
+    }
+    // 指令八十一 Debug：买第一件 canBuy 条目（简化 UI；链路与正式一致）。
+    for (const auto& entry : m_shop.Entries()) {
+        if (entry.canBuy) {
+            m_lastNpcRequestId = m_nextNpcRequestId++;
+            m_client->SendShopBuy(m_lastNpcRequestId, m_shop.SessionId(),
+                                  entry.itemDefinitionId, quantity);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorldClientController::SendSellSelected(std::uint64_t inventoryInstanceId,
+                                             std::uint32_t quantity) {
+    if (!IsWorldReady() || !m_shop.Active() || inventoryInstanceId == 0) {
+        return false;
+    }
+    m_lastNpcRequestId = m_nextNpcRequestId++;
+    m_client->SendShopSell(m_lastNpcRequestId, m_shop.SessionId(), inventoryInstanceId, quantity);
+    return true;
+}
+
+bool WorldClientController::SendTeleportByOptionIndex(std::size_t oneBased) {
+    // Teleport 走对话 Option（指令六十二：只能选择 NPC 提供的 Teleport Option）。
+    return SendDialogueOptionByIndex(oneBased);
+}
+
+std::string WorldClientController::NpcStatusText() const {
+    // 指令八十二：NPC 名字 + Marker + 对话/商店 Debug 文本。
+    std::string text = "\n[NPC Debug]\n";
+    for (const auto& [npcEntityId, npc] : m_npcs.All()) {
+        text += "#" + std::to_string(npcEntityId) + " " + npc.name + " [" +
+                legend::world::NpcTypeName(static_cast<std::uint8_t>(npc.type)) + "] marker=" +
+                legend::world::NpcQuestMarkerName(
+                    static_cast<std::uint8_t>(npc.questMarker)) + "\n";
+    }
+    if (m_dialogue.Active()) {
+        text += "Dialogue #" + std::to_string(m_dialogue.SessionId()) + " " + m_dialogue.Title() +
+                "\n";
+        int index = 1;
+        for (const auto& option : m_dialogue.Options()) {
+            text += "  " + std::to_string(index++) + ". " + option.label + "\n";
+        }
+    }
+    if (m_shop.Active()) {
+        text += "Shop #" + std::to_string(m_shop.SessionId()) + " (B buy / S sell)\n";
+        int index = 1;
+        for (const auto& entry : m_shop.Entries()) {
+            text += "  " + std::to_string(index++) + ". item " +
+                    std::to_string(entry.itemDefinitionId) + " buy=" +
+                    std::to_string(entry.buyPrice) + " sell=" +
+                    std::to_string(entry.sellPrice) + "\n";
+        }
+    }
+    return text;
 }
 
 // ---------------------------------------------------------------------------

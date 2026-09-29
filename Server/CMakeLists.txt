@@ -141,6 +141,12 @@ add_library(LegendWorldCore STATIC
     WorldServer/Quest/QuestRegistry.cpp
     WorldServer/Quest/QuestService.cpp
     WorldServer/Quest/QuestRepository.cpp
+    WorldServer/Npc/NpcRegistry.cpp
+    WorldServer/Npc/NpcManager.cpp
+    WorldServer/Npc/NpcSpatialGrid.cpp
+    WorldServer/Npc/NpcInteractionService.cpp
+    WorldServer/Npc/ShopService.cpp
+    WorldServer/Npc/TeleportService.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)

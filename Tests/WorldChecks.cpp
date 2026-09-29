@@ -24,6 +24,7 @@ void RunWorldStatusChecks();
 void RunWorldProgressionChecks();
 void RunWorldInventoryChecks();
 void RunWorldQuestChecks();
+void RunWorldNpcChecks();
 }
 
 namespace {
@@ -869,6 +870,9 @@ int main() {
 
     // ---- 阶段19 服务器权威任务检查（独立 servers 生命周期） ----
     RunWorldQuestChecks();
+
+    // ---- 阶段20 NPC / 对话 / 商店 / 传送检查（独立 servers 生命周期） ----
+    RunWorldNpcChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

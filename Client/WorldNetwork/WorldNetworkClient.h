@@ -5,18 +5,26 @@
 
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/Dialogue/DialogueProtocol.h"
 #include "Shared/Item/ItemProtocol.h"
 #include "Shared/Item/ItemTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
+#include "Shared/Npc/NpcError.h"
+#include "Shared/Npc/NpcProtocol.h"
+#include "Shared/Npc/NpcTypes.h"
 #include "Shared/Quest/QuestProtocol.h"
 #include "Shared/Quest/QuestTypes.h"
+#include "Shared/Shop/ShopProtocol.h"
+#include "Shared/Shop/ShopTypes.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/Status/StatusEffectProtocol.h"
 #include "Shared/Status/StatusEffectTypes.h"
+#include "Shared/Teleport/TeleportProtocol.h"
+#include "Shared/Teleport/TeleportTypes.h"
 #include "Shared/World/WorldProtocol.h"
 
 #include <asio.hpp>
@@ -121,6 +129,16 @@ struct WorldNetworkEvent {
         QuestStateChangedEvent,
         QuestSnapshotEvent,
         QuestRewardGrantedEvent,
+        // 阶段20：NPC / Dialogue / Shop / Teleport 事件
+        NpcSpawnEvent,
+        NpcDespawnEvent,
+        NpcInteractResponseEvent,
+        DialoguePayloadEvent,
+        NpcQuestMarkerEvent,
+        ShopOpenResponseEvent,
+        ShopBuyResponseEvent,
+        ShopSellResponseEvent,
+        TeleportResponseEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -232,6 +250,22 @@ struct WorldNetworkEvent {
     std::uint32_t questRewardItemDefinitionId = 0;   // QuestRewardGranted
     std::uint32_t questRewardItemQuantity = 0;       // QuestRewardGranted
     std::vector<world::QuestSnapshotEntryData> questSnapshot; // QuestSnapshot
+    // 阶段20：NPC/Dialogue/Shop/Teleport 事件数据（复用 resultCode/requestId 等）。
+    std::uint64_t npcEntityId = 0;                   // NpcSpawn/Despawn/Interact/Marker/Shop
+    std::uint32_t npcDefinitionId = 0;               // NpcSpawn/Marker
+    std::string npcName;                             // NpcSpawn
+    std::uint8_t npcType = 0;                        // NpcSpawn（NpcType）
+    std::uint32_t visualId = 0;                      // NpcSpawn
+    std::uint8_t npcDespawnReason = 0;               // NpcDespawn
+    std::uint64_t dialogueSessionId = 0;             // Interact/DialoguePayload/Teleport
+    std::uint32_t dialogueId = 0;                    // Interact
+    world::NpcQuestMarker questMarker = world::NpcQuestMarker::None; // Marker
+    world::DialoguePayload dialoguePayload;          // DialoguePayload
+    std::uint64_t shopSessionId = 0;                 // ShopOpen
+    world::ShopOpenResponsePayload shopOpen;         // ShopOpen
+    world::ShopBuyResponsePayload shopBuy;           // ShopBuy
+    world::ShopSellResponsePayload shopSell;         // ShopSell
+    world::TeleportResponsePayload teleport;         // Teleport
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -282,11 +316,23 @@ public:
     // 阶段18 指令三十四：卸下装备槽。
     void SendUnequipItem(std::uint64_t requestId, std::uint8_t equipmentSlot);
 
-    // 阶段19 指令二：Quest 请求——Client 只能发 Accept/TurnIn/Abandon 三个
+    // 阶段19 指令二：Quest 请求——Client 只发 Accept/TurnIn/Abandon 三个
     // requestId + questId（绝不能上报进度/状态/奖励，指令二）。
     void SendQuestAccept(std::uint64_t requestId, std::uint32_t questId);
     void SendQuestTurnIn(std::uint64_t requestId, std::uint32_t questId);
     void SendQuestAbandon(std::uint64_t requestId, std::uint32_t questId);
+
+    // 阶段20 指令二：NPC 链路——Client 只表达意图（requestId + id），全部服务器重验。
+    void SendNpcInteract(std::uint64_t requestId, std::uint64_t npcEntityId);
+    void SendDialogueOption(std::uint64_t requestId, std::uint64_t dialogueSessionId,
+                            std::uint32_t optionId);
+    void SendShopOpen(std::uint64_t requestId, std::uint64_t dialogueSessionId);
+    void SendShopBuy(std::uint64_t requestId, std::uint64_t shopSessionId,
+                     std::uint32_t itemDefinitionId, std::uint32_t quantity);
+    void SendShopSell(std::uint64_t requestId, std::uint64_t shopSessionId,
+                      std::uint64_t inventoryInstanceId, std::uint32_t quantity);
+    void SendTeleport(std::uint64_t requestId, std::uint64_t dialogueSessionId,
+                      std::uint32_t teleportId);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);

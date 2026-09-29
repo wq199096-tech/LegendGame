@@ -38,6 +38,7 @@ struct QuestRewardDefinition {
 };
 
 // 任务定义（指令十）：repeatable 阶段19 全部 false。
+// 阶段20 指令七十七：增加 start/turnIn NPC 定义 Id（0 = 无 NPC 入口——保留 Debug 通道）。
 struct QuestDefinition {
     QuestId questId = 0;
     std::string name;
@@ -47,6 +48,8 @@ struct QuestDefinition {
     bool repeatable = false;
     std::vector<QuestObjectiveDefinition> objectives;
     QuestRewardDefinition reward;
+    std::uint32_t startNpcDefinitionId = 0;   // 阶段20：接取 NPC（5001 等）
+    std::uint32_t turnInNpcDefinitionId = 0;  // 阶段20：提交 NPC
 };
 
 // ---------------------------------------------------------------------------

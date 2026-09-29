@@ -128,6 +128,12 @@ bool WorldSession::HandlePostHandshake(const Packet& packet, std::string& error)
         case MessageId::QuestAcceptRequest:
         case MessageId::QuestTurnInRequest:
         case MessageId::QuestAbandonRequest:
+        case MessageId::NpcInteractRequest:
+        case MessageId::DialogueOptionRequest:
+        case MessageId::ShopOpenRequest:
+        case MessageId::ShopBuyRequest:
+        case MessageId::ShopSellRequest:
+        case MessageId::TeleportRequest:
             // 阶段11 指令三十四：移动输入放行（InWorld 校验在 WorldServer/
             // WorldMapManager：非 InWorld 玩家直接忽略）。
             // 阶段14 指令三十八：攻击请求放行（验证在 CombatService/WorldServer）。

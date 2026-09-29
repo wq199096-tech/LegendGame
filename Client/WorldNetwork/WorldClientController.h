@@ -1,8 +1,10 @@
 #pragma once
 
+#include "Client/WorldNetwork/ClientNpcModels.h"
 #include "Client/WorldNetwork/ClientQuestModel.h"
 #include "Client/WorldNetwork/RemoteItemModels.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
+#include "Client/WorldNetwork/RemoteNpcManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/RemoteStatusEffectContainer.h"
 #include "Client/WorldNetwork/WorldNetworkClient.h"
@@ -105,6 +107,27 @@ public:
     bool QuestDebugVisible() const { return m_questDebugVisible; }
     void ToggleQuestDebug() { m_questDebugVisible = !m_questDebugVisible; }
     std::string QuestStatusText() const { return m_quests.DebugText(); }
+    // 阶段20：F8 面板追加 NPC/对话/商店状态（名字列表 + Marker + 菜单 Options）。
+    std::string NpcStatusText() const;
+
+    // ------------------------------------------------------------------
+    // 阶段20：NPC 镜像与 Debug 交互（E 交互 / 对话数字键 1~9 / 商店 B 买 S 卖）。
+    // ------------------------------------------------------------------
+    const RemoteNpcManager& Npcs() const { return m_npcs; }
+    const ClientDialogueModel& Dialogue() const { return m_dialogue; }
+    const ClientShopModel& Shop() const { return m_shop; }
+    std::uint64_t LastNpcRequestId() const { return m_lastNpcRequestId; }
+    // 指令十七：E —— 找最近 visible NPC 且距离<=120（Client 选最近仅便利，
+    // 服务器重新验证）；返回是否发出请求。
+    bool SendInteractNearestNpc(float selfX, float selfY);
+    // 指令八十：数字键 1~9 选择对话 Option（0-based 传 index+1）。
+    bool SendDialogueOptionByIndex(std::size_t oneBased);
+    // 指令八十一：B 买选中条目（quantity=1，Material 可配）；S 卖（按背包实例）。
+    bool SendBuySelected(std::uint32_t quantity = 1);
+    bool SendSellSelected(std::uint64_t inventoryInstanceId, std::uint32_t quantity);
+    void SendShopOpenRequest();
+    // 指令六十三：Teleport Option 选择。
+    bool SendTeleportByOptionIndex(std::size_t oneBased);
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -174,6 +197,12 @@ private:
     std::uint64_t m_nextQuestRequestId = 1;
     std::uint64_t m_lastQuestRequestId = 0;
     bool m_questDebugVisible = false;
+    // 阶段20：NPC 镜像 + 对话/商店模型 + 请求 id 计数。
+    RemoteNpcManager m_npcs;
+    ClientDialogueModel m_dialogue;
+    ClientShopModel m_shop;
+    std::uint64_t m_nextNpcRequestId = 1;
+    std::uint64_t m_lastNpcRequestId = 0;
 };
 
 } // namespace legend::client
