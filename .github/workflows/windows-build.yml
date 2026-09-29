@@ -78,7 +78,7 @@ jobs:
             Write-Host "::error::$($f.Line.Substring(0, [Math]::Min(220, $f.Line.Length)))"
           }
           # 诊断行（测试内 [Diag] printf）：失败定位通道。
-          $diag = $log | Select-String '\[Diag\]' | Select-Object -Last 8
+          $diag = $log | Select-String '\[Diag\]' | Select-Object -Last 12
           foreach ($d in $diag) {
             Write-Host "::error::$($d.Line.Substring(0, [Math]::Min(220, $d.Line.Length)))"
           }

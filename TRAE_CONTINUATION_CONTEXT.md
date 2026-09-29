@@ -50,17 +50,24 @@
 - NpcError.h 缺 include NpcTypes.h（Client 侧 81 错）；`far`/`home` 是 Windows 宏改 farTp/homeTp；
   NpcChecks 多余 `} // namespace`；bool ok 重定义；shared_ptr 不能 `const auto*`
 
-## CI 失败与修复（run 36545873665 = failure，2026-09-29）
-- WorldTests 5 FAIL（CI）：DotKill/PickupDb/DropExpire（根因：场景2 A 未 Buff，
-  CI 慢机攻击循环拉长 → A 被怪物 8 反击致死 → 级联）+ DialogueSessionTtl/
-  DialogueMoveOutOfRange（疑因：单次交互在 io 饥饿窗口超时，后续检查正常）。
-- 修复：A TestBuffPlayerHp(1e6)×2；DotKill 循环 30s；InteractAndWaitDialogue 重试×3；
-  FAIL 行内嵌诊断；DropExpire 事件等待 3s；workflow 发射 [Diag] 注解。
-- 排查通道：注解 API（curl --socks5-hostname 127.0.0.1:10808）；artifact 401 不可匿名下。
+## CI 失败与修复（round 1: run 36545873665，round 2: run 36558569975，均 failure）
+- **round1（8032ee0）5 FAIL** → 修复 A 未 Buff（DotKill/PickupDb/DropExpire 级联，已验证修好：
+  round2 无这 3 个 FAIL）+ InteractAndWaitDialogue 重试 + 诊断。
+- **round2（759f7d9）仅剩 2 FAIL**：DialogueSessionTtl / DialogueMoveOutOfRange。
+  [Diag] 实锤：`npc=5002 attempt=1..3 failed at npc-not-visible`——重进世界后商人（entity 2，
+  450,300，cell(1,0)）12s+ 不进 visibleNpcs；5001（长老，同查询 cell(0,0)）交互成功。
+  静态排查全部无果：QueryRange 覆盖 (1,0)、NpcEntity/Registry/Grid/NpcManager/WorldManager/
+  Start/Stop/AOI tick 均无问题；种子位置 (360,300) 距商人仅 90；断线与 Stop 均保存位置。
+- **round3 修复**：① 重进后加 move+wait（TeleportPlayer→(372,306) + 600ms 等 AOI 重建，
+  同死亡检查/NpcLeaveAoiCheck 通过的模式）；② 可见性等待 4s→8s；③ 失败时打印服务器侧
+  状态（pos/map/visibleNpcs/player-missing）经注解回传；④ workflow diag 上限 8→12。
+- 排查通道：注解 API（curl --socks5-hostname 127.0.0.1:10808）；artifact 401 不可匿名下；
+  GitHub 每步仅保留前 10 条 error 注解（emission 顺序 = names→FAIL→Diag→tail）。
 
 ## 下一步
-1. 本地 WorldTests 0 FAIL（×2 轮）→ commit `fix(test): stabilize world checks against slow ci runners` → push（SOCKS5）
-2. 等 Actions 绿；若再失败：读注解 [FAIL]/[Diag] 行定位（勿回退本文件已列修复）
+1. 本地 WorldTests 0 FAIL → commit `fix(test): stabilize world checks against slow ci runners` → push（SOCKS5）
+2. 等 Actions；若 Dialogue 2 检查仍 FAIL：读 [Diag] state 行（pos/visibleNpcs）定位——
+   visibleNpcs 缺 2 → 查 grid/add 路径；player-missing → 查会话生命周期；pos 远 → 存档竞态
 3. 成功后更新 CURRENT_STAGE 测试结果与 Actions 状态；最终汇报；完成后停止，不进入阶段21
 
 ## git status（写入时点）

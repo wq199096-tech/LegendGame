@@ -33,21 +33,14 @@ Teleport7001（→1500,1500 费20G）、7002（→300,300 免费）；QuestDefin
 - [x] 提交 `feat(world): add npc dialogue shop teleport and quest interaction core`（8032ee0 已推送）
 - [ ] **Actions 绿（run 36545873665 = failure，修复中——见"CI 失败修复"）**
 
-## CI 失败修复（run 36545873665 = failure，8032ee0）
-CI WorldTests 5 FAIL（本地 434 全绿；Network/Account 两套件 CI 通过）：
-- `DotKillDropOwnerCheck` / `PickupDbFailureRollbackCheck` / `DropExpire60sCheck`：
-  根因 = 场景2 A 从未 Buff 血量；CI 慢机上 DotKill 攻击循环（15s 上限）被攻击冷却+调度拉长，
-  期间怪物 8 反击致死 A → 后续攻击全被拒（Dead）→ HP 降不到 26 → Burn(32) 烧不死 80HP 怪
-  → 无掉落 → PickupDb（dropId 假设失效）与 DropExpire（无 drop 可过期、无 Expired 事件）级联。
-  修复：DropOwnerLock 与 DotKill 前对 A TestBuffPlayerHp(1e6)；DotKill 循环 15s→30s；
-  三检查 FAIL 行内嵌 [lowered/alive/hp/dotKilled/drop/ownerMatch] 等诊断。
-- `DialogueSessionTtlCheck` / `DialogueMoveOutOfRangeInvalidatesCheck`：
-  疑因 = CI 慢机 io 饥饿窗口使单次 InteractAndWaitDialogue（可见4s+响应5s+payload5s）超时
-  （同段后续 5001 交互恢复正常 → 瞬时饥饿特征）。修复：InteractAndWaitDialogue 拆
-  Once+重试×3（requestId 静态递增防重放），失败阶段经 [Diag] 打印；等待 4s→6s。
-- workflow 增发 [Diag] 行注解（最多 8 条）作为无 token 诊断通道。
-- 本机环境：仓库现位于 `d:\LegendGame-main`（原 `d:\传奇1\...` 不存在）；本目录原无 .git，
-  已 git init + fetch origin + reset --mixed origin/main 对齐 8032ee0（工作区与远端一致）。
+## CI 失败修复（round1 run 36545873665 / round2 run 36558569975 均 failure，修复中）
+- round1（8032ee0）5 FAIL：DotKill/PickupDb/DropExpire（A 未 Buff → CI 慢机攻击循环拉长 →
+  A 被围殴致死 → 级联，已修复验证）+ DialogueSessionTtl/MoveOutOfRange（单次交互超时）。
+- round2（759f7d9）仅剩 Dialogue 2 FAIL。[Diag] 实锤：重进世界后商人 5002（entity 2，
+  cell(1,0)）12s+ 不进 visibleNpcs；长老 5001（cell(0,0)）正常。服务器静态排查无果
+  （QueryRange/NpcEntity/Grid/Manager/Start/Stop/AOI tick 全部正确；种子位 (360,300)）。
+- round3：重进后 move+wait（(372,306)+600ms，同死亡检查通过模式）+ 可见性等待 8s +
+  失败时打印服务器状态（pos/map/visibleNpcs）+ workflow diag 上限 12。详见 TRAE_CONTINUATION_CONTEXT。
 
 ## 本阶段编译修复记录
 - NpcError.h 缺 `#include "Shared/Npc/NpcTypes.h"`（Client 侧 81 个 C2065/C2653）

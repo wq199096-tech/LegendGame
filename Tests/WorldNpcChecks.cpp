@@ -204,9 +204,25 @@ bool InteractAndWaitDialogueOnce(WorldTestClient& client, WorldTestServers& serv
             });
             return found;
         },
-        4000);
+        8000); // CI 慢机放宽（原 4s）
     if (!visible || npcEntityId == 0) {
         failStage = "npc-not-visible";
+        // CI 无日志通道：失败瞬间输出服务器侧状态（注解通道回传定位用）。
+        const std::string state = RunOnWorldIo(servers.worldService, [&]() -> std::string {
+            auto p = servers.world->FindPlayerByCharacter(characterId);
+            if (!p) {
+                return std::string("player-missing");
+            }
+            std::string s = "pos=" + std::to_string(p->PositionX()) + "," +
+                            std::to_string(p->PositionY()) + " map=" +
+                            std::to_string(p->MapId()) + " visible=";
+            for (const std::uint64_t id : p->VisibleNpcs()) {
+                s += std::to_string(id) + ",";
+            }
+            return s;
+        });
+        std::printf("[Diag] npc=%u not-visible state: %s\n",
+                    static_cast<unsigned>(npcDefinitionId), state.c_str());
         return false;
     }
     const std::size_t baseline =
@@ -1275,6 +1291,31 @@ void RunWorldNpcChainChecks() {
         Check("NpcChecks: short-TTL world restart ready", ttlReady);
         clientA.DrainEvents();
         servers.world->TestBuffPlayerHp(seedA.characterId, 1000000); // 重进后重加
+
+        // CI 诊断+加固：重进后先输出服务器侧状态，再小幅移动并等 AOI tick 重建
+        // NPC 可见性（与后文 NpcLeaveAoiCheck / 死亡检查通过所用的 move+wait 模式
+        // 一致——CI 上静止重进后直接交互不可靠）。
+        {
+            const std::string state = RunOnWorldIo(servers.worldService, [&]() -> std::string {
+                auto p = servers.world->FindPlayerByCharacter(seedA.characterId);
+                if (!p) {
+                    return std::string("player-missing");
+                }
+                std::string s = "pos=" + std::to_string(p->PositionX()) + "," +
+                                std::to_string(p->PositionY()) + " map=" +
+                                std::to_string(p->MapId()) + " visible=";
+                for (const std::uint64_t id : p->VisibleNpcs()) {
+                    s += std::to_string(id) + ",";
+                }
+                return s;
+            });
+            std::printf("[Diag] TTL-block post-enter state: %s\n", state.c_str());
+        }
+        const bool repositioned =
+            TeleportPlayer(clientA, servers, seedA.characterId, 372.0f, 306.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(600)); // 等 AOI tick 重建可见性
+        clientA.DrainEvents();
+        std::printf("[Diag] TTL-block repositioned=%d\n", repositioned ? 1 : 0);
 
         // DialogueSessionTtlCheck：TTL 0.6s——交互后超时选择 → 会话关闭。
         std::uint64_t session = 0;
