@@ -66,6 +66,8 @@ private:
     void DrawRemoteMonsters(legend::render::SpriteBatch& batch);
     // 阶段20 指令十六/三十四：NPC Debug 绘制（Quad + 名字 + 任务 Marker !/?/灰点）。
     void DrawRemoteNpcs(legend::render::SpriteBatch& batch);
+    // 阶段21 指令十八/一百一十四：Portal 发光门 Debug 绘制（名字走 F9 面板）。
+    void DrawRemotePortals(legend::render::SpriteBatch& batch);
 
     // ---- 阶段4：World Actor System ----
     // 阶段4 静态自检：注册表 / 目标句柄 / 生成器（结果写日志）
@@ -335,6 +337,8 @@ private:
     bool m_skillChecks = false;
     // ---- 阶段19：Quest Debug（F8；F7 已被 Skill Debug 占用——指令五十允许调整）----
     bool m_questDebug = false;
+    // 阶段21：F9 Map Debug Panel 开关（指令一百一十二）。
+    bool m_mapDebug = false;
     // ---- 阶段8.1 新增 Check / 快照方法（实现在 SkillChecks.cpp） ----
     void CaptureSkillWorldSnapshot();
     void RunSkillWorldStateIsolationCheck();

@@ -23,6 +23,9 @@ add_library(LegendSharedNetwork STATIC
     Dialogue/DialogueProtocol.cpp
     Shop/ShopProtocol.cpp
     Teleport/TeleportProtocol.cpp
+    WorldMap/MapProtocol.cpp
+    WorldMap/RespawnProtocol.cpp
+    Portal/PortalProtocol.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})

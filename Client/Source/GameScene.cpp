@@ -310,10 +310,22 @@ void GameScene::UpdateCamera(float deltaTime) {
     auto& input = engine.GetInput();
     auto& camera = engine.GetCamera();
 
-    // F 切换跟随（跟随 Character Feet Position）
+    // 阶段21 指令十九：F —— 交互半径内有 Portal 时发 PortalUseRequest（不自动传送，
+    // 服务器全量重验）；否则保留原相机跟随切换（历史 Debug 键）。
     if (input.IsKeyPressed(SDL_SCANCODE_F)) {
-        m_cameraFollow = !m_cameraFollow;
-        LOG_INFO(m_cameraFollow ? "Camera follow: enabled (F)" : "Camera follow: disabled (F)");
+        bool portalUsed = false;
+        if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+            auto& world = m_networkController->World();
+            portalUsed = world.SendPortalUseNearest(world.ServerPositionX(),
+                                                    world.ServerPositionY());
+            if (portalUsed) {
+                LOG_INFO("[Portal] F -> PortalUseRequest (nearest in radius).");
+            }
+        }
+        if (!portalUsed) {
+            m_cameraFollow = !m_cameraFollow;
+            LOG_INFO(m_cameraFollow ? "Camera follow: enabled (F)" : "Camera follow: disabled (F)");
+        }
     }
 
     // 鼠标滚轮缩放：无论是否跟随都生效
@@ -544,6 +556,30 @@ void GameScene::Update(float deltaTime) {
         LOG_INFO(m_questDebug ? "Quest debug: enabled (F8) — Ctrl+1~5 Accept / Shift+1~5 "
                                 "TurnIn / Alt+1~5 Abandon"
                               : "Quest debug: disabled (F8)");
+    }
+    if (input.IsKeyPressed(SDL_SCANCODE_F9)) {
+        // 阶段21 指令一百一十二：Map Debug Panel（当前地图/可见统计/Portal 列表）。
+        m_mapDebug = !m_mapDebug;
+        LOG_INFO(m_mapDebug ? "Map debug: enabled (F9)" : "Map debug: disabled (F9)");
+    }
+    // ---- 阶段21 指令三十三/一百一十三：死亡状态 R/T 复活请求（服务器权威 3 秒/
+    // 费用校验；Client 倒计时只是显示）----
+    if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+        auto& world = m_networkController->World();
+        if (!world.LocalAlive()) {
+            if (input.IsKeyPressed(SDL_SCANCODE_R)) {
+                if (world.SendRespawnRequest(
+                        static_cast<std::uint8_t>(legend::world::RespawnMode::CurrentMap))) {
+                    LOG_INFO("[Respawn] R -> RespawnRequest(CurrentMap).");
+                }
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_T)) {
+                if (world.SendRespawnRequest(
+                        static_cast<std::uint8_t>(legend::world::RespawnMode::Town))) {
+                    LOG_INFO("[Respawn] T -> RespawnRequest(Town).");
+                }
+            }
+        }
     }
     // ---- 阶段19 指令五十：Quest Debug 键（Ctrl+1~5 接取 / Shift+1~5 提交 /
     // Alt+1~5 放弃 4001~4005；只发 questId，服务器权威校验）----
@@ -806,6 +842,8 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     DrawRemoteMonsters(m_mapRenderer.GetBatch());
     // 阶段20 指令十六/三十四：NPC Debug 绘制（Quad + 名字 + 任务 Marker !/?/灰点）
     DrawRemoteNpcs(m_mapRenderer.GetBatch());
+    // 阶段21 指令十八/一百一十四：Portal Debug 绘制（发光门占位 + F9 面板名字）
+    DrawRemotePortals(m_mapRenderer.GetBatch());
 
     if (m_collisionDebug) {
         m_mapRenderer.RenderCollisionOverlay(*m_map);
@@ -961,6 +999,36 @@ void GameScene::DrawRemoteNpcs(legend::render::SpriteBatch& batch) {
                            {6.0f / 64.0f, 6.0f / 64.0f}, 0.0f,
                            legend::math::Color(0.55f, 0.55f, 0.55f, 1.0f)); // 灰点
         }
+    }
+}
+
+// 阶段21 指令十八/一百一十四：Portal Debug 绘制——发光门占位（外圈光环 + 内芯），
+// 无世界空间文字：Portal 名/目标地图名走 F9 Map Debug Panel（指令一百一十二）。
+void GameScene::DrawRemotePortals(legend::render::SpriteBatch& batch) {
+    if (!m_networkController || !m_whiteTexture) {
+        return;
+    }
+    const auto& world = m_networkController->World();
+    if (!world.IsWorldReady()) {
+        return;
+    }
+    for (const auto& [portalEntityId, portal] : world.Portals().All()) {
+        if (!portal.active) {
+            continue;
+        }
+        const legend::math::Vector2 feet(portal.x, portal.y);
+        // 外圈光环（半透明青绿色竖门，56x64）。
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -48.0f),
+                       {56.0f / 64.0f, 64.0f / 64.0f}, 0.0f,
+                       legend::math::Color(0.20f, 0.95f, 0.85f, 0.45f));
+        // 内芯（亮白竖条，20x48——发光门体）。
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -40.0f),
+                       {20.0f / 64.0f, 48.0f / 64.0f}, 0.0f,
+                       legend::math::Color(0.85f, 1.0f, 0.98f, 0.95f));
+        // 顶部指示点（金色——与 NPC Marker 区分）。
+        batch.DrawQuad(*m_whiteTexture, feet + legend::math::Vector2(0.0f, -88.0f),
+                       {10.0f / 64.0f, 10.0f / 64.0f}, 0.0f,
+                       legend::math::Color(1.0f, 0.90f, 0.20f, 1.0f));
     }
 }
 
@@ -1704,6 +1772,14 @@ void GameScene::LogMapStats(double deltaTime) {
         // 阶段20：F8 面板追加 NPC 名字/Marker/对话/商店 Debug 文本
         (m_networkController && m_networkController->World().QuestDebugVisible()
              ? m_networkController->World().NpcStatusText()
+             : std::string()) +
+        // 阶段21 指令一百一十二：F9 Map Debug Panel（地图/可见统计/Portal 列表）
+        (m_mapDebug && m_networkController ? m_networkController->World().MapStatusText()
+                                           : std::string()) +
+        // 阶段21 指令一百一十三：死亡 Overlay（Debug 文本，非正式美术 UI）
+        (m_networkController && m_networkController->World().IsWorldReady() &&
+                 !m_networkController->World().LocalAlive()
+             ? m_networkController->World().MapStatusText()
              : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame

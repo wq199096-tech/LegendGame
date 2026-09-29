@@ -640,13 +640,15 @@ void RunProgressionRespawnChecks() {
     }
 
     // ---- SpawnSlotCountCheck + InitialSpawnSlotCheck（指令二十/二十六）----
+    // 阶段21 指令十一：多地图布局 50 slot（Map1 legacy 20 + Map2 20 + Map3 10）。
     {
-        bool ok = servers.world->SpawnSlotCount() == 20;
+        bool ok = servers.world->SpawnSlotCount() == 50;
         bool allBound = ok;
         for (std::uint32_t slotId = 1; slotId <= 20 && allBound; ++slotId) {
             allBound = servers.world->ActiveEntityOfSlot(slotId) != 0;
         }
-        Check("SpawnSlotCountCheck/InitialSpawnSlotCheck: 20 slots, all bound on start",
+        allBound = allBound && servers.world->MonsterCount() == 50; // 全部 slot 绑定实体
+        Check("SpawnSlotCountCheck/InitialSpawnSlotCheck: 50 slots (3-map), all bound on start",
               ok && allBound);
     }
 
@@ -685,7 +687,7 @@ void RunProgressionRespawnChecks() {
         // NoEarlyRespawnCheck（指令二十二）：尸体清理后、8s 到点前不重生
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         const std::size_t countEarly = servers.world->MonsterCount();
-        const bool countEarlyOk = countEarly == 19; // 20 - 1 只死亡清理
+        const bool countEarlyOk = countEarly == 49; // 阶段21：50 - 1 只死亡清理（3 图布局）
         // 等 8s respawn（death 起算）—— Poll 周期 250ms
         std::uint64_t newEntityId = 0;
         const bool respawned = WaitUntil(
@@ -715,7 +717,7 @@ void RunProgressionRespawnChecks() {
             4000);
         Check("MonsterDeathQueuesRespawn/RespawnNewEntityId/SameSlotPosition/FullHp/NoStatus/"
               "SpatialGrid/AoiSpawn/NoEarlyRespawn: slot respawn creates fresh entity at "
-              "spawn point, count stays 19 before due time",
+              "spawn point, count stays 49 before due time",
               ok && aoiSpawn);
         if (!(ok && aoiSpawn)) {
             std::printf("[Diag] Respawn: alive=%d killed=%d queued=%d countEarly=%zu "
@@ -736,7 +738,7 @@ void RunProgressionRespawnChecks() {
         const std::size_t count = servers.world->MonsterCount();
         const std::size_t pending = servers.world->RespawnPendingCount();
         Check("NoDuplicateRespawnCheck: no duplicate spawn after respawn completes",
-              count == 20 && pending == 0);
+              count == 50 && pending == 0);
     }
 
     // ---- TwentySlotIndependentRespawnCheck（指令二十）：两只不同 slot 独立排队 ----
@@ -781,23 +783,23 @@ void RunProgressionRespawnChecks() {
         WaitUntil(
             [&] {
                 return servers.world->RespawnPendingCount() == 0 &&
-                       servers.world->MonsterCount() == 20;
+                       servers.world->MonsterCount() == 50;
             },
             15000);
     }
 
-    // ---- WorldRestartRespawnResetCheck（指令二十九）：重启 20 slot 重新满怪 ----
+    // ---- WorldRestartRespawnResetCheck（指令二十九）：重启 50 slot 重新满怪 ----
     {
         servers.StopWorld();
         const bool restarted = servers.StartWorld();
-        bool ok = restarted && servers.world->MonsterCount() == 20 &&
-                  servers.world->SpawnSlotCount() == 20 &&
+        bool ok = restarted && servers.world->MonsterCount() == 50 &&
+                  servers.world->SpawnSlotCount() == 50 &&
                   servers.world->RespawnPendingCount() == 0;
         bool allBound = ok;
         for (std::uint32_t slotId = 1; slotId <= 20 && allBound; ++slotId) {
             allBound = servers.world->ActiveEntityOfSlot(slotId) != 0;
         }
-        Check("WorldRestartRespawnResetCheck: restart refills 20 slots, queue cleared",
+        Check("WorldRestartRespawnResetCheck: restart refills 50 slots, queue cleared",
               ok && allBound);
     }
 

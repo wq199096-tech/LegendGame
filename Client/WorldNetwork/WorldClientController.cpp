@@ -5,9 +5,11 @@
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldError.h"
+#include "Shared/WorldMap/MapTypes.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 
 namespace legend::client {
 
@@ -155,6 +157,10 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_equipment.Clear();
             m_quests.Clear(); // 阶段19：新会话清空任务镜像（等服务器 Snapshot）
             m_npcs.Clear();   // 阶段20：新会话清空 NPC/对话/商店镜像（等服务器 Spawn）
+            m_portals.Clear(); // 阶段21：新会话清空 Portal/地图镜像（等服务器 Spawn）
+            m_map.Clear();
+            m_localDeathTime = {};
+            m_localRespawnTime = {};
             // 阶段14 指令十七/六十五：本地玩家 HP 初始化（服务器权威值）。
             m_localCurrentHp = event.currentHp;
             m_localMaxHp = event.maxHp;
@@ -344,6 +350,8 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             if (event.characterId == m_characterId) {
                 m_localAlive = false;
                 m_localCurrentHp = 0;
+                m_localDeathTime = std::chrono::steady_clock::now(); // 阶段21：复活倒计时展示
+                m_localRespawnTime = {};
                 // 阶段15 指令十七：本地死亡清施法表现（服务器已先发 Cancelled(Dead)）。
                 m_localCasting = false;
                 m_activeCastId = 0;
@@ -673,6 +681,83 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                              event.teleport.resultCode)));
             }
             break;
+        // ------------------------------------------------------------------
+        // 阶段21：地图 / Portal / 复活事件（Client 只是镜像，指令五十四/五十五）。
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::PortalSpawnEvent:
+            m_portals.HandleSpawn(event.portalEntityId, event.portalId, event.portalName,
+                                  event.mapId, event.positionX, event.positionY,
+                                  event.portalInteractionRadius, event.portalDestinationMapId,
+                                  event.portalDestinationName);
+            break;
+        case WorldNetworkEvent::Type::PortalDespawnEvent:
+            m_portals.HandleDespawn(event.portalEntityId);
+            break;
+        case WorldNetworkEvent::Type::PortalUseResponseEvent:
+            if (event.portalUse.success) {
+                LOG_INFO("[Portal] use portal #" + std::to_string(event.portalUse.requestId) +
+                         " -> map " + std::to_string(event.portalUse.destinationMapId) + " (" +
+                         std::to_string(event.portalUse.destinationX) + "," +
+                         std::to_string(event.portalUse.destinationY) + ") cost=" +
+                         std::to_string(event.portalUse.goldCost));
+            } else {
+                LOG_WARN("[Portal] use failed: " +
+                         std::string(legend::world::PortalResultCodeName(
+                             event.portalUse.resultCode)));
+            }
+            break;
+        case WorldNetworkEvent::Type::MapChangedEvent:
+            // 指令五十五：收到 MapChanged 立即清理旧地图全部镜像，等服务器新 AOI Spawn。
+            m_remotePlayers.Clear();
+            m_remoteMonsters.Clear();
+            m_npcs.Clear();
+            m_worldItems.Clear();
+            m_portals.Clear();
+            m_dialogue = ClientDialogueModel{};
+            m_shop = ClientShopModel{};
+            // 指令五十四：本地权威参考位置/地图更新。
+            m_map.ApplyChanged(event.mapChanged);
+            m_mapId = event.mapChanged.mapId;
+            m_serverPositionX = event.mapChanged.x;
+            m_serverPositionY = event.mapChanged.y;
+            LOG_INFO("[Map] changed to map=" + std::to_string(event.mapChanged.mapId) + " (" +
+                     event.mapChanged.mapName + ") pos=(" +
+                     std::to_string(event.mapChanged.x) + "," + std::to_string(event.mapChanged.y) +
+                     ")");
+            break;
+        case WorldNetworkEvent::Type::MapSnapshotEvent:
+            m_map.ApplySnapshot(event.mapSnapshot);
+            m_mapId = event.mapSnapshot.mapId;
+            LOG_INFO("[Map] snapshot map=" + std::to_string(event.mapSnapshot.mapId) + " (" +
+                     event.mapSnapshot.mapName + ")");
+            break;
+        case WorldNetworkEvent::Type::RespawnResponseEvent:
+            if (event.respawn.success) {
+                LOG_INFO("[Respawn] success map=" + std::to_string(event.respawn.mapId) +
+                         " cost=" + std::to_string(event.respawn.goldCost));
+            } else {
+                LOG_WARN("[Respawn] rejected: " +
+                         std::string(legend::world::RespawnResultCodeName(
+                             event.respawn.resultCode)));
+            }
+            break;
+        case WorldNetworkEvent::Type::PlayerRespawnedEvent:
+            // 指令四十二：本地玩家复活（Alive 恢复 + 权威位置/HP/Mana/Gold 更新）。
+            m_localAlive = true;
+            m_localCurrentHp = event.playerRespawned.hp;
+            m_localMaxHp = event.playerRespawned.maxHp;
+            m_localCurrentMana = event.playerRespawned.mana;
+            m_localMaxMana = event.playerRespawned.maxMana;
+            m_localGold = event.playerRespawned.gold;
+            m_mapId = event.playerRespawned.mapId;
+            m_serverPositionX = event.playerRespawned.x;
+            m_serverPositionY = event.playerRespawned.y;
+            m_localDeathTime = {};
+            m_localRespawnTime = std::chrono::steady_clock::now(); // 指令一百一十三：保护展示
+            LOG_INFO("[Respawn] you respawned at map=" + std::to_string(event.playerRespawned.mapId) +
+                     " (" + std::to_string(event.playerRespawned.x) + "," +
+                     std::to_string(event.playerRespawned.y) + ")");
+            break;
     }
 }
 
@@ -955,6 +1040,91 @@ void WorldClientController::HandleStatusEvent(const WorldNetworkEvent& event) {
         default:
             break;
     }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段21：Portal / 复活 / F9 Map Debug Panel（Client 只表达意图，指令二十/三十三）。
+// ---------------------------------------------------------------------------
+
+// 指令十九：F —— 选交互半径内最近 visible Portal 发 PortalUseRequest。
+bool WorldClientController::SendPortalUseNearest(float selfX, float selfY) {
+    if (!IsWorldReady()) {
+        return false;
+    }
+    const std::uint64_t* bestId = nullptr;
+    float bestDistSq = 0.0f;
+    for (const auto& [portalEntityId, portal] : m_portals.All()) {
+        if (!portal.active) {
+            continue;
+        }
+        const float dx = portal.x - selfX;
+        const float dy = portal.y - selfY;
+        const float distSq = dx * dx + dy * dy;
+        const float radius = portal.interactionRadius > 0.0f ? portal.interactionRadius : 100.0f;
+        if (distSq > radius * radius) {
+            continue;
+        }
+        if (bestId == nullptr || distSq < bestDistSq) {
+            bestId = &portalEntityId;
+            bestDistSq = distSq;
+        }
+    }
+    if (bestId == nullptr) {
+        return false;
+    }
+    m_lastMapRequestId = m_nextMapRequestId++;
+    m_client->SendPortalUse(m_lastMapRequestId, *bestId);
+    return true;
+}
+
+// 指令三十三：R/T —— 发 RespawnRequest（mode 由 GameScene 决定，服务器全重验）。
+bool WorldClientController::SendRespawnRequest(std::uint8_t respawnMode) {
+    if (!IsWorldReady()) {
+        return false;
+    }
+    m_lastMapRequestId = m_nextMapRequestId++;
+    m_client->SendRespawn(m_lastMapRequestId, respawnMode);
+    return true;
+}
+
+// 指令一百一十二/一百一十三：F9 Map Debug Panel + 死亡/复活状态文本。
+std::string WorldClientController::MapStatusText() const {
+    std::string text = m_map.DebugText();
+    text += "[F9 Map] visible: players=" + std::to_string(m_remotePlayers.Count()) +
+            " monsters=" + std::to_string(m_remoteMonsters.Count()) +
+            " npcs=" + std::to_string(m_npcs.Count()) +
+            " drops=" + std::to_string(m_worldItems.Count()) +
+            " portals=" + std::to_string(m_portals.Count()) + "\n";
+    for (const auto& [portalEntityId, portal] : m_portals.All()) {
+        text += "  " + portal.name + " -> " + portal.destinationName + " (map " +
+                std::to_string(portal.destinationMapId) + ") @" +
+                std::to_string(static_cast<int>(portal.x)) + "," +
+                std::to_string(static_cast<int>(portal.y)) + "\n";
+    }
+    if (!m_localAlive) {
+        // 指令一百一十三：Debug 死亡 Overlay（倒计时仅展示，服务器权威 3 秒）。
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                             m_localDeathTime)
+                                   .count();
+        const double remain = elapsed < legend::world::kRespawnMinDelaySeconds
+                                  ? legend::world::kRespawnMinDelaySeconds - elapsed
+                                  : 0.0;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "[YOU DIED] Respawn in %.1fs | R = Current Map Respawn (%uG) | T = Town "
+                      "Respawn (Free)\n",
+                      remain, static_cast<unsigned>(legend::world::kRespawnCurrentMapGoldCost));
+        text += buf;
+    } else if (m_localRespawnTime.time_since_epoch().count() != 0) {
+        const double sinceRespawn =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - m_localRespawnTime)
+                .count();
+        if (sinceRespawn < legend::world::kRespawnProtectionSeconds) {
+            text += "[Respawn Protection] " +
+                    std::to_string(legend::world::kRespawnProtectionSeconds - sinceRespawn) + "s\n";
+        }
+    }
+    return text;
 }
 
 } // namespace legend::client

@@ -120,6 +120,16 @@ enum class MessageId : std::uint16_t {
     ShopSellResponse = 332,
     TeleportRequest = 333,
     TeleportResponse = 334,
+    // 阶段21：多地图 / 传送门 / 复活（340~348）。
+    PortalSpawn = 340,
+    PortalDespawn = 341,
+    PortalUseRequest = 342,
+    PortalUseResponse = 343,
+    MapChanged = 344,
+    MapSnapshot = 345,
+    RespawnRequest = 346,
+    RespawnResponse = 347,
+    PlayerRespawned = 348,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -269,6 +279,15 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::ShopSellResponse:
         case MessageId::TeleportRequest:
         case MessageId::TeleportResponse:
+        case MessageId::PortalSpawn:
+        case MessageId::PortalDespawn:
+        case MessageId::PortalUseRequest:
+        case MessageId::PortalUseResponse:
+        case MessageId::MapChanged:
+        case MessageId::MapSnapshot:
+        case MessageId::RespawnRequest:
+        case MessageId::RespawnResponse:
+        case MessageId::PlayerRespawned:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

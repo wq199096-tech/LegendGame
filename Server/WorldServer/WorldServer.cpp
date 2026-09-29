@@ -4,9 +4,12 @@
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
 #include "Server/WorldServer/Combat/CombatService.h"
 #include "Server/WorldServer/Combat/DamageCalculator.h"
+#include "Server/WorldServer/Map/MapRegistry.h"
+#include "Server/WorldServer/Map/RespawnService.h"
 #include "Server/WorldServer/Npc/NpcRegistry.h"
 #include "Server/WorldServer/Npc/ShopService.h"
 #include "Server/WorldServer/Npc/TeleportService.h"
+#include "Server/WorldServer/Portal/PortalRegistry.h"
 #include "Server/WorldServer/Quest/QuestRegistry.h"
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
@@ -17,6 +20,7 @@
 #include "Shared/World/WorldError.h"
 #include "Shared/World/WorldProtocol.h"
 #include "Shared/World/WorldTypes.h"
+#include "Shared/WorldMap/MapTypes.h"
 
 #include <algorithm>
 #include <cmath>
@@ -68,7 +72,8 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_respawnTimer(service.Io()),
       m_progressionTimer(service.Io()),
       m_itemDropTimer(service.Io()),
-      m_questSnapshotTimer(service.Io()) {}
+      m_questSnapshotTimer(service.Io()),
+      m_mapTransition(*this) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -100,6 +105,18 @@ bool WorldServer::Start(std::string& error) {
         m_database.Close();
         return false;
     }
+    // 阶段21 指令七/十四：启动校验地图与 Portal 定义 + 生成 Portal。
+    if (!MapRegistry::Instance().ValidateMaps(error)) {
+        error = "map registry validation failed: " + error;
+        m_database.Close();
+        return false;
+    }
+    if (!PortalRegistry::Instance().ValidatePortals(MapRegistry::Instance(), error)) {
+        error = "portal registry validation failed: " + error;
+        m_database.Close();
+        return false;
+    }
+    SpawnInitialPortals();
     SpawnInitialNpcs();
     m_dbWorker.Start();
     if (!m_server->Listen(m_config.listenPort, error)) {
@@ -267,6 +284,10 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
             HandleShopSellRequest(connectionId, packet); // 阶段20 指令四十九
         } else if (messageId == MessageId::TeleportRequest) {
             HandleTeleportRequest(connectionId, packet); // 阶段20 指令六十三
+        } else if (messageId == MessageId::PortalUseRequest) {
+            HandlePortalUseRequest(connectionId, packet); // 阶段21 指令十九/二十一
+        } else if (messageId == MessageId::RespawnRequest) {
+            HandleRespawnRequest(connectionId, packet); // 阶段21 指令三十三
         }
     }
 }
@@ -586,20 +607,30 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
                 return;
             }
             const legend::account::CharacterRow row = *found.value;
-            // 指令三十二/五十八：无效 mapId/异常位置回退默认地图 + (0,0)。
+            // 阶段21 指令二十九：无效 mapId/越界位置自动修正 Map1 300,300 并重新持久化。
             std::uint16_t mapId = row.mapId;
             float x = row.positionX;
             float y = row.positionY;
-            if (!IsMapIdSupported(mapId)) {
-                mapId = kDefaultMapId;
-                x = 0.0f;
-                y = 0.0f;
+            const MapDefinition* map = MapRegistry::Instance().FindMap(mapId);
+            if (map == nullptr) {
+                mapId = kTownMapId;
+                map = MapRegistry::Instance().FindMap(mapId);
+                LOG_WARN("[World] invalid persisted map " + std::to_string(row.mapId) +
+                         " -> corrected to " + std::to_string(mapId));
             }
-            x = SanitizeCoord(x);
-            y = SanitizeCoord(y);
+            if (!map->InBounds(x, y)) {
+                x = map->spawnX; // 指令二十九：越界 -> 该地图出生点
+                y = map->spawnY;
+                LOG_WARN("[World] out-of-bounds persisted position corrected map=" +
+                         std::to_string(mapId));
+            }
             auto player = std::make_shared<PlayerSession>(connectionId, accountId, characterId,
                                                           row.name, row.classId, row.gender,
                                                           row.level, mapId, x, y);
+            if (row.mapId != mapId || row.positionX != x || row.positionY != y) {
+                // 修正后的位置立即重新持久化（不能静默保留非法值）。
+                self->SavePlayerPositionNow(characterId, mapId, x, y);
+            }
             // 阶段17 指令二：加载持久化成长数据（level 已进构造；exp/gold 服务器权威）。
             player->SetProgression(row.exp, row.gold);
             // 指令二十九/一百零七：同角色重复上线拒绝。
@@ -627,6 +658,26 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
             self->ApplyLoadedItems(player, itemRows);
             // 阶段19 指令六十八：应用持久化任务状态（先于初始校验与 Snapshot）。
             self->ApplyLoadedQuests(player, questRows, questObjectiveRows);
+            // 阶段21 指令二十七：进入世界下发 MapSnapshot（地图基础信息，只发本人）。
+            {
+                MapSnapshotPayload mapSnapshot;
+                mapSnapshot.mapId = map->mapId;
+                mapSnapshot.mapName = map->name;
+                mapSnapshot.minX = map->minX;
+                mapSnapshot.minY = map->minY;
+                mapSnapshot.maxX = map->maxX;
+                mapSnapshot.maxY = map->maxY;
+                mapSnapshot.spawnX = map->spawnX;
+                mapSnapshot.spawnY = map->spawnY;
+                mapSnapshot.respawnX = map->respawnX;
+                mapSnapshot.respawnY = map->respawnY;
+                mapSnapshot.serverTime = ServerTimeMs();
+                Packet mapPacket;
+                mapPacket.header.messageId = static_cast<std::uint16_t>(MessageId::MapSnapshot);
+                if (EncodeMapSnapshot(mapSnapshot, mapPacket.payload)) {
+                    self->SendPacketToPlayer(player, mapPacket);
+                }
+            }
             // 阶段12 指令十八：进入世界初始可见性（双向 Spawn）。
             self->InitializePlayerVisibility(player);
             LOG_INFO("[World] Player entered character=" + row.name + " (#" +
@@ -753,9 +804,12 @@ void WorldServer::HandleMoveInput(std::uint64_t connectionId, const Packet& pack
     //（ApplyMoveInput 对任何单调 sequence 都返回 true，必须以位置差为准）。
     const float prevX = player->PositionX();
     const float prevY = player->PositionY();
-    const bool moved = WorldMapManager::ApplyMoveInput(*player, input.inputSequence,
-                                                       input.directionX, input.directionY,
-                                                       input.deltaTime);
+    // 阶段21 指令八：按玩家所在地图的 MapDefinition 权威钳制边界。
+    const MapDefinition* moveMap = MapRegistry::Instance().FindMap(player->MapId());
+    static const MapDefinition kFallbackMap{}; // 地图缺失兜底（0~2000）
+    const bool moved = WorldMapManager::ApplyMoveInput(
+        *player, moveMap != nullptr ? *moveMap : kFallbackMap, input.inputSequence,
+        input.directionX, input.directionY, input.deltaTime);
     const bool actuallyMoved =
         player->PositionX() != prevX || player->PositionY() != prevY;
     if (actuallyMoved && player->IsCasting()) {
@@ -997,6 +1051,8 @@ void WorldServer::RunAoiTick() {
         UpdatePlayerItemDropVisibility(player, false);
         // 阶段20 指令十一/十四：NPC AOI 差量（同一 tick；NPC 不全图广播）。
         UpdatePlayerNpcVisibility(player, false);
+        // 阶段21 指令十七：Portal AOI 差量（同一 tick；Portal 不全图广播）。
+        UpdatePlayerPortalVisibility(player, false);
     }
 }
 
@@ -1035,6 +1091,8 @@ void WorldServer::InitializePlayerVisibility(const std::shared_ptr<PlayerSession
     UpdatePlayerItemDropVisibility(player, true);
     // 阶段20 指令十一：进入世界初始 NPC 可见性（NpcSpawn + per-player Marker）。
     UpdatePlayerNpcVisibility(player, true);
+    // 阶段21 指令十七：进入世界初始 Portal 可见性（PortalSpawn）。
+    UpdatePlayerPortalVisibility(player, true);
 }
 
 void WorldServer::NotifyPlayerGoneToObservers(std::uint64_t characterId,
@@ -1147,15 +1205,45 @@ std::vector<std::uint64_t> WorldServer::MonsterEntityIds() const {
 }
 
 void WorldServer::SpawnInitialMonsters() {
-    // 指令十五/十六：map1 固定生成 20 只 Training Slime（固定位置表，测试可复现）。
-    // 阶段17 指令二十/二十六：位置表改造为 20 个 SpawnSlot（slotId 1~20），启动全满。
+    // 指令十五/十六：阶段21 指令十一——按地图布局生成 Training Slime：
+    // Map2 x20 / Map3 x10；Map1 生产无野外 Slime（legacyMap1TestSpawn 开启时
+    // 沿用阶段13 的 20 点表，兼容历史测试）。
     const MonsterDefinition* definition = FindMonsterDefinition(kTrainingSlimeTypeId);
     if (!definition) {
         LOG_ERROR("[World] Monster definition missing (Training Slime).");
         return;
     }
-    m_respawnManager.InitializeFromTable(kInitialMonsterSpawnTable, definition->monsterTypeId,
-                                         kDefaultMapId, m_config.respawnDelayMs);
+    m_respawnManager.Reset();
+    if (m_config.legacyMap1TestSpawn) {
+        const std::vector<MonsterSpawnPoint> legacyPoints(
+            kInitialMonsterSpawnTable, kInitialMonsterSpawnTable + kInitialMonsterCount);
+        m_respawnManager.InitializeFromPoints(legacyPoints, definition->monsterTypeId,
+                                              kDefaultMapId, m_config.respawnDelayMs, 1);
+    }
+    // Map2 Slime Meadow：20 只（避开 Portal 8002/8003 与入口 (200,500)）。
+    {
+        const MonsterSpawnPoint map2Points[kMap2SlimeCount] = {
+            {500.0f, 800.0f},   {600.0f, 900.0f},   {700.0f, 800.0f},   {800.0f, 900.0f},
+            {900.0f, 700.0f},   {1000.0f, 800.0f},  {1100.0f, 700.0f},  {1200.0f, 800.0f},
+            {500.0f, 1200.0f},  {700.0f, 1300.0f},  {900.0f, 1200.0f},  {1100.0f, 1300.0f},
+            {1300.0f, 1200.0f}, {1500.0f, 1300.0f}, {1300.0f, 700.0f},  {1500.0f, 800.0f},
+            {1600.0f, 1300.0f}, {1000.0f, 1500.0f}, {1200.0f, 1600.0f}, {1400.0f, 1500.0f},
+        };
+        const std::vector<MonsterSpawnPoint> points(map2Points, map2Points + kMap2SlimeCount);
+        m_respawnManager.InitializeFromPoints(points, definition->monsterTypeId, 2,
+                                              m_config.respawnDelayMs, 100);
+    }
+    // Map3 Ancient Ruins：10 只（0~2400 x 0~1800 内；避开 Portal 8004/入口）。
+    {
+        const MonsterSpawnPoint map3Points[kMap3SlimeCount] = {
+            {500.0f, 600.0f},   {700.0f, 700.0f},  {900.0f, 600.0f},   {1100.0f, 800.0f},
+            {1300.0f, 600.0f},  {1500.0f, 800.0f}, {900.0f, 1100.0f},  {1200.0f, 1200.0f},
+            {1600.0f, 1300.0f}, {2000.0f, 1000.0f},
+        };
+        const std::vector<MonsterSpawnPoint> points(map3Points, map3Points + kMap3SlimeCount);
+        m_respawnManager.InitializeFromPoints(points, definition->monsterTypeId, 3,
+                                              m_config.respawnDelayMs, 200);
+    }
     for (const auto& slot : m_respawnManager.Slots()) {
         const std::uint64_t entityId = m_nextMonsterEntityId++;
         auto monster = SpawnMonsterAtSlot(slot, entityId);
@@ -1167,7 +1255,7 @@ void WorldServer::SpawnInitialMonsters() {
     }
     LOG_INFO("[World] Spawned " + std::to_string(m_monsters.Count()) + " " +
              definition->name + " monsters (" + std::to_string(m_respawnManager.SlotCount()) +
-             " spawn slots).");
+             " spawn slots, legacyMap1=" + (m_config.legacyMap1TestSpawn ? "on" : "off") + ").");
 }
 
 // 阶段17 指令二十七/二十八：按 slot 生成新怪（满 HP/无状态/Idle/target=0/满 Combat 状态；
@@ -1269,6 +1357,10 @@ void WorldServer::TryMonsterAttack(const std::shared_ptr<MonsterEntity>& monster
         return;
     }
     monster->TouchAttackTime();
+    // 阶段21 指令四十六：复活保护期内怪物伤害无效（服务器 runtime flag）。
+    if (target->IsRespawnProtected(std::chrono::steady_clock::now())) {
+        return;
+    }
     // 指令二十四/二十六：伤害 = max(1, atk - def) = max(1, 10 - 5) = 5。
     // 阶段16 指令二十九：改用 Derived Stats（Effective）。
     const std::uint32_t damage =
@@ -1458,6 +1550,8 @@ void WorldServer::HandlePlayerAttack(std::uint64_t connectionId,
     attacker->RememberAttackRequest(request.requestId);
     attacker->TouchAttackTime();
     attacker->SetCombatTargetEntityId(target->EntityId());
+    // 阶段21 指令四十六：主动攻击立即取消复活保护。
+    attacker->ClearRespawnProtection();
     // 指令二十四/二十五/三十六：damage = max(1, atk - def) = max(1, 20 - 2) = 18
     //（怪物防御来自 Entity 的 EffectiveDefense——阶段16 指令二十九）。
     const std::uint32_t damage =
@@ -1838,6 +1932,8 @@ void WorldServer::HandleSkillCastRequest(std::uint64_t connectionId,
     }
     caster->StartSkillCooldown(request.skillId, skill->cooldownSeconds);
     caster->RememberSkillRequest(request.requestId);
+    // 阶段21 指令四十六：主动施法立即取消复活保护。
+    caster->ClearRespawnProtection();
     const std::uint64_t castId = m_nextCastId++; // 指令二十六：服务器单调 castId
     // 指令二十四：成功回执（accepted + 当前 Mana），先于 Started 发送。
     SendSkillCastResponse(caster, request.requestId, request.skillId, true,
@@ -2417,7 +2513,8 @@ void WorldServer::RunStatusTick() {
     //（不建 per-status Timer）；DOT Tick -> CombatEvent -> 死亡 -> 清状态。
     const auto now = std::chrono::steady_clock::now();
     for (const auto& player : m_players.SnapshotPlayers()) {
-        if (player->StatusEffects().Empty()) {
+        // 阶段21 指令四十：死亡玩家不再被 DOT 结算伤害（死亡即停止）。
+        if (!player->Alive() || player->StatusEffects().Empty()) {
             continue;
         }
         // 阶段16：玩家当前无 DOT 类状态（Battle Focus 无 Tick）；保留过期路径。
@@ -3297,6 +3394,12 @@ void WorldServer::HandleEquipItemRequest(std::uint64_t connectionId,
     if (!player) {
         SendEquipItemResponse(nullptr, request.requestId, false,
                               ItemResultCode::NotInWorld, EquipmentSlot::None);
+        return;
+    }
+    // 阶段21 指令三十二：死亡状态禁止装备操作。
+    if (!player->Alive()) {
+        SendEquipItemResponse(player, request.requestId, false, ItemResultCode::Dead,
+                              EquipmentSlot::None);
         return;
     }
     // 指令三十七：防重放。
@@ -5297,8 +5400,19 @@ bool WorldServer::TeleportPlayerViaNpc(const std::shared_ptr<PlayerSession>& pla
     if (requestId != 0) {
         player->RememberNpcRequest(requestId);
     }
-    // ---- 服务器权威执行（指令六十五~七十三）----
-    // 指令七十二：Cast 中传送 → 先取消（Teleported）。
+    // ---- 服务器权威执行（指令六十五~七十三；阶段21 指令五十三：内部走统一
+    // MapTransitionService，不再保留第二套切图序列）----
+    // 目的地预验证（扣费前；传送定义与注册表一致，理论上恒通过）。
+    const MapDefinition* destination =
+        MapRegistry::Instance().FindMap(teleport->destinationMapId);
+    if (destination == nullptr || !destination->InBounds(teleport->destinationX,
+                                                         teleport->destinationY)) {
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::InternalError,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
+    }
+    // 指令七十二：Cast 中传送 → 先取消（Teleported；Transition 内也会统一取消）。
     if (player->IsCasting()) {
         CancelActiveCast(player, SkillCancelReason::Teleported);
     }
@@ -5326,50 +5440,20 @@ bool WorldServer::TeleportPlayerViaNpc(const std::shared_ptr<PlayerSession>& pla
             }
         });
     }
-    // 指令六十六：旧区域观察者收到 PlayerDespawn（ChangedMap）。
-    m_mapManager.RemovePlayer(player->ConnectionId(), player->MapId());
-    NotifyPlayerGoneToObservers(player->CharacterId(), PlayerDespawnReason::ChangedMap);
-    player->ClearVisiblePlayers();
-    player->ClearVisibleMonsters();
-    player->ClearVisibleNpcs();
-    player->ClearVisibleItemDrops();
-    // 指令六十五：权威 map/position 更新（直接设置——不触发普通移动限制，指令七十）。
-    player->SetMapId(teleport->destinationMapId);
-    player->SetPosition(teleport->destinationX, teleport->destinationY);
-    m_mapManager.AddPlayer(player);
-    m_spatialGrid.UpdatePlayerCell(player);
-    // 指令六十七：重新初始化 Player/Monster/NPC/WorldItem AOI。
-    InitializePlayerVisibility(player);
-    // 指令七十三：Dialogue/Shop Session 全部关闭。
-    CloseNpcSessions(player);
-    // 指令六十九：立即向本人发送权威位置（不等 100ms 普通 Snapshot）。
-    {
-        PlayerPositionSnapshotPayload pos;
-        pos.characterId = player->CharacterId();
-        pos.positionX = player->PositionX();
-        pos.positionY = player->PositionY();
-        pos.lastProcessedInputSequence = player->LastProcessedInputSequence();
-        pos.serverTime = ServerTimeMs();
-        Packet posPacket;
-        posPacket.header.messageId =
-            static_cast<std::uint16_t>(MessageId::PlayerPositionSnapshot);
-        if (EncodePlayerPositionSnapshot(pos, posPacket.payload)) {
-            SendPacketToPlayer(player, posPacket);
-        }
+    // 指令二十三/二十四：统一地图切换（旧区 Despawn/可见集清理/权威位置/AOI 重建/
+    // MapChanged/MapSnapshot/立即位置快照/持久化/Quest OnPlayerMoved 全部在服务内）。
+    if (!m_mapTransition.TransitionPlayer(player, teleport->destinationMapId,
+                                          teleport->destinationX, teleport->destinationY,
+                                          "npc-teleport")) {
+        SendTeleportResponse(player, requestId, false, TeleportResultCode::InternalError,
+                             player->MapId(), player->PositionX(), player->PositionY(), 0,
+                             player->Gold());
+        return false;
     }
     SendTeleportResponse(player, requestId, true, TeleportResultCode::Success,
                          teleport->destinationMapId, teleport->destinationX,
                          teleport->destinationY, teleport->goldCost, newGold);
     SendProgressionSnapshot(player);
-    LOG_INFO("[Npc] teleported char=" + player->CharacterName() + " -> map=" +
-             std::to_string(teleport->destinationMapId) + " (" +
-             std::to_string(teleport->destinationX) + "," + std::to_string(teleport->destinationY) +
-             ") cost=" + std::to_string(teleport->goldCost));
-    // 指令六十五：位置持久化。
-    SavePlayerPositionNow(player->CharacterId(), player->MapId(), player->PositionX(),
-                          player->PositionY());
-    // 指令七十一：传送完成调用 QuestService::OnPlayerMoved（可完成 Explorer ReachArea）。
-    HandleQuestPlayerMoved(player);
     return true;
 }
 
@@ -5488,24 +5572,397 @@ bool WorldServer::TestTeleportPlayer(std::uint64_t characterId, std::uint16_t ma
         if (!player) {
             return;
         }
-        if (player->IsCasting()) {
-            self->CancelActiveCast(player, SkillCancelReason::Teleported);
+        // 阶段21 指令二十三：测试白盒同样走统一 MapTransitionService。
+        (void)self->m_mapTransition.TransitionPlayer(player, mapId, x, y, "test-teleport");
+    });
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 阶段21：多地图 / Portal / 复活编排。
+// ---------------------------------------------------------------------------
+
+// 指令十四/十七：启动生成 4 个 Portal（registry 顺序即 entity 1~4）。
+void WorldServer::SpawnInitialPortals() {
+    const std::size_t spawned = m_portals.SpawnFromRegistry();
+    m_portals.AddToGrid(m_portalGrid);
+    LOG_INFO("[Portal] spawned " + std::to_string(spawned) + " portals");
+}
+
+// 指令十七：Portal AOI（Enter 600 / Leave 700；仅同 mapId；visiblePortals 权威维护）。
+void WorldServer::UpdatePlayerPortalVisibility(const std::shared_ptr<PlayerSession>& player,
+                                               bool initialVisibility) {
+    const auto candidates = m_portalGrid.QueryRange(player->PositionX(), player->PositionY(),
+                                                    m_config.aoiLeaveRadius);
+    const float enterRadiusSq = m_config.aoiEnterRadius * m_config.aoiEnterRadius;
+    const float leaveRadiusSq = m_config.aoiLeaveRadius * m_config.aoiLeaveRadius;
+    for (const std::uint64_t portalEntityId : candidates) {
+        if (player->VisiblePortals().count(portalEntityId) != 0) {
+            continue;
         }
-        self->m_mapManager.RemovePlayer(player->ConnectionId(), player->MapId());
-        self->NotifyPlayerGoneToObservers(player->CharacterId(), PlayerDespawnReason::ChangedMap);
-        player->ClearVisiblePlayers();
-        player->ClearVisibleMonsters();
-        player->ClearVisibleNpcs();
-        player->ClearVisibleItemDrops();
-        player->SetMapId(mapId);
-        player->SetPosition(x, y);
-        self->m_mapManager.AddPlayer(player);
-        self->m_spatialGrid.UpdatePlayerCell(player);
-        self->InitializePlayerVisibility(player);
-        self->CloseNpcSessions(player);
-        self->SavePlayerPositionNow(characterId, mapId, x, y);
-        self->HandleQuestPlayerMoved(player);
-        LOG_INFO("[Npc] test-teleported char #" + std::to_string(characterId));
+        const PortalDefinition* portal = m_portals.Find(portalEntityId);
+        if (portal == nullptr || !portal->enabled || portal->sourceMapId != player->MapId()) {
+            continue;
+        }
+        const float dx = portal->x - player->PositionX();
+        const float dy = portal->y - player->PositionY();
+        if (dx * dx + dy * dy > enterRadiusSq) {
+            continue;
+        }
+        SendPortalSpawn(player, portalEntityId, *portal);
+        player->AddVisiblePortal(portalEntityId);
+    }
+    if (!initialVisibility) {
+        std::vector<std::uint64_t> leaves;
+        for (const std::uint64_t portalEntityId : player->VisiblePortals()) {
+            const PortalDefinition* portal = m_portals.Find(portalEntityId);
+            if (portal == nullptr || portal->sourceMapId != player->MapId()) {
+                leaves.push_back(portalEntityId);
+                continue;
+            }
+            const float dx = portal->x - player->PositionX();
+            const float dy = portal->y - player->PositionY();
+            if (dx * dx + dy * dy > leaveRadiusSq) {
+                leaves.push_back(portalEntityId);
+            }
+        }
+        for (const std::uint64_t portalEntityId : leaves) {
+            SendPortalDespawn(player, portalEntityId, PortalDespawnReason::LeftAOI);
+            player->EraseVisiblePortal(portalEntityId);
+        }
+    }
+}
+
+void WorldServer::SendPortalSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                                  std::uint64_t portalEntityId, const PortalDefinition& portal) {
+    const MapDefinition* destination = MapRegistry::Instance().FindMap(portal.destinationMapId);
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::PortalSpawn);
+    if (EncodePortalSpawn(packet.payload, portalEntityId, portal.portalId,
+                          "Portal " + std::to_string(portal.portalId), portal.sourceMapId,
+                          portal.x, portal.y, portal.interactionRadius,
+                          portal.destinationMapId,
+                          destination != nullptr ? destination->name : "Unknown")) {
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
+void WorldServer::SendPortalDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                                    std::uint64_t portalEntityId, PortalDespawnReason reason) {
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::PortalDespawn);
+    if (EncodePortalDespawn(packet.payload, portalEntityId, static_cast<std::uint8_t>(reason))) {
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
+// 指令十九~二十二/五十七/五十九/六十：PortalUseRequest 验证链 + 服务器权威执行。
+void WorldServer::HandlePortalUseRequest(std::uint64_t connectionId,
+                                         const legend::network::Packet& packet) {
+    PortalUseRequestPayload request;
+    std::string decodeError;
+    std::printf("[Diag] PortalUse handler: conn=%llu payload=%zu bytes\n",
+                static_cast<unsigned long long>(connectionId), packet.payload.size());
+    if (!DecodePortalUseRequest(packet.payload.data(), packet.payload.size(), request,
+                                decodeError)) {
+        LOG_INFO("[Portal] Malformed PortalUseRequest from #" + std::to_string(connectionId) +
+                 " detail=" + decodeError);
+        return; // Malformed 不断线（指令五十七）
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        return;
+    }
+    const auto fail = [&](PortalResultCode code) {
+        SendPortalUseResponse(player, request.requestId, false, code, player->MapId(), 0.0f, 0.0f,
+                              0, player->Gold());
+    };
+    // 指令五十九：防重放（最近 64 成功 requestId）。
+    if (player->IsRecentMapRequest(request.requestId)) {
+        fail(PortalResultCode::DuplicateRequest);
+        return;
+    }
+    if (player->IsMapTransitionInProgress()) { // 指令六十：并发保护
+        fail(PortalResultCode::TransitionInProgress);
+        return;
+    }
+    if (!player->Alive()) { // 指令三十二：Dead 禁用 Portal
+        fail(PortalResultCode::Dead);
+        return;
+    }
+    const PortalDefinition* portal = m_portals.Find(request.portalEntityId);
+    if (portal == nullptr) {
+        fail(PortalResultCode::PortalNotFound);
+        return;
+    }
+    if (!portal->enabled) {
+        fail(PortalResultCode::PortalDisabled);
+        return;
+    }
+    if (portal->sourceMapId != player->MapId()) { // 指令二十一：same map
+        fail(PortalResultCode::WrongMap);
+        return;
+    }
+    if (player->VisiblePortals().count(request.portalEntityId) == 0) { // 指令二十一：visible
+        fail(PortalResultCode::NotVisible);
+        return;
+    }
+    const float dx = portal->x - player->PositionX();
+    const float dy = portal->y - player->PositionY();
+    if (dx * dx + dy * dy >
+        portal->interactionRadius * portal->interactionRadius) { // 指令二十一：距离
+        fail(PortalResultCode::TooFar);
+        return;
+    }
+    if (player->Level() < portal->minLevel) { // 指令七十八：等级
+        fail(PortalResultCode::LevelTooLow);
+        return;
+    }
+    if (static_cast<std::uint64_t>(player->Gold()) < portal->goldCost) { // 指令七十九：Gold
+        fail(PortalResultCode::NotEnoughGold);
+        return;
+    }
+    // ---- 验证链通过：服务器权威执行（扣费 + 统一切图）。----
+    player->RememberMapRequest(request.requestId);
+    const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(portal->goldCost);
+    player->SetProgression(player->Experience(), newGold);
+    if (portal->goldCost > 0) {
+        auto self = shared_from_this();
+        const std::uint64_t characterId = player->CharacterId();
+        const std::int64_t persistedGold = newGold;
+        const std::uint32_t cost = portal->goldCost;
+        m_dbWorker.Post([self, characterId, persistedGold, cost]() {
+            std::string error;
+            account::Statement stmt;
+            if (!stmt.Prepare(self->m_database.Handle(),
+                              "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
+                LOG_ERROR("[Portal] gold prepare failed: " + error);
+                return;
+            }
+            stmt.BindInt64(1, persistedGold);
+            stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+            stmt.Step(error);
+            if (!error.empty()) {
+                LOG_ERROR("[Portal] gold update failed (cost=" + std::to_string(cost) +
+                          "): " + error);
+            }
+        });
+    }
+    if (!m_mapTransition.TransitionPlayer(player, portal->destinationMapId, portal->destinationX,
+                                          portal->destinationY, "portal")) {
+        fail(PortalResultCode::MapNotFound);
+        return;
+    }
+    SendPortalUseResponse(player, request.requestId, true, PortalResultCode::Success,
+                          portal->destinationMapId, portal->destinationX, portal->destinationY,
+                          portal->goldCost, newGold);
+    SendProgressionSnapshot(player);
+}
+
+// 指令三十三~四十二：RespawnRequest 验证 + 服务器权威执行。
+void WorldServer::HandleRespawnRequest(std::uint64_t connectionId,
+                                       const legend::network::Packet& packet) {
+    RespawnRequestPayload request;
+    std::string decodeError;
+    if (!DecodeRespawnRequest(packet.payload.data(), packet.payload.size(), request,
+                              decodeError)) {
+        LOG_INFO("[Respawn] Malformed RespawnRequest from #" + std::to_string(connectionId));
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        return;
+    }
+    // 指令五十八：mode 语义校验（1/2 之外拒绝——Decode 已保证单字节）。
+    if (request.respawnMode != static_cast<std::uint8_t>(RespawnMode::CurrentMap) &&
+        request.respawnMode != static_cast<std::uint8_t>(RespawnMode::Town)) {
+        SendRespawnResponse(player, request.requestId, false, RespawnResultCode::InvalidMode,
+                            player->MapId(), player->PositionX(), player->PositionY(), 0,
+                            player->Gold());
+        return;
+    }
+    (void)ExecuteRespawn(player, static_cast<RespawnMode>(request.respawnMode),
+                         request.requestId);
+}
+
+// 指令三十四~四十八：复活编排（规则 = RespawnService；执行 = WorldServer）。
+bool WorldServer::ExecuteRespawn(const std::shared_ptr<PlayerSession>& player, RespawnMode mode,
+                                 std::uint64_t requestId) {
+    const auto now = std::chrono::steady_clock::now();
+    const auto fail = [&](RespawnResultCode code) {
+        SendRespawnResponse(player, requestId, false, code, player->MapId(),
+                            player->PositionX(), player->PositionY(), 0, player->Gold());
+        return false;
+    };
+    // 指令五十九：防重放（重复复活/重复扣金）。
+    if (player->IsRecentMapRequest(requestId)) {
+        return fail(RespawnResultCode::DuplicateRequest);
+    }
+    if (player->IsMapTransitionInProgress()) { // 指令六十：并发保护
+        return fail(RespawnResultCode::TransitionInProgress);
+    }
+    const RespawnPlan plan = RespawnService::PlanRespawn(*player, mode, now);
+    if (!plan.valid) {
+        return fail(plan.code);
+    }
+    player->RememberMapRequest(requestId);
+    // 指令三十八：扣复活费（CurrentMap 10G；Town 免费）+ 落库。
+    const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(plan.goldCost);
+    player->SetProgression(player->Experience(), newGold);
+    {
+        auto self = shared_from_this();
+        const std::uint64_t characterId = player->CharacterId();
+        const std::int64_t persistedGold = newGold;
+        const std::uint32_t cost = plan.goldCost;
+        m_dbWorker.Post([self, characterId, persistedGold, cost]() {
+            std::string error;
+            account::Statement stmt;
+            if (!stmt.Prepare(self->m_database.Handle(),
+                              "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
+                LOG_ERROR("[Respawn] gold prepare failed: " + error);
+                return;
+            }
+            stmt.BindInt64(1, persistedGold);
+            stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+            stmt.Step(error);
+            if (!error.empty()) {
+                LOG_ERROR("[Respawn] gold update failed (cost=" + std::to_string(cost) + "): " +
+                          error);
+            }
+        });
+    }
+    // 指令四十：复活清空全部状态（Buff/Debuff 统一清除 -> StatusContainer 为空）。
+    if (!player->StatusEffects().Empty()) {
+        const auto effects = player->StatusEffects().All();
+        std::vector<ActiveStatusEffect> removed;
+        for (const auto& [effectId, effect] : effects) {
+            removed.push_back(effect);
+        }
+        player->StatusEffects().Clear();
+        RecalculateTargetDerivedStats(CombatEntityType::Player, player->CharacterId());
+        for (const auto& effect : removed) {
+            SendStatusRemoved(PlayerStatusReceivers(player->CharacterId()), effect,
+                              StatusRemovedReason::Expired);
+        }
+    }
+    // 指令三十九：复活状态恢复（HP/Mana 满 + Alive）。
+    player->Revive();
+    // 指令四十一/四十五：AOI 重建（同图/跨图统一走 MapTransitionService）+
+    // 复活保护 3 秒（期间怪物伤害无效；主动攻击/施法立即取消）。
+    if (!m_mapTransition.TransitionPlayer(player, plan.destMapId, plan.destX, plan.destY,
+                                          plan.crossMap ? "respawn-town" : "respawn-current")) {
+        std::printf("[Diag] Respawn transition FAILED: char=%llu dest=%u gold=%lld alive=%d "
+                    "transitionFlag=%d\n",
+                    static_cast<unsigned long long>(player->CharacterId()),
+                    static_cast<unsigned>(plan.destMapId), static_cast<long long>(player->Gold()),
+                    player->Alive() ? 1 : 0, player->IsMapTransitionInProgress() ? 1 : 0);
+        return fail(RespawnResultCode::InternalError);
+    }
+    player->SetRespawnProtection(kRespawnProtectionSeconds);
+    // 指令三十三/三十四：成功 RespawnResponse（fail 路径之外必须显式回执）。
+    SendRespawnResponse(player, requestId, true, RespawnResultCode::Success, plan.destMapId,
+                        plan.destX, plan.destY, plan.goldCost, newGold);
+    // 指令四十二：PlayerRespawned（只发本人）+ Health/Mana 快照。
+    SendPlayerRespawned(player);
+    SendEntityHealthSnapshot(player, CombatEntityType::Player, player->CharacterId(),
+                             player->CurrentHp(), player->MaxHp(), true);
+    SendManaSnapshots();
+    SendProgressionSnapshot(player);
+    LOG_INFO("[Respawn] char=" + player->CharacterName() + " mode=" +
+             RespawnModeName(static_cast<std::uint8_t>(mode)) + " -> map=" +
+             std::to_string(plan.destMapId) + " cost=" + std::to_string(plan.goldCost));
+    return true;
+}
+
+void WorldServer::SendPortalUseResponse(const std::shared_ptr<PlayerSession>& player,
+                                        std::uint64_t requestId, bool success,
+                                        PortalResultCode code, std::uint16_t destinationMapId,
+                                        float destinationX, float destinationY,
+                                        std::uint32_t goldCost, std::int64_t newGold) {
+    PortalUseResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.sourceMapId = player->MapId();
+    out.destinationMapId = destinationMapId;
+    out.destinationX = destinationX;
+    out.destinationY = destinationY;
+    out.goldCost = goldCost;
+    out.newGold = newGold;
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::PortalUseResponse);
+    if (EncodePortalUseResponse(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendRespawnResponse(const std::shared_ptr<PlayerSession>& player,
+                                      std::uint64_t requestId, bool success,
+                                      RespawnResultCode code, std::uint16_t mapId, float x,
+                                      float y, std::uint32_t goldCost, std::int64_t newGold) {
+    RespawnResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.mapId = mapId;
+    out.x = x;
+    out.y = y;
+    out.goldCost = goldCost;
+    out.newGold = newGold;
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::RespawnResponse);
+    if (EncodeRespawnResponse(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+// 指令四十二：PlayerRespawned 事件（mapId/位置/HP/Mana/Gold/serverTime；只发本人）。
+void WorldServer::SendPlayerRespawned(const std::shared_ptr<PlayerSession>& player) {
+    PlayerRespawnedPayload out;
+    out.mapId = player->MapId();
+    out.x = player->PositionX();
+    out.y = player->PositionY();
+    out.hp = player->CurrentHp();
+    out.maxHp = player->MaxHp();
+    out.mana = player->CurrentMana();
+    out.maxMana = player->MaxMana();
+    out.gold = player->Gold();
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::PlayerRespawned);
+    if (EncodePlayerRespawned(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+// 测试白盒：直接设置等级（Portal 8003 Level 验证布景；与 ApplyLevelGrowth 同步属性）。
+bool WorldServer::TestSetPlayerLevel(std::uint64_t characterId, std::uint32_t level) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, level]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player && level >= 1) {
+            player->ApplyLevelGrowth(level);
+            self->SendProgressionSnapshot(player);
+        }
+    });
+    return true;
+}
+
+// 测试白盒：设置金币（Portal/复活 Gold 验证布景；内存权威值，不写 DB）。
+bool WorldServer::TestSetPlayerGold(std::uint64_t characterId, std::int64_t gold) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, gold]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player && gold >= 0) {
+            player->SetProgression(player->Experience(), gold);
+            self->SendProgressionSnapshot(player);
+        }
     });
     return true;
 }

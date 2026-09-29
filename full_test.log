@@ -1,0 +1,11 @@
+﻿Test project D:/LegendGame-main/build
+    Start 1: NetworkTests
+1/3 Test #1: NetworkTests .....................   Passed   12.34 sec
+    Start 2: AccountTests
+2/3 Test #2: AccountTests .....................   Passed   16.75 sec
+    Start 3: WorldTests
+3/3 Test #3: WorldTests .......................   Passed  390.18 sec
+
+100% tests passed out of 3
+
+Total Test time (real) = 419.32 sec

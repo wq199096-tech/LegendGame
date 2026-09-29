@@ -37,6 +37,10 @@ public:
     void InitializeFromTable(const MonsterSpawnPoint (&table)[kInitialMonsterCount],
                              std::uint32_t monsterTypeId, std::uint16_t mapId,
                              std::uint32_t respawnDelayMs);
+    // 阶段21 指令十一：按地图布点初始化（slotId 从 firstSlotId 起单调；多地图共用容器）。
+    void InitializeFromPoints(const std::vector<MonsterSpawnPoint>& points,
+                              std::uint32_t monsterTypeId, std::uint16_t mapId,
+                              std::uint32_t respawnDelayMs, std::uint32_t firstSlotId);
 
     const std::vector<MonsterSpawnSlot>& Slots() const { return m_slots; }
     const MonsterSpawnSlot* FindSlot(std::uint32_t spawnSlotId) const;

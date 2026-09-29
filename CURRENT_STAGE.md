@@ -1,73 +1,56 @@
-# CURRENT_STAGE — 阶段20 进行中
+# CURRENT_STAGE — 阶段21 完成（待 Actions 确认）
 
 ## 当前阶段
-- **阶段20 —— NPC / Dialogue / Shop / Teleport / Quest Interaction Core V0.20**
-- 前置确认：阶段19已修复（HEAD a674786，Actions run 36527767372 = success，三套件 0 failures）✔
+- **阶段21 —— Multi-Map World / Portal / Respawn Core V0.21**
+- 前置确认：阶段20 已封板（bddd8b1；run #42 = success）✔
+- 指令全文：119 条（会话输入/Trae long-text）
 
-## 阶段目标（指令摘要）
-玩家靠近 NPC → 服务器验证可交互 → Interact → 服务器返回对话（一层菜单）→
-Quest 接取/提交（复用阶段19 QuestService）/ 打开商店 / 传送 → 服务器权威执行。
+## 阶段目标（摘要）
+3 张服务器权威地图（Map1 Greenfield Village / Map2 Slime Meadow / Map3 Ancient Ruins）+
+固定 Portal 8001~8004 + 统一 MapTransitionService（Portal/NPC 传送/复活共用）+
+死亡-复活完整链（3 秒门槛/10G-免费双模式/状态清空/3 秒保护）+ 持久化与非法存档修正。
 
-固定 4 NPC：5001 Village Elder(QuestGiver 300,300 任务4001/4002/4003/4005)、
-5002 General Merchant(Merchant 450,300 Shop6001)、5003 Wayfarer(Teleporter 600,300 Teleport7001)、
-5004 Explorer Guide(MultiFunction 750,300 Quest4004+Teleport7002)。interactionRange=120。
+## Todo（全部完成）
+- [x] 前置确认（git/Actions/阶段20封板）
+- [x] 勘察（MessageId/WorldMapManager/PlayerSession/Monster/Drop/Teleport/EnterWorld/Client/Tests）
+- [x] Shared：WorldMap（MapTypes/MapDefinition/MapProtocol）+ RespawnProtocol + Portal 三件套 + MessageId 340~348
+- [x] Server：MapRegistry/MapTransitionService(friend)/RespawnService/PortalRegistry/PortalManager/PortalSpatialGrid
+- [x] Server：多地图 WorldMapManager（按图边界钳制）/按图怪物生成（legacy 开关）/AOI 同图过滤
+- [x] Server：Portal AOI/Use 验证链/MapChanged/MapSnapshot/死亡复活链/保护/持久化修正/装备死亡拒绝
+- [x] Client：RemotePortal/ClientWorldMapModel/F·R·T 键/F9 面板/死亡 Overlay/切图镜像清理
+- [x] Tests/WorldMapChecks.cpp（纯逻辑 + 真实链路 40+ 检查）+ CMake + README + 按键表
+- [x] 本地全量测试 0 FAIL（Network 12.3s / Account 16.8s / World 390.2s = 100% passed）→ 8 exe 齐全
+- [x] 提交 `feat(world): add multi-map portal and player respawn core` → push
+- [ ] Actions 绿（提交后轮询中——完成后本文件已同步，见 TRAE_CONTINUATION_CONTEXT 的最终 HEAD）
 
-固定内容：Shop6001（Core buy10/sell3、Sword 100/30、Armor 120/40）；
-Teleport7001（→1500,1500 费20G）、7002（→300,300 免费）；QuestDefinition 增加 startNpcDefinitionId/turnInNpcDefinitionId
-（4001/4002/4003/4005=5001/5001，4004=5004/5004）。
+## 关键实现决策（防止后续重写）
+- MapTransitionService 持 WorldServer&（friend）——12 步序列 + OnTargetPlayerRemoved（指令四十九：
+  切图时原图追击怪物立刻丢目标 Returning）+ Quest OnPlayerMoved；NPC 7001/7002 与
+  TestTeleportPlayer 白盒全部改走它（指令五十三/一百零二）；同图切换也走完整序列
+- mapTransitionInProgress 并发保护（指令六十）；TransitionPlayer 失败路径：地图不存在/越界/并发
+- 多地图怪物：RespawnManager::InitializeFromPoints（slotId 分段 1=legacy map1 / 100+=map2 / 200+=map3）；
+  legacyMap1TestSpawn 生产 false / 测试 harness true（阶段13~20 套件兼容——旧数量断言 20→50/19→49）
+- enter 修正（指令二十九）：非法 mapId→Town spawn；越界位置→该图 spawn；修正后立即重存
+- 复活：RespawnService::PlanRespawn 纯规则（mode/死亡/3s/Gold）→ WorldServer 扣金→清状态容器→
+  Revive（HP/Mana 满）→TransitionPlayer→SetRespawnProtection(3s)→**RespawnResponse 成功回执**→
+  PlayerRespawned+HP/Mana 快照（初版漏发成功 RespawnResponse——测试抓出已修）
+- 保护：respawnProtectedUntil runtime flag；TryMonsterAttack 伤害前检查；攻击/施法立即 Clear
+- MessageId 340~348：PortalSpawn/Despawn/UseReq/UseResp/MapChanged/MapSnapshot/RespawnReq/Resp/PlayerRespawned
 
-## Todo（按实现顺序）
-- [x] 前置确认阶段19
-- [x] 创建 4 个上下文文件（本文件 + PROJECT_CONTEXT/ARCHITECTURE/TRAE_CONTINUATION_CONTEXT）
-- [x] Shared：Npc/Dialogue/Shop/Teleport（NpcTypes/NpcDefinition/NpcProtocol/NpcError；DialogueTypes/DialogueDefinition/DialogueProtocol；ShopTypes/ShopDefinition/ShopProtocol；TeleportTypes/TeleportDefinition/TeleportProtocol）+ MessageId 320~334 + QuestDefinition 增加 start/turnInNpcDefinitionId + SkillCancelReason::Teleported
-- [x] Server：NpcRegistry/NpcEntity/NpcManager/NpcSpatialGrid + WorldServer 启动生成 4 NPC
-- [x] NPC AOI（cellSize400、Enter600/Leave700、PlayerSession.visibleNpcs、NpcSpawn=320/NpcDespawn=321 单 NPC 包）
-- [x] Interact（322/323）：验证链（Player 存在/Alive/NPC 存在 active/同图/visibleNpcs/距离≤interactionRange）→ Dialogue Session（uint64 单调，30s TTL，走远/死亡/断线失效）
-- [x] Dialogue（324 OptionRequest/325 DialoguePayload）：一层菜单 ≤16 Option（optionId/type[Quest|Shop|Teleport|Close]/referenceId/label）；Village Elder 按任务状态动态生成（不显示不满足前置的 Accept）
-- [x] Quest NPC 集成：复用 QuestService（阶段19 packet handler 抽出 AcceptQuestForPlayer/BeginQuestTurnIn 核心）；Marker（None<InProgress<Available<ReadyToTurnIn，per-player）→ NpcQuestMarkerUpdate=326
-- [x] Shop（327 OpenRequest/328 OpenResponse/329 Buy/330 BuyResp/331 Sell/332 SellResp）：必须有效 Dialogue Session；ShopSession TTL 30s；Buy 校验（session/NPC/同图/距离/canBuy/quantity 1~99 装备=1/Gold 足够/背包空间/uint64 防溢出）→ 原子事务（Gold 扣 + Inventory 写）；Sell 从背包实例取 definitionId、canSell、装备不能卖、Material 部分卖；购买触发 OnInventoryChanged；ReadyToTurnIn 冻结不回退
-- [x] Teleport（333 Request/334 Response）：有效 Dialogue Session + NPC 提供该 teleportId + Alive + Gold + minLevel；扣 Gold → 权威位置更新 → WorldMapManager/SpatialGrid/AOI 重置（旧区 Despawn、visible* 全清、重初始化）→ 立即发权威位置快照 → QuestService::OnPlayerMoved（可完成 Explorer）→ Cast 取消（SkillCancelReason::Teleported）→ 关闭 Dialogue/Shop Session
-- [x] Client：RemoteNpcEntity/RemoteNpcManager、ClientDialogueModel/ClientShopModel；GameScene Debug（NPC Quad+名字+Marker）；E 交互（优先 NPC≤120 否则拾取）、对话 Options 数字键 1~9、Shop B 买 / S 卖
-- [x] Tests/WorldNpcChecks.cpp（纯逻辑 + 真实链路全部 Check）+ 加入 LegendWorldTests
-- [x] README（NPC & Interaction Core V0.20 章节 + 按键表）
-- [x] 提交 `feat(world): add npc dialogue shop teleport and quest interaction core`（8032ee0 已推送）
-- [x] **Actions 绿（run 36563287848 = run #42，HEAD 4312087 = success）——阶段20 完成**
+## 本阶段调试教训（重要）
+- **测试移动后立即交互/使用 Portal 会撞 AOI tick（200ms）NotVisible 竞态**——发送前必须等
+  服务端 visibleXxx 收录（WaitUntil server-side）；本阶段 PortalSuccess/Duplicate 均栽过
+- **respawn 时序**：DeathBlocks 等待耗时不可控 → 每个 respawn 检查前重新 MarkDead 重置 3s 时钟
+- **Stage20 教训重演**：`Select-Object -First N` 实时截断管道会杀 ctest → 输出必须落盘文件再 grep
+- 旧套件兼容：多地图布局改的每处数量断言（20→50）都要逐一排查（Monster/Combat/Status/Progression）
 
-## CI 失败修复（阶段20 收尾，3 轮完成）
-- round1（8032ee0，run 36545873665）5 FAIL：DotKill/PickupDb/DropExpire（A 未 Buff → CI 慢机
-  攻击循环拉长 → A 被围殴致死 → 级联）+ DialogueSessionTtl/MoveOutOfRange。
-  修复：击杀循环前 TestBuffPlayerHp(1e6)×2、DOT 循环 30s、过期事件等待 3s。
-- round2（759f7d9，run 36558569975）仅剩 Dialogue 2 FAIL。[Diag] 实锤：重进世界后商人 5002
-  （entity 2，cell(1,0)）12s+ 不进 visibleNpcs；长老 5001（cell(0,0)）正常。服务器静态排查无果。
-- round3（4312087，run 36563287848 = success）：重进后 move+wait（(372,306)+600ms，同死亡
-  检查通过模式）+ 可见性等待 8s + 失败时打印服务器状态 + workflow [Diag] 注解通道（上限 12）。
-- 经验：CI（2 核慢机）时序与本地差异大——测试内所有"静止后立即交互/长循环中间不设防死亡"
-  模式都必须按最坏时序加固；[FAIL] 行内嵌诊断 + [Diag] 注解通道是无 token 排查的唯一手段
-  （GitHub 每步仅保留前 10 条 error 注解，emission 顺序 = names→FAIL→Diag→tail）。
-
-## 本阶段编译修复记录
-- NpcError.h 缺 `#include "Shared/Npc/NpcTypes.h"`（Client 侧 81 个 C2065/C2653）
-- WorldNpcChecks.cpp：`far`/`home` 是 Windows 宏（minwindef.h）→ 改名 farTp/homeTp；
-  多余 `} // namespace` 提前闭合 worldtest → 删除；`bool ok` 重定义 → 改赋值；
-  FindPlayerByCharacter 返回 shared_ptr 不能用 `const auto*` → 改 `const auto`
-- RunOnWorldIo 补 void 特化（if constexpr std::is_void_v<R>）
-- **关键**：WorldTestClient::lastEvent[64] 按值数组 × 膨胀后的 WorldNetworkEvent（阶段20 新增
-  Dialogue/Shop/Teleport payload）≈ 100KB/客户端 → Monster 套件 12 个栈上客户端函数序言
-  __chkstk 直接打穿 1MB 主线程栈（0xC00000FD，任何语句执行前崩溃）→ lastEvent 改 std::vector 堆分配
-
-## 本地全量测试（阶段20 最终）
-- LegendWorldTests：**434 PASS / 0 FAIL**（含 WorldNpcChecks 纯逻辑+真实链路全部检查）
-- LegendNetworkTests：**0 FAIL**；LegendAccountTests：**0 FAIL**（回归无破坏）
-- 修复历程：首轮 0xC00000FD 栈溢出（harness lastEvent 数组→堆）→ 19 FAIL（requestId 复用/
-  死亡级联/Marker 基线/TTL 干扰）→ 5 FAIL（传送扣金未落库/NotVisible 竞态/位置设计）→
-  1 FAIL（DeathInvalidates 未复活）→ **0 FAIL**
-
-## 已完成
-- 阶段19 确认修复（本文件顶部）
-- 阶段20 全部代码/测试/README；本地三套件全绿
+## 本地全量测试（阶段21 最终）
+- LegendWorldTests：全部 PASS（含 WorldMapChecks 纯逻辑+真实链路 40+ 检查），390s
+- LegendNetworkTests：PASS（12.3s）；LegendAccountTests：PASS（16.8s）
+- 8 exe 全部构建 ✓
 
 ## 阻塞项
 - 无
 
 ## 当前 Actions
-- 最新：run 36527767372（a674786）= **success**（阶段20 提交后待更新）
+- 提交后轮询中（结果见 TRAE_CONTINUATION_CONTEXT 最终记录）

@@ -134,6 +134,8 @@ bool WorldSession::HandlePostHandshake(const Packet& packet, std::string& error)
         case MessageId::ShopBuyRequest:
         case MessageId::ShopSellRequest:
         case MessageId::TeleportRequest:
+        case MessageId::PortalUseRequest:
+        case MessageId::RespawnRequest:
             // 阶段11 指令三十四：移动输入放行（InWorld 校验在 WorldServer/
             // WorldMapManager：非 InWorld 玩家直接忽略）。
             // 阶段14 指令三十八：攻击请求放行（验证在 CombatService/WorldServer）。
@@ -142,6 +144,8 @@ bool WorldSession::HandlePostHandshake(const Packet& packet, std::string& error)
             //（校验在 WorldServer 服务器权威逻辑）。
             // 阶段19 指令二：Quest Accept/TurnIn/Abandon 请求放行（校验在
             // WorldServer/QuestService；Client 不能上报进度/状态/奖励）。
+            // 阶段21 指令十九/三十三：PortalUse/Respawn 请求放行（全部验证链在
+            // WorldServer 服务器权威逻辑）。
             return true;
         case MessageId::WorldDisconnectNotice: {
             // 阶段11 指令七十九：客户端主动退出世界

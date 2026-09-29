@@ -5,21 +5,30 @@ namespace legend::world {
 void MonsterRespawnManager::InitializeFromTable(
     const MonsterSpawnPoint (&table)[kInitialMonsterCount], std::uint32_t monsterTypeId,
     std::uint16_t mapId, std::uint32_t respawnDelayMs) {
-    m_slots.clear();
-    m_slots.reserve(kInitialMonsterCount);
-    for (std::uint32_t i = 0; i < kInitialMonsterCount; ++i) {
+    Reset();
+    const std::vector<MonsterSpawnPoint> points(table, table + kInitialMonsterCount);
+    InitializeFromPoints(points, monsterTypeId, mapId, respawnDelayMs, 1);
+}
+
+// 阶段21 指令十一：按地图追加布点（slotId 从 firstSlotId 起单调；多地图共用容器；
+// 调用方先 Reset() 再逐图追加——World 重启时全量重建，语义不变）。
+void MonsterRespawnManager::InitializeFromPoints(const std::vector<MonsterSpawnPoint>& points,
+                                                 std::uint32_t monsterTypeId,
+                                                 std::uint16_t mapId,
+                                                 std::uint32_t respawnDelayMs,
+                                                 std::uint32_t firstSlotId) {
+    m_slots.reserve(m_slots.size() + points.size());
+    std::uint32_t slotId = firstSlotId;
+    for (const auto& point : points) {
         MonsterSpawnSlot slot;
-        slot.spawnSlotId = i + 1; // 指令二十：slotId 1~20
+        slot.spawnSlotId = slotId++;
         slot.monsterTypeId = monsterTypeId;
         slot.mapId = mapId;
-        slot.spawnX = table[i].x;
-        slot.spawnY = table[i].y;
+        slot.spawnX = point.x;
+        slot.spawnY = point.y;
         slot.respawnDelayMs = respawnDelayMs;
         m_slots.push_back(slot);
     }
-    m_activeEntityBySlot.clear();
-    m_slotByEntity.clear();
-    m_pending.clear();
 }
 
 const MonsterSpawnSlot* MonsterRespawnManager::FindSlot(std::uint32_t spawnSlotId) const {

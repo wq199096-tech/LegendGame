@@ -102,6 +102,15 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::ShopSellResponse: return "ShopSellResponse";
         case MessageId::TeleportRequest: return "TeleportRequest";
         case MessageId::TeleportResponse: return "TeleportResponse";
+        case MessageId::PortalSpawn: return "PortalSpawn";
+        case MessageId::PortalDespawn: return "PortalDespawn";
+        case MessageId::PortalUseRequest: return "PortalUseRequest";
+        case MessageId::PortalUseResponse: return "PortalUseResponse";
+        case MessageId::MapChanged: return "MapChanged";
+        case MessageId::MapSnapshot: return "MapSnapshot";
+        case MessageId::RespawnRequest: return "RespawnRequest";
+        case MessageId::RespawnResponse: return "RespawnResponse";
+        case MessageId::PlayerRespawned: return "PlayerRespawned";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

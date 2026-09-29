@@ -1144,7 +1144,7 @@ void RunWorldCombatChecks() {
             [&] {
                 clientB.DrainEvents();
                 return servers.world->FindMonster(kSlime3) == nullptr &&
-                       servers.world->MonsterCount() == 19 &&
+                       servers.world->MonsterCount() == 49 &&
                        CountMonsterRemovedDespawnsFor(clientB, kSlime3) >= 1;
             },
             10000);
@@ -1157,7 +1157,7 @@ void RunWorldCombatChecks() {
               clientCleaned);
         // 指令五十五：不复活（杀一只少一只）
         Check("MonsterDeathCleanupCheck: no respawn (kill one, one less)",
-              servers.world->MonsterCount() == 19);
+              servers.world->MonsterCount() == 49);
     }
 
     // ---- CombatPersistenceBoundaryCheck（指令一百三十/八十/八十一）：重启恢复默认 ----
@@ -1169,9 +1169,9 @@ void RunWorldCombatChecks() {
         WaitUntil([&] { return true; }, 500);
         servers.StopWorld();
         const bool restarted = servers.StartWorld();
-        bool monstersFull = restarted && servers.world->MonsterCount() == 20;
+        bool monstersFull = restarted && servers.world->MonsterCount() == 50;
         if (monstersFull) {
-            for (std::uint64_t id = 1; id <= 20; ++id) {
+            for (std::uint64_t id = 1; id <= 50; ++id) {
                 auto monster = servers.world->FindMonster(id);
                 if (monster == nullptr || !monster->Alive() || monster->CurrentHp() != 80 ||
                     monster->State() != MonsterState::Idle) {

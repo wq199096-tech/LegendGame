@@ -137,20 +137,8 @@ public:
         }
         return false;
     }
-    // 指令七十九：死亡（不自动复活）。
-    void MarkDead() {
-        m_alive = false;
-        m_currentHp = 0;
-        m_deadSince = std::chrono::steady_clock::now();
-    }
-    // 指令七十九：死亡时刻。
+    // 指令七十九：死亡时刻（MarkDead/Revive 见阶段21 指令三十一/三十九）。
     std::chrono::steady_clock::time_point DeadSince() const { return m_deadSince; }
-    // 复活（生产复活流程尚未开放；当前仅供测试白盒使用）。
-    void Revive() {
-        m_alive = true;
-        m_currentHp = m_maxHp;
-        m_deadSince = {};
-    }
     // 测试白盒：抬高 HP 上限并回满（NPC 交互套件防死亡级联；生产不可调用）。
     void TestBuffHp(std::uint32_t hp) {
         m_maxHp = hp;
@@ -366,6 +354,70 @@ public:
             (m_recentNpcRequestCursor + 1) % m_recentNpcRequestIds.size();
     }
 
+    // ------------------------------------------------------------------
+    // 阶段21：Portal 可见集合（io 线程权威维护，指令十七）。
+    // ------------------------------------------------------------------
+    const std::unordered_set<std::uint64_t>& VisiblePortals() const { return m_visiblePortals; }
+    void AddVisiblePortal(std::uint64_t portalEntityId) { m_visiblePortals.insert(portalEntityId); }
+    bool EraseVisiblePortal(std::uint64_t portalEntityId) {
+        return m_visiblePortals.erase(portalEntityId) != 0;
+    }
+    void ClearVisiblePortals() { m_visiblePortals.clear(); }
+
+    // ------------------------------------------------------------------
+    // 阶段21 指令三十一：死亡状态记录（deathMap/X/Y + deadSince 已有）。
+    // ------------------------------------------------------------------
+    std::uint16_t DeathMapId() const { return m_deathMapId; }
+    float DeathX() const { return m_deathX; }
+    float DeathY() const { return m_deathY; }
+    void MarkDead() {
+        m_alive = false;
+        m_currentHp = 0;
+        m_deadSince = std::chrono::steady_clock::now();
+        m_deathMapId = m_mapId; // 指令三十一：死亡位置（复活/观察用）
+        m_deathX = m_positionX;
+        m_deathY = m_positionY;
+        m_respawnProtectedUntil = {}; // 死亡即失去旧保护
+    }
+    // 指令三十九：复活恢复（HP/Mana 满 + Alive + 状态容器由 WorldServer 清空）。
+    void Revive() {
+        m_alive = true;
+        m_currentHp = m_maxHp;
+        m_currentMana = m_maxMana;
+        m_deadSince = {};
+    }
+    // 指令四十五/四十六/四十七：复活保护（runtime flag，非完整 StatusEffect）。
+    bool IsRespawnProtected(std::chrono::steady_clock::time_point now) const {
+        return now < m_respawnProtectedUntil;
+    }
+    void SetRespawnProtection(double seconds) {
+        m_respawnProtectedUntil =
+            std::chrono::steady_clock::now() +
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(seconds));
+    }
+    void ClearRespawnProtection() { m_respawnProtectedUntil = {}; }
+
+    // ------------------------------------------------------------------
+    // 阶段21 指令五十九/六十：地图类请求防重放（PortalUse/Respawn 共用 64 窗口）
+    // + 切图并发保护（mapTransitionInProgress）。
+    // ------------------------------------------------------------------
+    bool IsRecentMapRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentMapRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberMapRequest(std::uint64_t requestId) {
+        m_recentMapRequestIds[m_recentMapRequestCursor] = requestId;
+        m_recentMapRequestCursor =
+            (m_recentMapRequestCursor + 1) % m_recentMapRequestIds.size();
+    }
+    bool IsMapTransitionInProgress() const { return m_mapTransitionInProgress; }
+    void SetMapTransitionInProgress(bool inProgress) { m_mapTransitionInProgress = inProgress; }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -439,6 +491,16 @@ private:
     ActiveShopSession m_shopSession;
     std::array<std::uint64_t, kNpcRequestHistorySize> m_recentNpcRequestIds{};
     std::size_t m_recentNpcRequestCursor = 0;
+
+    // 阶段21：Portal 可见集合 + 死亡记录 + 复活保护 + 切图并发 + 地图请求历史。
+    std::unordered_set<std::uint64_t> m_visiblePortals;
+    std::uint16_t m_deathMapId = 1;
+    float m_deathX = 0.0f;
+    float m_deathY = 0.0f;
+    std::chrono::steady_clock::time_point m_respawnProtectedUntil{};
+    std::array<std::uint64_t, kNpcRequestHistorySize> m_recentMapRequestIds{};
+    std::size_t m_recentMapRequestCursor = 0;
+    bool m_mapTransitionInProgress = false;
 };
 
 } // namespace legend::world

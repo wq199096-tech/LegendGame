@@ -17,6 +17,10 @@ inline constexpr const char* kTrainingSlimeName = "Training Slime";
 // 初始怪物数量（指令十五/十六）：map1 固定 20 只，固定位置表（测试可复现）。
 inline constexpr std::size_t kInitialMonsterCount = 20;
 
+// 阶段21 指令十一：多地图怪物数量（Map2 x20 / Map3 x10；Map1 生产无野外 Slime）。
+inline constexpr std::size_t kMap2SlimeCount = 20;
+inline constexpr std::size_t kMap3SlimeCount = 10;
+
 // AI Tick（指令三十/六十九）：200ms；dt clamp（指令四十一）最大 0.25s。
 inline constexpr int kMonsterAiTickMs = 200;
 inline constexpr float kMaxMonsterAiDeltaTime = 0.25f;

@@ -11,6 +11,7 @@
 #include "Server/WorldServer/Item/InventoryRepository.h"
 #include "Server/WorldServer/Item/ItemRegistry.h"
 #include "Server/WorldServer/Item/WorldItemDrop.h"
+#include "Server/WorldServer/Map/MapTransitionService.h"
 #include "Server/WorldServer/Monster/MonsterAi.h"
 #include "Server/WorldServer/Monster/MonsterManager.h"
 #include "Server/WorldServer/Monster/MonsterRespawnManager.h"
@@ -18,6 +19,8 @@
 #include "Server/WorldServer/Npc/NpcManager.h"
 #include "Server/WorldServer/Npc/NpcSpatialGrid.h"
 #include "Server/WorldServer/Npc/NpcInteractionService.h"
+#include "Server/WorldServer/Portal/PortalManager.h"
+#include "Server/WorldServer/Portal/PortalSpatialGrid.h"
 #include "Server/WorldServer/Progression/ProgressionService.h"
 #include "Server/WorldServer/Progression/RewardService.h"
 #include "Server/WorldServer/Quest/QuestRepository.h"
@@ -38,6 +41,7 @@
 #include "Shared/Network/MessageId.h"
 #include "Shared/Npc/NpcError.h"
 #include "Shared/Npc/NpcProtocol.h"
+#include "Shared/Portal/PortalProtocol.h"
 #include "Shared/Progression/ProgressionProtocol.h"
 #include "Shared/Quest/QuestProtocol.h"
 #include "Shared/Quest/QuestTypes.h"
@@ -51,6 +55,8 @@
 #include "Shared/Teleport/TeleportProtocol.h"
 #include "Shared/Teleport/TeleportTypes.h"
 #include "Shared/World/WorldError.h"
+#include "Shared/WorldMap/MapProtocol.h"
+#include "Shared/WorldMap/RespawnProtocol.h"
 
 #include <asio.hpp>
 
@@ -76,6 +82,8 @@ namespace legend::world {
 // + 加载角色 + PlayerSession + 权威位置 + 位置保存。
 // 纯 Console，不链接 SDL/OpenGL/Renderer/GameScene（指令六十一/一百零九）。
 class WorldServer : public std::enable_shared_from_this<WorldServer> {
+    friend class MapTransitionService; // 阶段21 指令二十四：统一地图切换（访问内部编排）
+
 public:
     struct Config {
         std::uint16_t listenPort = kWorldServerDefaultPort; // 指令三：默认 7200
@@ -124,6 +132,9 @@ public:
         int questSnapshotIntervalMs = 10000;
         // 阶段20 指令二十二/四十一：NPC Dialogue/Shop Session TTL（默认 30s；测试可缩短）。
         double npcSessionTtlSeconds = kNpcSessionTtlSeconds;
+        // 阶段21 指令十一：Legacy Test Spawn——生产按新地图布局（Map1 无野外 Slime）；
+        // 历史测试依赖 Map1 Slime（NPC/战斗/技能套件），测试环境开启此开关。
+        bool legacyMap1TestSpawn = false;
     };
 
     struct Hooks {
@@ -346,7 +357,48 @@ public:
     // 指令六十五~六十七：服务器权威传送（Teleport Option 触发）。
     bool TestTeleportPlayer(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
 
+    // ------------------------------------------------------------------
+    // 阶段21：多地图 / Portal / 复活（100% 服务器权威；Client 只表达意图）。
+    // ------------------------------------------------------------------
+    // Portal 访问器（测试/运维白盒）。
+    std::size_t PortalCount() const { return m_portals.Count(); }
+    const PortalDefinition* FindPortal(std::uint64_t portalEntityId) const {
+        return m_portals.Find(portalEntityId);
+    }
+    // 测试白盒：设置等级（Portal 8003 Level 验证等布景用；不写 DB）。
+    bool TestSetPlayerLevel(std::uint64_t characterId, std::uint32_t level);
+    // 测试白盒：设置金币（Portal/复活 Gold 验证布景用；不写 DB，内存权威值）。
+    bool TestSetPlayerGold(std::uint64_t characterId, std::int64_t gold);
+
 private:
+    // 阶段21：Portal 生成与 AOI。
+    void SpawnInitialPortals();
+    void UpdatePlayerPortalVisibility(const std::shared_ptr<PlayerSession>& player,
+                                      bool initialVisibility);
+    void SendPortalSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                         std::uint64_t portalEntityId, const PortalDefinition& portal);
+    void SendPortalDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                           std::uint64_t portalEntityId, PortalDespawnReason reason);
+
+    // 阶段21：请求入口（io 线程；Client 只表达意图，服务器全部重验）。
+    void HandlePortalUseRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleRespawnRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+
+    // 阶段21：响应/事件发送。
+    void SendPortalUseResponse(const std::shared_ptr<PlayerSession>& player,
+                               std::uint64_t requestId, bool success, PortalResultCode code,
+                               std::uint16_t destinationMapId, float destinationX,
+                               float destinationY, std::uint32_t goldCost, std::int64_t newGold);
+    void SendRespawnResponse(const std::shared_ptr<PlayerSession>& player,
+                             std::uint64_t requestId, bool success, RespawnResultCode code,
+                             std::uint16_t mapId, float x, float y, std::uint32_t goldCost,
+                             std::int64_t newGold);
+    void SendPlayerRespawned(const std::shared_ptr<PlayerSession>& player);
+
+    // 阶段21：复活执行编排（RespawnService 规则 -> 金币/状态/复活/切换/保护/事件）。
+    bool ExecuteRespawn(const std::shared_ptr<PlayerSession>& player, RespawnMode mode,
+                        std::uint64_t requestId);
+
     // NPC 生成与 AOI。
     void SpawnInitialNpcs();
     void UpdatePlayerNpcVisibility(const std::shared_ptr<PlayerSession>& player,
@@ -583,6 +635,11 @@ private:
     NpcSpatialGrid m_npcGrid;
     std::uint64_t m_nextDialogueSessionId = 1; // 指令二十一：dialogueSessionId 单调
     std::uint64_t m_nextShopSessionId = 1;     // 指令四十：shopSessionId 单调
+
+    // 阶段21：多地图 / Portal 系统（Map/Portal Registry 单例；Portal 静态不移动）。
+    PortalManager m_portals;
+    PortalSpatialGrid m_portalGrid;
+    MapTransitionService m_mapTransition; // 指令二十三/二十四：统一地图切换
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;

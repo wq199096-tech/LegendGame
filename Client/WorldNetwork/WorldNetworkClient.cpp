@@ -354,6 +354,36 @@ void WorldNetworkClient::SendTeleport(std::uint64_t requestId, std::uint64_t dia
     }
 }
 
+// 阶段21 指令二十：PortalUseRequest——只发 requestId + portalEntityId。
+void WorldNetworkClient::SendPortalUse(std::uint64_t requestId, std::uint64_t portalEntityId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::PortalUseRequestPayload request;
+    request.requestId = requestId;
+    request.portalEntityId = portalEntityId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::PortalUseRequest);
+    if (world::EncodePortalUseRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+// 阶段21 指令三十三：RespawnRequest——requestId + respawnMode（1/2）。
+void WorldNetworkClient::SendRespawn(std::uint64_t requestId, std::uint8_t respawnMode) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::RespawnRequestPayload request;
+    request.requestId = requestId;
+    request.respawnMode = respawnMode;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::RespawnRequest);
+    if (world::EncodeRespawnRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
 void WorldNetworkClient::PollEvents(std::deque<WorldNetworkEvent>& out) {
     std::lock_guard<std::mutex> lock(m_eventMutex);
     while (!m_events.empty()) {
@@ -1365,6 +1395,99 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             WorldNetworkEvent event;
             event.type = WorldNetworkEvent::Type::TeleportResponseEvent;
             event.teleport = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        // 阶段21：地图 / Portal / 复活事件（Client 只响应服务器权威数据）。
+        case MessageId::PortalSpawn: {
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PortalSpawnEvent;
+            std::string decodeError;
+            if (!world::DecodePortalSpawn(packet.payload.data(), packet.payload.size(),
+                                          event.portalEntityId, event.portalId, event.portalName,
+                                          event.mapId, event.positionX, event.positionY,
+                                          event.portalInteractionRadius,
+                                          event.portalDestinationMapId,
+                                          event.portalDestinationName, decodeError)) {
+                return;
+            }
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::PortalDespawn: {
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PortalDespawnEvent;
+            std::string decodeError;
+            if (!world::DecodePortalDespawn(packet.payload.data(), packet.payload.size(),
+                                            event.portalEntityId, event.portalDespawnReason,
+                                            decodeError)) {
+                return;
+            }
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::PortalUseResponse: {
+            world::PortalUseResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodePortalUseResponse(packet.payload.data(), packet.payload.size(),
+                                                payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PortalUseResponseEvent;
+            event.portalUse = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::MapChanged: {
+            world::MapChangedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeMapChanged(packet.payload.data(), packet.payload.size(), payload,
+                                         decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::MapChangedEvent;
+            event.mapChanged = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::MapSnapshot: {
+            world::MapSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeMapSnapshot(packet.payload.data(), packet.payload.size(), payload,
+                                          decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::MapSnapshotEvent;
+            event.mapSnapshot = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::RespawnResponse: {
+            world::RespawnResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeRespawnResponse(packet.payload.data(), packet.payload.size(),
+                                              payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::RespawnResponseEvent;
+            event.respawn = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::PlayerRespawned: {
+            world::PlayerRespawnedPayload payload;
+            std::string decodeError;
+            if (!world::DecodePlayerRespawned(packet.payload.data(), packet.payload.size(),
+                                              payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::PlayerRespawnedEvent;
+            event.playerRespawned = std::move(payload);
             PushEvent(std::move(event));
             return;
         }

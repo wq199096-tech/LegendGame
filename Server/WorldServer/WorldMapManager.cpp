@@ -47,8 +47,9 @@ std::vector<std::shared_ptr<PlayerSession>> WorldMapManager::Players(std::uint16
     return players;
 }
 
-bool WorldMapManager::ApplyMoveInput(PlayerSession& player, std::uint32_t inputSequence,
-                                     float directionX, float directionY, float deltaTime) {
+bool WorldMapManager::ApplyMoveInput(PlayerSession& player, const MapDefinition& map,
+                                     std::uint32_t inputSequence, float directionX,
+                                     float directionY, float deltaTime) {
     // 指令四十一：sequence 必须单调增加；重复/倒退忽略（不断线）。
     if (inputSequence <= player.LastProcessedInputSequence()) {
         return false;
@@ -80,17 +81,8 @@ bool WorldMapManager::ApplyMoveInput(PlayerSession& player, std::uint32_t inputS
     // 阶段16 指令三十一：使用玩家 EffectiveMoveSpeed（不再固定 120）。
     float x = player.PositionX() + dx * player.EffectiveMoveSpeed() * dt;
     float y = player.PositionY() + dy * player.EffectiveMoveSpeed() * dt;
-    // 指令四十：地图边界服务器 Clamp。
-    if (!(x >= kMapMinX)) {
-        x = kMapMinX;
-    } else if (x > kMapMaxX) {
-        x = kMapMaxX;
-    }
-    if (!(y >= kMapMinY)) {
-        y = kMapMinY;
-    } else if (y > kMapMaxY) {
-        y = kMapMaxY;
-    }
+    // 阶段21 指令八：地图边界服务器 Clamp（按玩家所在 MapDefinition，权威拒绝越界）。
+    map.Clamp(x, y);
     player.SetPosition(x, y);
     player.SetLastProcessedInputSequence(inputSequence);
     player.SetPositionDirty(true);

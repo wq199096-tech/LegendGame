@@ -1530,7 +1530,7 @@ void RunStatusChainChecks() {
         const bool restarted = servers.StartWorld();
         bool ok = restarted;
         const auto ids = servers.world->MonsterEntityIds();
-        ok = ok && ids.size() == 20;
+        ok = ok && ids.size() == 50;
         bool allClear = true;
         for (const auto id : ids) {
             const auto view = ReadMonster(servers, id);

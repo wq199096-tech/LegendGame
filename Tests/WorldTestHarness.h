@@ -166,6 +166,9 @@ struct WorldTestServers {
     int questSnapshotIntervalMs = 10000;
     // 阶段20：NPC 会话 TTL（默认生产 30s；NPC 测试缩短验证过期失效）。
     double npcSessionTtlSeconds = 30.0;
+    // 阶段21 指令十一：Legacy Test Spawn（默认开启——阶段13~20 套件依赖 Map1 Slime；
+    // 新地图布局检查用 Map2/Map3 的怪，与此开关无关）。
+    bool legacyMap1TestSpawn = true;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -204,6 +207,7 @@ struct WorldTestServers {
         world->GetConfig().dropRollerSeed = dropRollerSeed;
         world->GetConfig().questSnapshotIntervalMs = questSnapshotIntervalMs;
         world->GetConfig().npcSessionTtlSeconds = npcSessionTtlSeconds;
+        world->GetConfig().legacyMap1TestSpawn = legacyMap1TestSpawn;
         std::string error;
         if (!world->Start(error)) {
             std::printf("[TestServers] world start failed: %s\n", error.c_str());

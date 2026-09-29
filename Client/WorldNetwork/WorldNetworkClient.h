@@ -15,6 +15,8 @@
 #include "Shared/Npc/NpcError.h"
 #include "Shared/Npc/NpcProtocol.h"
 #include "Shared/Npc/NpcTypes.h"
+#include "Shared/Portal/PortalProtocol.h"
+#include "Shared/Portal/PortalTypes.h"
 #include "Shared/Quest/QuestProtocol.h"
 #include "Shared/Quest/QuestTypes.h"
 #include "Shared/Shop/ShopProtocol.h"
@@ -26,6 +28,8 @@
 #include "Shared/Teleport/TeleportProtocol.h"
 #include "Shared/Teleport/TeleportTypes.h"
 #include "Shared/World/WorldProtocol.h"
+#include "Shared/WorldMap/MapProtocol.h"
+#include "Shared/WorldMap/RespawnProtocol.h"
 
 #include <asio.hpp>
 
@@ -139,6 +143,14 @@ struct WorldNetworkEvent {
         ShopBuyResponseEvent,
         ShopSellResponseEvent,
         TeleportResponseEvent,
+        // 阶段21：地图 / Portal / 复活事件
+        PortalSpawnEvent,
+        PortalDespawnEvent,
+        PortalUseResponseEvent,
+        MapChangedEvent,
+        MapSnapshotEvent,
+        RespawnResponseEvent,
+        PlayerRespawnedEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -266,6 +278,19 @@ struct WorldNetworkEvent {
     world::ShopBuyResponsePayload shopBuy;           // ShopBuy
     world::ShopSellResponsePayload shopSell;         // ShopSell
     world::TeleportResponsePayload teleport;         // Teleport
+    // 阶段21：地图/Portal/复活事件数据（复用 mapId/positionX/Y/requestId 等）。
+    std::uint64_t portalEntityId = 0;                // PortalSpawn/Despawn/Use
+    std::uint32_t portalId = 0;                      // PortalSpawn
+    std::string portalName;                          // PortalSpawn
+    std::string portalDestinationName;               // PortalSpawn（目标地图名，F9 面板用）
+    float portalInteractionRadius = 0.0f;            // PortalSpawn
+    std::uint16_t portalDestinationMapId = 1;        // PortalSpawn
+    std::uint8_t portalDespawnReason = 0;            // PortalDespawn
+    world::PortalUseResponsePayload portalUse;       // PortalUseResponse
+    world::MapChangedPayload mapChanged;             // MapChanged
+    world::MapSnapshotPayload mapSnapshot;           // MapSnapshot
+    world::RespawnResponsePayload respawn;           // RespawnResponse
+    world::PlayerRespawnedPayload playerRespawned;   // PlayerRespawned
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -333,6 +358,11 @@ public:
                       std::uint64_t inventoryInstanceId, std::uint32_t quantity);
     void SendTeleport(std::uint64_t requestId, std::uint64_t dialogueSessionId,
                       std::uint32_t teleportId);
+
+    // 阶段21 指令二十/三十三：Client 只表达意图——PortalUse（requestId +
+    // portalEntityId，禁止上传目标 map/坐标/费用）与 Respawn（requestId + mode）。
+    void SendPortalUse(std::uint64_t requestId, std::uint64_t portalEntityId);
+    void SendRespawn(std::uint64_t requestId, std::uint8_t respawnMode);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);

@@ -25,6 +25,7 @@ void RunWorldProgressionChecks();
 void RunWorldInventoryChecks();
 void RunWorldQuestChecks();
 void RunWorldNpcChecks();
+void RunWorldMapChecks(); // 阶段21：多地图 / Portal / 复活
 }
 
 namespace {
@@ -873,6 +874,9 @@ int main() {
 
     // ---- 阶段20 NPC / 对话 / 商店 / 传送检查（独立 servers 生命周期） ----
     RunWorldNpcChecks();
+
+    // ---- 阶段21 多地图 / Portal / 复活检查（独立 servers 生命周期） ----
+    RunWorldMapChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

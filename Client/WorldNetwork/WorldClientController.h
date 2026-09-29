@@ -2,13 +2,16 @@
 
 #include "Client/WorldNetwork/ClientNpcModels.h"
 #include "Client/WorldNetwork/ClientQuestModel.h"
+#include "Client/WorldNetwork/ClientWorldMapModel.h"
 #include "Client/WorldNetwork/RemoteItemModels.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemoteNpcManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
+#include "Client/WorldNetwork/RemotePortalManager.h"
 #include "Client/WorldNetwork/RemoteStatusEffectContainer.h"
 #include "Client/WorldNetwork/WorldNetworkClient.h"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -117,6 +120,22 @@ public:
     const ClientDialogueModel& Dialogue() const { return m_dialogue; }
     const ClientShopModel& Shop() const { return m_shop; }
     std::uint64_t LastNpcRequestId() const { return m_lastNpcRequestId; }
+
+    // ------------------------------------------------------------------
+    // 阶段21：地图/Portal/复活镜像与操作（F 传送门 / R·T 复活 / F9 面板）。
+    // ------------------------------------------------------------------
+    const RemotePortalManager& Portals() const { return m_portals; }
+    const ClientWorldMapModel& MapModel() const { return m_map; }
+    // 死亡展示数据（PlayerDeath 记录时刻；3 秒倒计时仅展示，服务器权威判断）。
+    std::chrono::steady_clock::time_point LocalDeathTime() const { return m_localDeathTime; }
+    // 指令一百一十三：复活保护展示（PlayerRespawned 后 3 秒内）。
+    std::chrono::steady_clock::time_point LocalRespawnTime() const { return m_localRespawnTime; }
+    // 指令十九：F —— 发 PortalUseRequest（选交互半径内最近 visible Portal）。
+    bool SendPortalUseNearest(float selfX, float selfY);
+    // 指令三十三：R/T —— 发 RespawnRequest（mode 1=CurrentMap 2=Town）。
+    bool SendRespawnRequest(std::uint8_t respawnMode);
+    // 指令一百一十二：F9 Map Debug Panel 文本。
+    std::string MapStatusText() const;
     // 指令十七：E —— 找最近 visible NPC 且距离<=120（Client 选最近仅便利，
     // 服务器重新验证）；返回是否发出请求。
     bool SendInteractNearestNpc(float selfX, float selfY);
@@ -203,6 +222,13 @@ private:
     ClientShopModel m_shop;
     std::uint64_t m_nextNpcRequestId = 1;
     std::uint64_t m_lastNpcRequestId = 0;
+    // 阶段21：Portal/地图镜像 + 地图类请求 id 计数 + 死亡/复活展示时间。
+    RemotePortalManager m_portals;
+    ClientWorldMapModel m_map;
+    std::uint64_t m_nextMapRequestId = 1;
+    std::uint64_t m_lastMapRequestId = 0;
+    std::chrono::steady_clock::time_point m_localDeathTime{};
+    std::chrono::steady_clock::time_point m_localRespawnTime{};
 };
 
 } // namespace legend::client

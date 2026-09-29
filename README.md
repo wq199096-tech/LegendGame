@@ -442,6 +442,10 @@ SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发
 | M | Debug：Mana 恢复满（日志 `[Skill] mana restored to 100/100`） |
 | F7 | Skill Debug（蓝色 Mana 条 + 4 技能槽 CD 比例方块；标题显示 MP/各槽 CD/当前施法） |
 | F8 | Quest Debug（任务状态/目标进度面板；Ctrl+1~5 接取 4001~4005 / Shift+1~5 提交 / Alt+1~5 放弃） |
+| F9 | Map Debug（阶段21：当前地图/边界/可见统计/Portal 列表/复活保护） |
+| F | 阶段21：交互半径内有 Portal 时使用传送门（无 Portal 时保留相机跟随切换） |
+| R | 阶段21：死亡状态请求当前地图复活（10G，服务器权威 3 秒门槛） |
+| T | 阶段21：死亡状态请求主城复活（免费，Map1 300,300） |
 | Z | 装备背包中第一件 Equipment（SkillCasting 中拒绝） |
 | X | 卸下 Weapon（背包满时失败、装备留槽不丢失；SkillCasting 中拒绝） |
 | ESC | 退出程序 |
@@ -588,3 +592,40 @@ Tools/gen_hero_sprites.ps1 可重新生成角色资源，Tools/gen_world_sprites
   商店打开时 **B** 买选中项 / **S** 卖背包第一件可卖物；F8 面板显示 NPC/会话状态
 - 测试：Tests/WorldNpcChecks.cpp 纯逻辑（定义/协议 roundtrip/畸形/上限/Marker 优先级）+
   真实链路（AOI/验证链/会话 TTL/Quest 接取交付 Marker/商店买卖/防重放/传送全系/死亡与离区失效），并入 LegendWorldTests
+
+## 多地图 / Portal / 复活核心（阶段21：Multi-Map World / Portal / Respawn Core V0.21）
+
+服务器权威多地图世界：3 张逻辑地图、跨图传送门、玩家死亡-复活完整链。
+所有地图切换（Portal / NPC Teleport / 复活）统一走 MapTransitionService（不存在第二套切图逻辑）。
+
+- 固定地图（MapRegistry 硬编码，启动 ValidateMaps 校验唯一性/边界/spawn·respawn）：
+  Map1 Greenfield Village（Town，0~2000²，出生/复活 300,300，阶段20 全部 NPC 保留）、
+  Map2 Slime Meadow（Field，0~2000²，入口/复活 200,500，Training Slime x20）、
+  Map3 Ancient Ruins（Field，0~2400x0~1800，入口/复活 200,300，Training Slime x10）
+- 地图边界：服务器权威移动按所在 MapDefinition Clamp（客户端位置不能越界，指令八）
+- 跨图隔离（指令十/四十八~五十）：Player/Monster/NPC/Drop 的 AOI 与交互全部限定同 mapId；
+  怪物 AI 只追同图玩家；玩家切图后旧地图掉落保留、怪物失去目标 Returning
+- 固定 Portal（PortalRegistry 硬编码，ValidatePortals 校验源/目标地图与边界）：
+  8001 Map1(1000,300)→Map2(200,500) 免费、8002 Map2(150,500)→Map1(900,300) 免费、
+  8003 Map2(1800,1000)→Map3(200,300) Level2 + 10G、8004 Map3(150,300)→Map2(1700,1000) 免费
+- Portal AOI：`PortalSpatialGrid`（cellSize 400）+ Enter 600 / Leave 700；
+  `PortalSpawn=340/PortalDespawn=341` 只发可见玩家
+- Portal 触发：交互半径内按 **F** 发 `PortalUseRequest=342`（只带 requestId+portalEntityId，
+  不自动传送）；验证链（存在/enabled/同图/visible/距离/等级/Gold/防重放/切图并发）→
+  `PortalUseResponse=343`（目标地图/坐标/费用/newGold 全部服务器权威）
+- 统一切图 MapTransitionService（指令二十四全序列）：CancelActions（Cast/对话/商店/攻击目标）
+  → 旧图移除+ChangedMap 广播 → 五类可见集清空 → 权威 mapId/位置 → SpatialGrid → 新图加入
+  → AOI 重建 → `MapChanged=344/MapSnapshot=345`（只发本人）→ 立即位置快照 → 持久化（dirty 重试）
+  → QuestService::OnPlayerMoved（Portal/NPC 传送落点可触发 ReachArea）
+- 持久化修正（指令二十九）：DB mapId 不存在或位置越界 → 进世界自动修正 Map1 300,300 并重存
+- 死亡/复活：死亡记录 deathMap/X/Y；Dead 禁止移动/攻击/技能/NPC/商店/Portal/拾取/装备；
+  死亡 ≥3 秒后 **R**（CurrentMap，10G，当前图 respawn 点）/ **T**（Town 免费，Map1 300,300）发
+  `RespawnRequest=346`；复活 HP/Mana 全满、状态容器清空、3 秒 RespawnProtection（怪物伤害无效，
+  主动攻击/施法立即取消）；`RespawnResponse=347/PlayerRespawned=348`（只发本人）+ HP/Mana 快照
+- 客户端：RemotePortalManager（发光门占位 Quad）、ClientWorldMapModel（当前地图/边界镜像）、
+  收到 MapChanged 立即清空全部远程镜像（防 Ghost Entity）；F9 Map Debug Panel
+  （当前地图/边界/可见统计/Portal 列表/复活保护）；死亡 Debug Overlay（YOU DIED + 倒计时 + R/T 提示）
+- 测试：Tests/WorldMapChecks.cpp 纯逻辑（Map/Portal Registry/协议 roundtrip/畸形）+
+  真实链路（跨图隔离四件套/边界钳制/Portal AOI+全验证链+防重放/统一切图/持久化与重启恢复/
+  非法存档修正/死亡封锁/复活全家桶/保护/怪物丢目标/NPC 传送回归），并入 LegendWorldTests；
+  历史套件兼容：WorldTestServers 默认 legacyMap1TestSpawn=true（Map1 保留阶段13 布怪）

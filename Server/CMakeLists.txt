@@ -147,6 +147,12 @@ add_library(LegendWorldCore STATIC
     WorldServer/Npc/NpcInteractionService.cpp
     WorldServer/Npc/ShopService.cpp
     WorldServer/Npc/TeleportService.cpp
+    WorldServer/Map/MapRegistry.cpp
+    WorldServer/Map/MapTransitionService.cpp
+    WorldServer/Map/RespawnService.cpp
+    WorldServer/Portal/PortalRegistry.cpp
+    WorldServer/Portal/PortalManager.cpp
+    WorldServer/Portal/PortalSpatialGrid.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)
