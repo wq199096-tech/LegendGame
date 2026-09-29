@@ -171,6 +171,8 @@ struct WorldTestServers {
     bool legacyMap1TestSpawn = true;
     // 阶段22 22.19：World 数据目录（空 = 生产默认 "Data/World"；测试指向临时 JSON）。
     std::string worldDataDir;
+    // 阶段23 23.26：Game 数据目录（空 = 生产默认 "Data/Game"；测试指向临时 JSON）。
+    std::string gameDataDir;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -215,6 +217,11 @@ struct WorldTestServers {
         } else {
             // 测试环境通常无 Data/World 工作目录 → 显式指向不存在的路径走默认数据。
             world->GetConfig().worldDataDir = "testdata/missing_world_data_dir";
+        }
+        if (!gameDataDir.empty()) {
+            world->GetConfig().gameDataDir = gameDataDir; // 阶段23：真实 Game Data 链路测试
+        } else {
+            world->GetConfig().gameDataDir = "testdata/missing_game_data_dir";
         }
         std::string error;
         if (!world->Start(error)) {

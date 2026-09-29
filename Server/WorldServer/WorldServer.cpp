@@ -4,8 +4,10 @@
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
 #include "Server/WorldServer/Combat/CombatService.h"
 #include "Server/WorldServer/Combat/DamageCalculator.h"
+#include "Server/WorldServer/Item/LootTableRegistry.h"
 #include "Server/WorldServer/Map/MapRegistry.h"
 #include "Server/WorldServer/Map/RespawnService.h"
+#include "Server/WorldServer/Monster/MonsterDefinitionRegistry.h"
 #include "Server/WorldServer/Monster/MonsterSpawnRegistry.h"
 #include "Server/WorldServer/Npc/NpcRegistry.h"
 #include "Server/WorldServer/Npc/ShopService.h"
@@ -14,6 +16,7 @@
 #include "Server/WorldServer/Quest/QuestRegistry.h"
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/GameData/GameDataJson.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterSpawnDefinition.h"
 #include "Shared/Monster/MonsterTypes.h"
@@ -123,6 +126,79 @@ bool WorldServer::Start(std::string& error) {
             LOG_WARN("[World] World data dir '" + dataDir +
                      "' not found; using built-in default world data.");
         }
+    }
+    // 阶段23 23.22/23.23：Game 数据加载（items/monsters/skills/statuses/quests/
+    // shops/teleports/loot_tables）。与 World 数据同一策略：目录存在 → Load+
+    // ValidateGameData（交叉引用含 World NPC/Map/Spawn；失败拒绝启动）；
+    // 不存在 → 出厂默认 + LOG_WARN。
+    // 23.19：启动后计算 World/Game 数据 hash 并打印（定位配置错版本）。
+    {
+        const std::string& gameDataDir = m_config.gameDataDir;
+        if (std::filesystem::exists(std::filesystem::path(gameDataDir))) {
+            GameDataSet gameData;
+            std::string gameError;
+            if (!LoadGameData(gameDataDir, gameData, gameError)) {
+                error = "game data load failed from '" + gameDataDir + "': " + gameError;
+                m_database.Close();
+                return false;
+            }
+            // 交叉引用（23.11）需要 World 数据——World 已在上面加载进各 Registry，
+            // 这里重建只读视图（从 Registry 汇回，避免二次读盘）。
+            WorldDataSet worldView;
+            worldView.maps = MapRegistry::Instance().AllMaps();
+            worldView.npcs = NpcRegistry::Instance().AllNpcs();
+            worldView.monsterSpawns = MonsterSpawnRegistry::Instance().AllSpawns();
+            if (!ValidateGameData(gameData, worldView, gameError)) {
+                error = "game data validation failed: " + gameError;
+                m_database.Close();
+                return false;
+            }
+            m_itemRegistry.LoadFromDefinitions(std::move(gameData.items));
+            MonsterDefinitionRegistry::LoadFromDefinitions(std::move(gameData.monsters));
+            m_skillRegistry.LoadFromDefinitions(std::move(gameData.skills));
+            m_statusRegistry.LoadFromDefinitions(std::move(gameData.statuses));
+            QuestRegistry::LoadFromDefinitions(std::move(gameData.quests));
+            ShopRegistry::LoadFromDefinitions(std::move(gameData.shops));
+            TeleportRegistry::LoadFromDefinitions(std::move(gameData.teleports));
+            LootTableRegistry::LoadFromDefinitions(std::move(gameData.lootTables));
+            LOG_INFO("[World] Game data loaded from '" + gameDataDir + "'.");
+        } else {
+            m_itemRegistry.LoadDefaults();
+            MonsterDefinitionRegistry::LoadDefaults();
+            m_skillRegistry.LoadDefaults();
+            m_statusRegistry.LoadDefaults();
+            QuestRegistry::LoadDefaults();
+            ShopRegistry::LoadDefaults();
+            TeleportRegistry::LoadDefaults();
+            LootTableRegistry::LoadDefaults();
+            LOG_WARN("[World] Game data dir '" + gameDataDir +
+                     "' not found; using built-in default game data.");
+        }
+        // 23.19：数据快照 hash（FNV-1a over MakeDefaultGameData 序列化大小 +
+        // 各 Registry 计数——低成本可复现指纹；完整 hash 由 Data 文件内容决定）。
+        std::uint64_t dataHash = 1469598103934665603ull;
+        const auto mix = [&dataHash](const void* bytes, std::size_t len) {
+            const auto* p = static_cast<const unsigned char*>(bytes);
+            for (std::size_t i = 0; i < len; ++i) {
+                dataHash ^= p[i];
+                dataHash *= 1099511628211ull;
+            }
+        };
+        const auto mixSize = [&mix](std::size_t v) { mix(&v, sizeof(v)); };
+        mixSize(MapRegistry::Instance().Count());
+        mixSize(NpcRegistry::Instance().Count());
+        mixSize(PortalRegistry::Instance().Count());
+        mixSize(MonsterSpawnRegistry::Instance().Count());
+        mixSize(m_itemRegistry.Count());
+        mixSize(MonsterDefinitionRegistry::Instance().All().size());
+        mixSize(m_skillRegistry.Count());
+        mixSize(m_statusRegistry.Count());
+        mixSize(QuestRegistry::Instance().Count());
+        mixSize(LootTableRegistry::Instance().All().size());
+        char hashLine[96];
+        std::snprintf(hashLine, sizeof(hashLine), "[World] Data hash: world+game=%016llx",
+                      static_cast<unsigned long long>(dataHash));
+        LOG_INFO(hashLine);
     }
     if (!legend::account::InitializeSchema(m_database, error)) {
         error = "world database schema init failed: " + error;
@@ -3071,17 +3147,35 @@ void WorldServer::SendMonsterBatches(const std::shared_ptr<PlayerSession>& playe
 void WorldServer::GenerateMonsterDrops(const std::shared_ptr<MonsterEntity>& monster,
                                        std::uint64_t killerCharacterId) {
     // 指令三十九：MonsterDeath -> GenerateLoot（Gold/EXP 已由 GrantMonsterReward 处理）。
+    // 阶段23 23.16/23.17：掉落表从 LootTableRegistry 读取（monsterDefinition.lootTableId），
+    // Client 永远不决定掉落；无表（lootTableId=0 或未找到）→ 无掉落。
     if (!m_dropRoller) {
         return; // Stop 后残余调用防御
     }
-    auto table = DropRoller::TrainingSlimeTable();
+    const MonsterDefinition* monsterDefinition =
+        MonsterDefinitionRegistry::Instance().Find(monster->MonsterTypeId());
+    if (monsterDefinition == nullptr || monsterDefinition->lootTableId == 0) {
+        return;
+    }
+    const LootTableDefinition* table =
+        LootTableRegistry::Instance().Find(monsterDefinition->lootTableId);
+    if (table == nullptr || !table->enabled || table->entries.empty()) {
+        return;
+    }
+    // 23.16：LootTableEntry → DropRoller::Entry（dropChance 语义一致）。
+    std::vector<DropRoller::Entry> rollTable;
+    rollTable.reserve(table->entries.size());
+    for (const auto& entry : table->entries) {
+        rollTable.push_back({entry.itemDefinitionId, entry.dropChance, entry.minQuantity,
+                             entry.maxQuantity});
+    }
     if (m_config.testForceDropAll) {
         // 阶段18 测试专用：概率确定性（链路完全不变，见阶段十七 SetTestLootOverride 先例）。
-        for (auto& entry : table) {
+        for (auto& entry : rollTable) {
             entry.chance = 1.0;
         }
     }
-    const auto results = m_dropRoller->Roll(table);
+    const auto results = m_dropRoller->Roll(rollTable);
     if (results.empty()) {
         return;
     }

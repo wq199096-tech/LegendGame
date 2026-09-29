@@ -1,5 +1,7 @@
 #include "Shared/WorldData/WorldDataJson.h"
 
+#include "Shared/WorldData/AtomicFile.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
@@ -452,91 +454,8 @@ json PortalToJson(const PortalDefinition& portal) {
     };
 }
 
-// 22.15：保存前轮换备份（<dir>/.backup/<stem>.<1..10>.json，保留最近 10 个版本）。
-void BackupFile(const std::string& dir, const char* name) {
-    std::error_code ec;
-    const fs::path src = fs::path(dir) / name;
-    if (!fs::exists(src, ec)) {
-        return;
-    }
-    const fs::path backupDir = fs::path(dir) / ".backup";
-    fs::create_directories(backupDir, ec);
-    if (ec) {
-        return; // 备份失败不阻塞保存（WriteAtomic 才是数据安全线）
-    }
-    std::set<int> used;
-    for (const auto& entry : fs::directory_iterator(backupDir, ec)) {
-        const std::string fileName = entry.path().filename().string();
-        const std::string stem = fs::path(name).stem().string();
-        const std::string prefix = stem + ".";
-        if (fileName.rfind(prefix, 0) != 0) {
-            continue;
-        }
-        const std::string tail = fileName.substr(prefix.size());
-        const auto dot = tail.find('.');
-        if (dot == std::string::npos) {
-            continue;
-        }
-        try {
-            used.insert(std::stoi(tail.substr(0, dot)));
-        } catch (...) {
-            // 非法备份名忽略
-        }
-    }
-    int slot = 1;
-    for (; slot <= 10; ++slot) {
-        if (used.count(slot) == 0) {
-            break;
-        }
-    }
-    if (slot > 10) {
-        slot = 1; // 满 10 份：覆盖最旧槽位
-    }
-    const std::string backupName =
-        fs::path(name).stem().string() + "." + std::to_string(slot) + ".json";
-    fs::copy_file(src, backupDir / backupName, fs::copy_options::overwrite_existing, ec);
-}
-
-// 22.14：serialize → temp → reparse 验证 → rename replace。
-bool WriteAtomic(const std::string& dir, const char* name, const json& value,
-                 std::string& error) {
-    const std::string text = value.dump(2) + "\n";
-    json check = json::parse(text, nullptr, false);
-    if (check.is_discarded()) {
-        error = std::string(name) + ": reparse failed after serialize (internal bug)";
-        return false;
-    }
-    const fs::path finalPath = fs::path(dir) / name;
-    const fs::path tmpPath = fs::path(dir) / (std::string(name) + ".tmp");
-    {
-        std::ofstream file(tmpPath, std::ios::binary | std::ios::trunc);
-        if (!file) {
-            error = std::string(name) + ": cannot create temp file '" + tmpPath.string() + "'";
-            return false;
-        }
-        file << text;
-        file.flush();
-        if (!file) {
-            error = std::string(name) + ": failed writing temp file";
-            return false;
-        }
-    }
-    std::error_code ec;
-    fs::rename(tmpPath, finalPath, ec);
-    if (ec) {
-        // Windows 个别文件系统 rename 覆盖失败 → 降级 remove+rename。
-        ec.clear();
-        fs::remove(finalPath, ec);
-        ec.clear();
-        fs::rename(tmpPath, finalPath, ec);
-        if (ec) {
-            error = std::string(name) + ": replace failed: " + ec.message();
-            fs::remove(tmpPath, ec);
-            return false;
-        }
-    }
-    return true;
-}
+// 22.14/22.15 的原子写与轮换备份实现移至 Shared/WorldData/AtomicFile.h
+//（legend::data::WriteAtomicFile / BackupFileForRotate——阶段23 GameData 复用）。
 
 } // namespace
 
@@ -808,11 +727,11 @@ bool SaveWorldData(const std::string& dir, const WorldDataSet& data, std::string
     fs::create_directories(dir, ec);
 
     // 备份旧文件（22.15）。
-    BackupFile(dir, "maps.json");
-    BackupFile(dir, "npcs.json");
-    BackupFile(dir, "monster_spawns.json");
-    BackupFile(dir, "portals.json");
-    BackupFile(dir, "world_manifest.json");
+    legend::data::BackupFileForRotate(dir, "maps.json");
+    legend::data::BackupFileForRotate(dir, "npcs.json");
+    legend::data::BackupFileForRotate(dir, "monster_spawns.json");
+    legend::data::BackupFileForRotate(dir, "portals.json");
+    legend::data::BackupFileForRotate(dir, "world_manifest.json");
 
     WorldDataSet normalized = data;
     normalized.manifest.schemaVersion = kWorldDataSchemaVersion;
@@ -859,11 +778,11 @@ bool SaveWorldData(const std::string& dir, const WorldDataSet& data, std::string
         portalsJson["portals"].push_back(PortalToJson(portal));
     }
 
-    return WriteAtomic(dir, "maps.json", mapsJson, error) &&
-           WriteAtomic(dir, "npcs.json", npcsJson, error) &&
-           WriteAtomic(dir, "monster_spawns.json", spawnsJson, error) &&
-           WriteAtomic(dir, "portals.json", portalsJson, error) &&
-           WriteAtomic(dir, "world_manifest.json", manifestJson, error);
+    return legend::data::WriteAtomicFile(dir, "maps.json", mapsJson, error) &&
+           legend::data::WriteAtomicFile(dir, "npcs.json", npcsJson, error) &&
+           legend::data::WriteAtomicFile(dir, "monster_spawns.json", spawnsJson, error) &&
+           legend::data::WriteAtomicFile(dir, "portals.json", portalsJson, error) &&
+           legend::data::WriteAtomicFile(dir, "world_manifest.json", manifestJson, error);
 }
 
 // ---------------------------------------------------------------------------

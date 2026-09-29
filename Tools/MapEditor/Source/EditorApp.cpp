@@ -26,6 +26,7 @@
 #include "Engine/Map/MapTypes.h"
 #include "Engine/Render/Texture.h"
 
+using legend::world::GameDataSet;
 using legend::world::MapDefinition;
 using legend::world::MapType;
 using legend::world::MonsterSpawnDefinition;
@@ -253,6 +254,25 @@ bool LegendMapEditorApp::Initialize() {
             LOG_WARN("World Editor: failed to load '" + worldDir + "': " + worldError +
                      " (File > Open World Data to retry.)");
             m_worldMessage = "Load failed: " + worldError;
+            m_worldMessageIsError = true;
+        }
+    }
+
+    // ---- 阶段23：默认加载 Data/Game（Data Editor 数据） ----
+    m_game = std::make_unique<editor::GameDataDocument>();
+    {
+        const char* gameDirEnv = SDL_getenv("LEGEND_EDITOR_GAME_DIR");
+        const std::string gameDir = (gameDirEnv != nullptr && gameDirEnv[0] != '\0')
+                                        ? std::string(gameDirEnv)
+                                        : std::string("Data/Game");
+        std::string gameError;
+        if (m_game->Load(gameDir, m_worldDir, gameError)) {
+            m_gameLoaded = true;
+            m_gameDir = gameDir;
+            LOG_INFO("World Editor: loaded game data from '" + gameDir + "'.");
+        } else {
+            LOG_WARN("World Editor: failed to load game data '" + gameDir + "': " + gameError);
+            m_worldMessage = "Game data load failed: " + gameError;
             m_worldMessageIsError = true;
         }
     }
@@ -1135,6 +1155,106 @@ void LegendMapEditorApp::DrawWorldTree() {
         }
         ImGui::TreePop();
     }
+
+    // ---- 阶段23：Game Data（23.1：左侧树扩展；23.12：Search 过滤）----
+    DrawGameDataTree();
+}
+
+// ---------------------------------------------------------------------------
+// 阶段23：Game Data 树（23.1 左侧扩展 / 23.12 Search / 23.13 Duplicate）
+// ---------------------------------------------------------------------------
+void LegendMapEditorApp::DrawGameDataTree() {
+    if (m_game == nullptr) {
+        return;
+    }
+    using GT = editor::GameDataDocument::ObjectType;
+    ImGui::Separator();
+    ImGui::TextUnformatted("Game Data");
+    ImGui::InputText("Search (id/name)", m_gameSearch, sizeof(m_gameSearch)); // 23.12
+    const std::string search = m_gameSearch;
+    const auto& game = m_game->Data();
+    const auto row = [&](GT type, std::uint32_t id, const std::string& name,
+                         const std::string& label) {
+        if (!m_game->MatchesSearch(type, id, name, search)) {
+            return;
+        }
+        const bool selected =
+            m_game->GetSelection().type == type && m_game->GetSelection().id == id;
+        if (ImGui::Selectable(label.c_str(), selected)) {
+            m_game->SetSelection(type, id);
+        }
+    };
+    const auto addSection = [&](const char* title, int count, auto addFn) {
+        if (ImGui::TreeNodeEx(title, ImGuiTreeNodeFlags_DefaultOpen, "%s (%d)", title, count)) {
+            addFn();
+            ImGui::TreePop();
+        }
+    };
+
+    addSection("Items", static_cast<int>(game.items.size()), [&] {
+        for (const auto& item : game.items) {
+            row(GT::Item, item.definitionId, item.name,
+                std::to_string(item.definitionId) + " - " + item.name);
+        }
+        if (ImGui::Button("+ Add Item")) {
+            legend::world::ItemDefinition item;
+            item.definitionId = m_game->SuggestItemId();
+            item.name = "New Item";
+            const std::uint32_t id = item.definitionId;
+            m_game->Mutate([&](GameDataSet& d) { d.items.push_back(item); });
+            m_game->SetSelection(GT::Item, id);
+        }
+    });
+    addSection("Monsters", static_cast<int>(game.monsters.size()), [&] {
+        for (const auto& monster : game.monsters) {
+            row(GT::Monster, monster.monsterTypeId, monster.name,
+                std::to_string(monster.monsterTypeId) + " - " + monster.name);
+        }
+        if (ImGui::Button("+ Add Monster")) {
+            legend::world::MonsterDefinition monster;
+            monster.monsterTypeId = m_game->SuggestMonsterId();
+            monster.name = "New Monster";
+            const std::uint32_t id = monster.monsterTypeId;
+            m_game->Mutate([&](GameDataSet& d) { d.monsters.push_back(monster); });
+            m_game->SetSelection(GT::Monster, id);
+        }
+    });
+    addSection("Skills", static_cast<int>(game.skills.size()), [&] {
+        for (const auto& skill : game.skills) {
+            row(GT::Skill, skill.skillId, skill.name,
+                std::to_string(skill.skillId) + " - " + skill.name);
+        }
+    });
+    addSection("Statuses", static_cast<int>(game.statuses.size()), [&] {
+        for (const auto& status : game.statuses) {
+            row(GT::Status, status.effectId, status.name,
+                std::to_string(status.effectId) + " - " + status.name);
+        }
+    });
+    addSection("Quests", static_cast<int>(game.quests.size()), [&] {
+        for (const auto& quest : game.quests) {
+            row(GT::Quest, quest.questId, quest.name,
+                std::to_string(quest.questId) + " - " + quest.name);
+        }
+    });
+    addSection("Shops", static_cast<int>(game.shops.size()), [&] {
+        for (const auto& shop : game.shops) {
+            row(GT::Shop, shop.shopId, shop.name,
+                std::to_string(shop.shopId) + " - " + shop.name);
+        }
+    });
+    addSection("Teleports", static_cast<int>(game.teleports.size()), [&] {
+        for (const auto& teleport : game.teleports) {
+            row(GT::Teleport, teleport.teleportId, teleport.name,
+                std::to_string(teleport.teleportId) + " - " + teleport.name);
+        }
+    });
+    addSection("Loot Tables", static_cast<int>(game.lootTables.size()), [&] {
+        for (const auto& table : game.lootTables) {
+            row(GT::LootTable, table.lootTableId, table.name,
+                std::to_string(table.lootTableId) + " - " + table.name);
+        }
+    });
 }
 
 void LegendMapEditorApp::DrawWorldCanvas() {
@@ -1485,7 +1605,347 @@ void LegendMapEditorApp::DrawWorldInspector() {
     using OT = editor::WorldDocument::ObjectType;
     const auto sel = m_world->GetSelection();
     if (sel.type == OT::None) {
-        ImGui::TextDisabled("Nothing selected. Click an object on the canvas or World Tree.");
+        ImGui::TextDisabled("No world object selected.");
+    } else {
+    DrawWorldInspectorFields();
+    }
+    // ---- 阶段23：Game 定义 Inspector（23.3~23.10/23.18）----
+    ImGui::Separator();
+    ImGui::TextUnformatted("Game Data Inspector");
+    DrawGameDataInspector();
+}
+
+void LegendMapEditorApp::DrawGameDataInspector() {
+    if (m_game == nullptr) {
+        return;
+    }
+    using GT = editor::GameDataDocument::ObjectType;
+    const auto sel = m_game->GetSelection();
+    if (sel.type == GT::None) {
+        ImGui::TextDisabled("No game definition selected.");
+        return;
+    }
+    // 文本缓冲 owner 跟踪。
+    const auto refill = [&](const std::string& name, const std::string& text = "",
+                            const std::string& desc = "") {
+        m_gOwnerType = sel.type;
+        m_gOwnerId = sel.id;
+        std::snprintf(m_gInsName, sizeof(m_gInsName), "%s", name.c_str());
+        std::snprintf(m_gInsText, sizeof(m_gInsText), "%s", text.c_str());
+        std::snprintf(m_gInsDesc, sizeof(m_gInsDesc), "%s", desc.c_str());
+    };
+    if (sel.type != m_gOwnerType || sel.id != m_gOwnerId) {
+        if (sel.type == GT::Item) {
+            if (const auto* v = m_game->FindItem(sel.id)) {
+                refill(v->name);
+            }
+        } else if (sel.type == GT::Monster) {
+            if (const auto* v = m_game->FindMonster(sel.id)) {
+                refill(v->name);
+            }
+        } else if (sel.type == GT::Skill) {
+            if (const auto* v = m_game->FindSkill(sel.id)) {
+                refill(v->name);
+            }
+        } else if (sel.type == GT::Status) {
+            if (const auto* v = m_game->FindStatus(sel.id)) {
+                refill(v->name);
+            }
+        } else if (sel.type == GT::Quest) {
+            if (const auto* v = m_game->FindQuest(sel.id)) {
+                refill(v->name, "", v->description);
+            }
+        } else if (sel.type == GT::Shop) {
+            if (const auto* v = m_game->FindShop(sel.id)) {
+                refill(v->name);
+            }
+        } else if (sel.type == GT::Teleport) {
+            if (const auto* v = m_game->FindTeleport(sel.id)) {
+                refill(v->name);
+            }
+        } else if (sel.type == GT::LootTable) {
+            if (const auto* v = m_game->FindLootTable(sel.id)) {
+                refill(v->name);
+            }
+        }
+    }
+    if (sel.type == GT::Item) {
+        const auto* v = m_game->FindItem(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Item not found."); return; }
+        ImGui::Text("itemDefinitionId: %u", v->definitionId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) { m_game->Mutate([&](GameDataSet& d) { for (auto& item : d.items) { if (item.definitionId == sel.id) { item.name = m_gInsName; } } }); }
+        auto editU32 = [&](const char* label, std::uint32_t value, auto set) {
+            int tmp = static_cast<int>(value);
+            if (ImGui::InputInt(label, &tmp)) {
+                const auto nv = static_cast<std::uint32_t>(std::max(0, tmp));
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& item : d.items) {
+                        if (item.definitionId == sel.id) {
+                            set(item, nv);
+                        }
+                    }
+                });
+            }
+        };
+        editU32("maxStack", v->maxStack,
+                [](auto& item, std::uint32_t n) { item.maxStack = n; });
+        editU32("attackBonus", v->attackBonus,
+                [](auto& item, std::uint32_t n) { item.attackBonus = n; });
+        editU32("defenseBonus", v->defenseBonus,
+                [](auto& item, std::uint32_t n) { item.defenseBonus = n; });
+        // 23.18：基础文字预览。
+        ImGui::TextDisabled("Preview: %s (type=%s stack=%u atk=+%u def=+%u)", v->name.c_str(),
+                            v->type == legend::world::ItemType::Weapon ? "Weapon"
+                            : v->type == legend::world::ItemType::Armor ? "Armor"
+                                                                        : "Material",
+                            v->maxStack, v->attackBonus, v->defenseBonus);
+    } else if (sel.type == GT::Monster) {
+        const auto* v = m_game->FindMonster(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Monster not found."); return; }
+        ImGui::Text("monsterDefinitionId: %u", v->monsterTypeId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) { m_game->Mutate([&](GameDataSet& d) { for (auto& m : d.monsters) { if (m.monsterTypeId == sel.id) { m.name = m_gInsName; } } }); }
+        auto editF = [&](const char* label, float value, auto set) {
+            float tmp = value;
+            if (ImGui::InputFloat(label, &tmp, 1.0f, 0.0f, "%.1f")) {
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& m : d.monsters) {
+                        if (m.monsterTypeId == sel.id) {
+                            set(m, tmp);
+                        }
+                    }
+                });
+            }
+        };
+        auto editU = [&](const char* label, std::uint32_t value, auto set) {
+            int tmp = static_cast<int>(value);
+            if (ImGui::InputInt(label, &tmp)) {
+                const auto nv = static_cast<std::uint32_t>(std::max(0, tmp));
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& m : d.monsters) {
+                        if (m.monsterTypeId == sel.id) {
+                            set(m, nv);
+                        }
+                    }
+                });
+            }
+        };
+        editU("level", v->level, [](auto& m, std::uint32_t n) { m.level = n; });
+        editU("maxHp", v->maxHp, [](auto& m, std::uint32_t n) { m.maxHp = n; });
+        editU("attackPower", v->attackPower, [](auto& m, std::uint32_t n) { m.attackPower = n; });
+        editU("defense", v->defense, [](auto& m, std::uint32_t n) { m.defense = n; });
+        editF("moveSpeed", v->moveSpeed, [](auto& m, float n) { m.moveSpeed = n; });
+        editF("attackRange", v->attackRange, [](auto& m, float n) { m.attackRange = n; });
+        editF("aggroRange", v->aggroRadius, [](auto& m, float n) { m.aggroRadius = n; });
+        editF("leashRange", v->leashRadius, [](auto& m, float n) { m.leashRadius = n; });
+        editU("attackCooldownMs",
+              static_cast<std::uint32_t>(v->attackCooldownSeconds * 1000.0f),
+              [](auto& m, std::uint32_t n) { m.attackCooldownSeconds = n / 1000.0f; });
+        editU("expReward", v->rewardExp, [](auto& m, std::uint32_t n) { m.rewardExp = n; });
+        editU("goldReward", v->rewardGold, [](auto& m, std::uint32_t n) { m.rewardGold = n; });
+        editU("lootTableId", v->lootTableId, [](auto& m, std::uint32_t n) { m.lootTableId = n; });
+        // 23.18：Stat summary。
+        ImGui::TextDisabled("Preview: %s Lv%u HP=%u ATK=%u DEF=%u EXP=%u Gold=%u",
+                            v->name.c_str(), v->level, v->maxHp, v->attackPower, v->defense,
+                            v->rewardExp, v->rewardGold);
+    } else if (sel.type == GT::Skill) {
+        const auto* v = m_game->FindSkill(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Skill not found."); return; }
+        ImGui::Text("skillId: %u", v->skillId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) { m_game->Mutate([&](GameDataSet& d) { for (auto& s : d.skills) { if (s.skillId == sel.id) { s.name = m_gInsName; } } }); }
+        int mana = static_cast<int>(v->manaCost);
+        if (ImGui::InputInt("manaCost", &mana)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, mana));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& s : d.skills) {
+                    if (s.skillId == sel.id) {
+                        s.manaCost = nv;
+                    }
+                }
+            });
+        }
+        int damage = static_cast<int>(v->baseDamage);
+        if (ImGui::InputInt("baseDamage", &damage)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, damage));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& s : d.skills) {
+                    if (s.skillId == sel.id) {
+                        s.baseDamage = nv;
+                    }
+                }
+            });
+        }
+        // 23.18：Damage/Mana/Cooldown/Range。
+        ImGui::TextDisabled("Preview: %s mana=%u cd=%.1fs range=%.0f dmg=%u", v->name.c_str(),
+                            v->manaCost, v->cooldownSeconds, v->range, v->baseDamage);
+    } else if (sel.type == GT::Status) {
+        const auto* v = m_game->FindStatus(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Status not found."); return; }
+        ImGui::Text("statusId: %u", v->effectId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) { m_game->Mutate([&](GameDataSet& d) { for (auto& s : d.statuses) { if (s.effectId == sel.id) { s.name = m_gInsName; } } }); }
+        int atk = v->attackFlatModifier;
+        if (ImGui::InputInt("attackModifier", &atk)) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& s : d.statuses) {
+                    if (s.effectId == sel.id) {
+                        s.attackFlatModifier = atk;
+                    }
+                }
+            });
+        }
+        int def = v->defenseFlatModifier;
+        if (ImGui::InputInt("defenseModifier", &def)) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& s : d.statuses) {
+                    if (s.effectId == sel.id) {
+                        s.defenseFlatModifier = def;
+                    }
+                }
+            });
+        }
+        int dot = static_cast<int>(v->dotDamagePerStack);
+        if (ImGui::InputInt("dotDamage", &dot)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, dot));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& s : d.statuses) {
+                    if (s.effectId == sel.id) {
+                        s.dotDamagePerStack = nv;
+                    }
+                }
+            });
+        }
+    } else if (sel.type == GT::Quest) {
+        const auto* v = m_game->FindQuest(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Quest not found."); return; }
+        ImGui::Text("questId: %u", v->questId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& q : d.quests) {
+                    if (q.questId == sel.id) {
+                        q.name = m_gInsName;
+                    }
+                }
+            });
+        }
+        if (ImGui::InputTextMultiline("Description", m_gInsDesc, sizeof(m_gInsDesc))) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& q : d.quests) {
+                    if (q.questId == sel.id) {
+                        q.description = m_gInsDesc;
+                    }
+                }
+            });
+        }
+        int exp = static_cast<int>(v->reward.exp);
+        if (ImGui::InputInt("reward.exp", &exp)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, exp));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& q : d.quests) {
+                    if (q.questId == sel.id) {
+                        q.reward.exp = nv;
+                    }
+                }
+            });
+        }
+        int gold = static_cast<int>(v->reward.gold);
+        if (ImGui::InputInt("reward.gold", &gold)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, gold));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& q : d.quests) {
+                    if (q.questId == sel.id) {
+                        q.reward.gold = nv;
+                    }
+                }
+            });
+        }
+        // 23.18：流程摘要。
+        ImGui::TextDisabled("Flow: startNPC=%u -> %d objective(s) -> turnInNPC=%u",
+                            v->startNpcDefinitionId, static_cast<int>(v->objectives.size()),
+                            v->turnInNpcDefinitionId);
+    } else if (sel.type == GT::Shop) {
+        const auto* v = m_game->FindShop(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Shop not found."); return; }
+        ImGui::Text("shopId: %u", v->shopId);
+        int entryIdx = 0;
+        for (const auto& entry : v->entries) {
+            ++entryIdx;
+            ImGui::Text("entry %d: item %u", entryIdx, entry.itemDefinitionId);
+            ImGui::PushID(entryIdx);
+            int buy = static_cast<int>(entry.buyPrice);
+            if (ImGui::InputInt("buyPrice", &buy)) {
+                const auto nv = static_cast<std::uint32_t>(std::max(0, buy));
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& s : d.shops) {
+                        if (s.shopId == sel.id) {
+                            for (auto& e : s.entries) {
+                                if (e.itemDefinitionId == entry.itemDefinitionId) {
+                                    e.buyPrice = nv;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            int sell = static_cast<int>(entry.sellPrice);
+            if (ImGui::InputInt("sellPrice", &sell)) {
+                const auto nv = static_cast<std::uint32_t>(std::max(0, sell));
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& s : d.shops) {
+                        if (s.shopId == sel.id) {
+                            for (auto& e : s.entries) {
+                                if (e.itemDefinitionId == entry.itemDefinitionId) {
+                                    e.sellPrice = nv;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            ImGui::PopID();
+        }
+    } else if (sel.type == GT::Teleport) {
+        const auto* v = m_game->FindTeleport(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Teleport not found."); return; }
+        ImGui::Text("teleportId: %u", v->teleportId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) { m_game->Mutate([&](GameDataSet& d) { for (auto& t : d.teleports) { if (t.teleportId == sel.id) { t.name = m_gInsName; } } }); }
+        int cost = static_cast<int>(v->goldCost);
+        if (ImGui::InputInt("goldCost", &cost)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, cost));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& t : d.teleports) {
+                    if (t.teleportId == sel.id) {
+                        t.goldCost = nv;
+                    }
+                }
+            });
+        }
+    } else if (sel.type == GT::LootTable) {
+        const auto* v = m_game->FindLootTable(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("LootTable not found."); return; }
+        ImGui::Text("lootTableId: %u", v->lootTableId);
+        if (ImGui::InputText("Name", m_gInsName, sizeof(m_gInsName))) { m_game->Mutate([&](GameDataSet& d) { for (auto& t : d.lootTables) { if (t.lootTableId == sel.id) { t.name = m_gInsName; } } }); }
+        int entryIdx = 0;
+        for (const auto& entry : v->entries) {
+            ++entryIdx;
+            ImGui::Text("entry %d: item %u chance=%.2f", entryIdx, entry.itemDefinitionId,
+                        entry.dropChance);
+        }
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button("Duplicate")) {
+        m_game->DuplicateSelected();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete")) {
+        m_game->RemoveSelected();
+    }
+}
+
+// World 对象字段编辑主体（从 DrawWorldInspector 拆出——World/Game 两个 Inspector 共存）。
+void LegendMapEditorApp::DrawWorldInspectorFields() {
+    using OT = editor::WorldDocument::ObjectType;
+    const auto sel = m_world->GetSelection();
+    if (sel.type == OT::None) {
         return;
     }
 
@@ -2006,4 +2466,45 @@ void LegendMapEditorApp::DrawWorldBottomPanel() {
         static_cast<int>(data.maps.size()), static_cast<int>(data.npcs.size()),
         static_cast<int>(data.monsterSpawns.size()), static_cast<int>(data.portals.size()),
         m_world->IsDirty() ? "yes" : "no", m_worldZoom, m_mouseWorldX, m_mouseWorldY);
+
+    // ---- 阶段23：Game Data Validation / Save / Reload（23.13/23.15）----
+    if (m_game != nullptr) {
+        ImGui::Separator();
+        ImGui::TextUnformatted("Game Data");
+        if (m_game->HasErrors()) {
+            for (const auto& err : m_game->ValidationErrors()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "[Error] %s", err.c_str());
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "No game data errors.");
+        }
+        ImGui::BeginDisabled(m_game->HasErrors() || !m_gameLoaded);
+        if (ImGui::Button("Save Game Data")) {
+            std::string gameError;
+            if (m_game->Save(gameError)) {
+                m_worldMessage = "Game data saved atomically to '" + m_gameDir + "'.";
+                m_worldMessageIsError = false;
+            } else {
+                m_worldMessage = "Game save failed: " + gameError;
+                m_worldMessageIsError = true;
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Reload From Disk")) { // 23.15：Dev-only
+            std::string gameError;
+            if (m_game->ReloadFromDisk(gameError)) {
+                m_worldMessage = gameError.empty()
+                                     ? "Game data reloaded from disk."
+                                     : "Game data reloaded; restart WorldServer to apply.";
+                m_worldMessageIsError = false;
+            } else {
+                m_worldMessage = "Reload failed: " + gameError;
+                m_worldMessageIsError = true;
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("dir=%s dirty=%s", m_gameDir.c_str(),
+                            m_game->IsDirty() ? "yes" : "no");
+    }
 }

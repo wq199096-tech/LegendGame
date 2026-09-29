@@ -1,0 +1,75 @@
+{
+  "skills": [
+    {
+      "baseDamage": 30,
+      "castTimeMs": 0,
+      "cooldownMs": 1500,
+      "enabled": true,
+      "manaCost": 10,
+      "maxTargets": 1,
+      "name": "Quick Strike",
+      "radius": 0.0,
+      "range": 120.0,
+      "skillId": 1001,
+      "statusEffectIds": [2002],
+      "targetType": "Monster"
+    },
+    {
+      "baseDamage": 40,
+      "castTimeMs": 1000,
+      "cooldownMs": 3000,
+      "enabled": true,
+      "manaCost": 20,
+      "maxTargets": 1,
+      "name": "Fire Bolt",
+      "radius": 0.0,
+      "range": 500.0,
+      "skillId": 1002,
+      "statusEffectIds": [2003],
+      "targetType": "Monster"
+    },
+    {
+      "baseDamage": 25,
+      "castTimeMs": 0,
+      "cooldownMs": 5000,
+      "enabled": true,
+      "manaCost": 25,
+      "maxTargets": 16,
+      "name": "Whirlwind",
+      "radius": 160.0,
+      "range": 0.0,
+      "skillId": 1003,
+      "statusEffectIds": [2004],
+      "targetType": "Self"
+    },
+    {
+      "baseDamage": 0,
+      "castTimeMs": 0,
+      "cooldownMs": 8000,
+      "enabled": true,
+      "manaCost": 15,
+      "maxTargets": 1,
+      "name": "Battle Focus",
+      "radius": 0.0,
+      "range": 0.0,
+      "skillId": 1004,
+      "statusEffectIds": [2001],
+      "targetType": "Self"
+    },
+    {
+      "baseDamage": 10,
+      "castTimeMs": 0,
+      "cooldownMs": 4000,
+      "enabled": true,
+      "manaCost": 15,
+      "maxTargets": 1,
+      "name": "Crippling Strike",
+      "radius": 0.0,
+      "range": 120.0,
+      "skillId": 1005,
+      "statusEffectIds": [2005],
+      "targetType": "Monster"
+    }
+  ],
+  "schemaVersion": 1
+}

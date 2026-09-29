@@ -1,0 +1,30 @@
+{
+  "lootTables": [
+    {
+      "enabled": true,
+      "entries": [
+        {
+          "dropChance": 1.0,
+          "itemDefinitionId": 3003,
+          "maxQuantity": 1,
+          "minQuantity": 1
+        },
+        {
+          "dropChance": 0.2,
+          "itemDefinitionId": 3001,
+          "maxQuantity": 1,
+          "minQuantity": 1
+        },
+        {
+          "dropChance": 0.2,
+          "itemDefinitionId": 3002,
+          "maxQuantity": 1,
+          "minQuantity": 1
+        }
+      ],
+      "lootTableId": 1,
+      "name": "Training Slime Loot"
+    }
+  ],
+  "schemaVersion": 1
+}

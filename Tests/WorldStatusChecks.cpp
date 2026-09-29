@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 #include "Tests/WorldTestHarness.h"
 
-#include "Server/WorldServer/Monster/MonsterDefinition.h"
+#include "Shared/Monster/MonsterDefinition.h"
 #include "Server/WorldServer/Monster/MonsterEntity.h"
 #include "Server/WorldServer/PlayerSession.h"
 #include "Server/WorldServer/Status/StatusEffectContainer.h"

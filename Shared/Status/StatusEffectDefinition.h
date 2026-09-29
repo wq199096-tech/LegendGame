@@ -28,6 +28,7 @@ struct StatusEffectDefinition {
     std::int32_t defenseFlatModifier = 0;  // 每层防御平坦加成（可为负）
     float moveSpeedMultiplier = 1.0f;      // 移速乘数（乘法叠加）
     std::uint32_t dotDamagePerStack = 0;   // 每层每 Tick DOT 伤害
+    bool enabled = true;                   // 阶段23 23.6：数据驱动开关
 };
 
 // 指令七：Battle Focus —— Buff，Attack +10，10s，不叠层，重复刷新。

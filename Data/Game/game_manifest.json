@@ -1,0 +1,14 @@
+{
+  "contentVersion": 1,
+  "files": [
+    "items.json",
+    "monsters.json",
+    "skills.json",
+    "statuses.json",
+    "quests.json",
+    "shops.json",
+    "teleports.json",
+    "loot_tables.json"
+  ],
+  "schemaVersion": 1
+}

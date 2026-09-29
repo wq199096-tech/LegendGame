@@ -1,0 +1,135 @@
+{
+  "quests": [
+    {
+      "description": "Defeat 5 Training Slimes.",
+      "minLevel": 1,
+      "name": "Slime Hunter",
+      "objectives": [
+        {
+          "objectiveId": 40011,
+          "requiredCount": 5,
+          "targetId": 1,
+          "type": "KillMonster"
+        }
+      ],
+      "prerequisiteQuestId": 0,
+      "questId": 4001,
+      "repeatable": false,
+      "reward": {
+        "exp": 100,
+        "gold": 20,
+        "itemDefinitionId": 0,
+        "itemQuantity": 0
+      },
+      "startNpcDefinitionId": 5001,
+      "turnInNpcDefinitionId": 5001
+    },
+    {
+      "description": "Collect 3 Slime Cores.",
+      "minLevel": 1,
+      "name": "Core Collector",
+      "objectives": [
+        {
+          "objectiveId": 40021,
+          "requiredCount": 3,
+          "targetId": 3003,
+          "type": "CollectItem"
+        }
+      ],
+      "prerequisiteQuestId": 4001,
+      "questId": 4002,
+      "repeatable": false,
+      "reward": {
+        "exp": 80,
+        "gold": 10,
+        "itemDefinitionId": 0,
+        "itemQuantity": 0
+      },
+      "startNpcDefinitionId": 5001,
+      "turnInNpcDefinitionId": 5001
+    },
+    {
+      "description": "Reach level 3.",
+      "minLevel": 1,
+      "name": "Growing Warrior",
+      "objectives": [
+        {
+          "objectiveId": 40031,
+          "requiredCount": 1,
+          "targetId": 3,
+          "type": "ReachLevel"
+        }
+      ],
+      "prerequisiteQuestId": 4001,
+      "questId": 4003,
+      "repeatable": false,
+      "reward": {
+        "exp": 0,
+        "gold": 50,
+        "itemDefinitionId": 0,
+        "itemQuantity": 0
+      },
+      "startNpcDefinitionId": 5001,
+      "turnInNpcDefinitionId": 5001
+    },
+    {
+      "description": "Explore the far plains (1500,1500).",
+      "minLevel": 1,
+      "name": "Explorer",
+      "objectives": [
+        {
+          "areaRadius": 100.0,
+          "areaX": 1500.0,
+          "areaY": 1500.0,
+          "mapId": 1,
+          "objectiveId": 40041,
+          "requiredCount": 1,
+          "targetId": 0,
+          "type": "ReachArea"
+        }
+      ],
+      "prerequisiteQuestId": 0,
+      "questId": 4004,
+      "repeatable": false,
+      "reward": {
+        "exp": 50,
+        "gold": 10,
+        "itemDefinitionId": 0,
+        "itemQuantity": 0
+      },
+      "startNpcDefinitionId": 5004,
+      "turnInNpcDefinitionId": 5004
+    },
+    {
+      "description": "Kill 3 slimes and gather 2 cores.",
+      "minLevel": 1,
+      "name": "Slime Cleanup",
+      "objectives": [
+        {
+          "objectiveId": 40051,
+          "requiredCount": 3,
+          "targetId": 1,
+          "type": "KillMonster"
+        },
+        {
+          "objectiveId": 40052,
+          "requiredCount": 2,
+          "targetId": 3003,
+          "type": "CollectItem"
+        }
+      ],
+      "prerequisiteQuestId": 4002,
+      "questId": 4005,
+      "repeatable": false,
+      "reward": {
+        "exp": 150,
+        "gold": 30,
+        "itemDefinitionId": 3001,
+        "itemQuantity": 1
+      },
+      "startNpcDefinitionId": 5001,
+      "turnInNpcDefinitionId": 5001
+    }
+  ],
+  "schemaVersion": 1
+}

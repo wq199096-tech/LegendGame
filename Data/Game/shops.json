@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "shops": [
+    {
+      "items": [
+        {
+          "buyPrice": 10,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3003,
+          "sellPrice": 3
+        },
+        {
+          "buyPrice": 100,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3001,
+          "sellPrice": 30
+        },
+        {
+          "buyPrice": 120,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3002,
+          "sellPrice": 40
+        }
+      ],
+      "name": "General Merchant",
+      "shopId": 6001
+    }
+  ]
+}

@@ -9,7 +9,7 @@
 
 #include "Server/WorldServer/Combat/CombatService.h"
 #include "Server/WorldServer/Combat/DamageCalculator.h"
-#include "Server/WorldServer/Monster/MonsterDefinition.h"
+#include "Shared/Monster/MonsterDefinition.h"
 #include "Server/WorldServer/Monster/MonsterEntity.h"
 #include "Server/WorldServer/PlayerSession.h"
 #include "Shared/Combat/CombatProtocol.h"

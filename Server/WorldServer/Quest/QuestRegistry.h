@@ -34,7 +34,13 @@ public:
     //（纯逻辑测试用）。
     bool ValidateDefinitions(const ItemRegistry* rewardItemRegistry, std::string& error) const;
 
+    // 数据注入（WorldServer::Start；单例 const& 调用面零改动）。
+    static void LoadFromDefinitions(std::vector<QuestDefinition> quests);
+    static void LoadDefaults();
+
 private:
+    static QuestRegistry& Mutable();
+
     std::vector<QuestDefinition> m_quests;
 };
 

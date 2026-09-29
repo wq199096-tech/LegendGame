@@ -1,13 +1,10 @@
-#include "Server/WorldServer/Monster/MonsterDefinition.h"
+#include "Server/WorldServer/Monster/MonsterDefinitionRegistry.h"
 
 namespace legend::world {
 
+// 阶段13 全局查找函数（保留签名——调用面零改动）；阶段23 起内部走注册表。
 const MonsterDefinition* FindMonsterDefinition(std::uint32_t monsterTypeId) {
-    if (monsterTypeId == kTrainingSlimeTypeId) {
-        static const MonsterDefinition definition = kTrainingSlimeDefinition;
-        return &definition;
-    }
-    return nullptr; // 指令五：阶段13 无其它类型（无 JSON 数据库/编辑器）
+    return MonsterDefinitionRegistry::Instance().Find(monsterTypeId);
 }
 
 } // namespace legend::world

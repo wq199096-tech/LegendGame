@@ -28,6 +28,7 @@ add_library(LegendSharedNetwork STATIC
     WorldMap/RespawnProtocol.cpp
     Portal/PortalProtocol.cpp
     WorldData/WorldDataJson.cpp
+    GameData/GameDataJson.cpp
 )
 
 target_include_directories(LegendSharedNetwork PUBLIC ${PROJECT_SOURCE_DIR})

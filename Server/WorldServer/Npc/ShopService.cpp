@@ -1,5 +1,7 @@
 #include "Server/WorldServer/Npc/ShopService.h"
 
+#include "Shared/GameData/GameDataJson.h"
+
 namespace legend::world {
 
 const ShopRegistry& ShopRegistry::Instance() {
@@ -8,14 +10,9 @@ const ShopRegistry& ShopRegistry::Instance() {
 }
 
 ShopRegistry::ShopRegistry() {
-    // 指令三十六：Shop 6001（General Merchant）——Slime Core / Rusty Sword / Cloth Armor。
-    ShopDefinition shop;
-    shop.shopId = 6001;
-    shop.name = "General Merchant";
-    shop.entries.push_back({kItemSlimeCoreId, 10, 3, true, true});
-    shop.entries.push_back({kItemRustySwordId, 100, 30, true, true});
-    shop.entries.push_back({kItemClothArmorId, 120, 40, true, true});
-    m_shops.push_back(std::move(shop));
+    // 阶段23 23.22：构造即填充出厂默认（直接填充——见 QuestRegistry 构造注释，
+    // 经 Mutable()/Instance() 会在 MSVC magic-static 初始化中重入死锁）。
+    m_shops = MakeDefaultGameData().shops;
 }
 
 const ShopDefinition* ShopRegistry::FindShop(std::uint32_t shopId) const {
@@ -25,6 +22,18 @@ const ShopDefinition* ShopRegistry::FindShop(std::uint32_t shopId) const {
         }
     }
     return nullptr;
+}
+
+ShopRegistry& ShopRegistry::Mutable() {
+    return const_cast<ShopRegistry&>(Instance());
+}
+
+void ShopRegistry::LoadFromDefinitions(std::vector<ShopDefinition> shops) {
+    Mutable().m_shops = std::move(shops);
+}
+
+void ShopRegistry::LoadDefaults() {
+    LoadFromDefinitions(MakeDefaultGameData().shops);
 }
 
 } // namespace legend::world

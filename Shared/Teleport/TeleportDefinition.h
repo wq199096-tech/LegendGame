@@ -17,6 +17,7 @@ struct TeleportDefinition {
     float destinationY = 0.0f;
     std::uint32_t goldCost = 0;
     std::uint32_t minLevel = 1;
+    bool enabled = true; // 阶段23 23.10：数据驱动开关
 };
 
 } // namespace legend::world

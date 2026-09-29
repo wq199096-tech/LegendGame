@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Server/WorldServer/AOI/WorldSpatialGrid.h"
-#include "Server/WorldServer/Monster/MonsterDefinition.h"
+#include "Shared/Monster/MonsterDefinition.h"
 #include "Server/WorldServer/Monster/MonsterEntity.h"
 #include "Server/WorldServer/WorldManager.h"
 

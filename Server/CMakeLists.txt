@@ -138,6 +138,8 @@ add_library(LegendWorldCore STATIC
     WorldServer/Item/InventoryRepository.cpp
     WorldServer/Monster/MonsterRespawnManager.cpp
     WorldServer/Monster/MonsterSpawnRegistry.cpp
+    WorldServer/Monster/MonsterDefinitionRegistry.cpp
+    WorldServer/Item/LootTableRegistry.cpp
     WorldServer/Quest/PlayerQuestContainer.cpp
     WorldServer/Quest/QuestRegistry.cpp
     WorldServer/Quest/QuestService.cpp

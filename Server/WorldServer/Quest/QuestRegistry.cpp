@@ -2,6 +2,7 @@
 
 #include "Engine/Debug/Logger.h"
 #include "Server/WorldServer/Item/ItemRegistry.h"
+#include "Shared/GameData/GameDataJson.h"
 
 namespace legend::world {
 
@@ -10,139 +11,15 @@ const QuestRegistry& QuestRegistry::Instance() {
     return registry;
 }
 
+QuestRegistry& QuestRegistry::Mutable() {
+    return const_cast<QuestRegistry&>(Instance());
+}
+
 QuestRegistry::QuestRegistry() {
-    // ------------------------------------------------------------------
-    // Quest 4001 Slime Hunter（指令十一）：Kill Training Slime x5，
-    // 奖励 EXP 100 / Gold 20，无 Item，minLevel=1，无前置。
-    // ------------------------------------------------------------------
-    {
-        QuestDefinition quest;
-        quest.questId = kQuestIdSlimeHunter;
-        quest.name = "Slime Hunter";
-        quest.description = "Defeat 5 Training Slimes.";
-        quest.minLevel = 1;
-        quest.prerequisiteQuestId = 0;
-        quest.repeatable = false;
-        QuestObjectiveDefinition kill;
-        kill.objectiveId = 40011;
-        kill.type = QuestObjectiveType::KillMonster;
-        kill.targetId = kTrainingSlimeTypeId;
-        kill.requiredCount = 5;
-        quest.objectives.push_back(kill);
-        quest.reward.exp = 100;
-        quest.reward.gold = 20;
-        quest.startNpcDefinitionId = 5001; // 阶段20 指令七十七：Village Elder
-        quest.turnInNpcDefinitionId = 5001;
-        m_quests.push_back(std::move(quest));
-    }
-    // ------------------------------------------------------------------
-    // Quest 4002 Core Collector：Collect Slime Core x3（当前持有量型），
-    // 奖励 EXP 80 / Gold 10，前置 4001 Completed。
-    // ------------------------------------------------------------------
-    {
-        QuestDefinition quest;
-        quest.questId = kQuestIdCoreCollector;
-        quest.name = "Core Collector";
-        quest.description = "Collect 3 Slime Cores.";
-        quest.minLevel = 1;
-        quest.prerequisiteQuestId = kQuestIdSlimeHunter;
-        quest.repeatable = false;
-        QuestObjectiveDefinition collect;
-        collect.objectiveId = 40021;
-        collect.type = QuestObjectiveType::CollectItem;
-        collect.targetId = kItemSlimeCoreId;
-        collect.requiredCount = 3;
-        quest.objectives.push_back(collect);
-        quest.reward.exp = 80;
-        quest.reward.gold = 10;
-        quest.startNpcDefinitionId = 5001;
-        quest.turnInNpcDefinitionId = 5001;
-        m_quests.push_back(std::move(quest));
-    }
-    // ------------------------------------------------------------------
-    // Quest 4003 Growing Warrior：Reach Level 3（targetId=3，指令二十六），
-    // 奖励 Gold 50，前置 4001。
-    // ------------------------------------------------------------------
-    {
-        QuestDefinition quest;
-        quest.questId = kQuestIdGrowingWarrior;
-        quest.name = "Growing Warrior";
-        quest.description = "Reach level 3.";
-        quest.minLevel = 1;
-        quest.prerequisiteQuestId = kQuestIdSlimeHunter;
-        quest.repeatable = false;
-        QuestObjectiveDefinition reach;
-        reach.objectiveId = 40031;
-        reach.type = QuestObjectiveType::ReachLevel;
-        reach.targetId = 3;
-        reach.requiredCount = 1;
-        quest.objectives.push_back(reach);
-        quest.reward.exp = 0;
-        quest.reward.gold = 50;
-        quest.startNpcDefinitionId = 5001;
-        quest.turnInNpcDefinitionId = 5001;
-        m_quests.push_back(std::move(quest));
-    }
-    // ------------------------------------------------------------------
-    // Quest 4004 Explorer：Reach Area mapId=1 center(1500,1500) radius 100，
-    // 奖励 EXP 50 / Gold 10，无前置。
-    // ------------------------------------------------------------------
-    {
-        QuestDefinition quest;
-        quest.questId = kQuestIdExplorer;
-        quest.name = "Explorer";
-        quest.description = "Explore the far plains (1500,1500).";
-        quest.minLevel = 1;
-        quest.prerequisiteQuestId = 0;
-        quest.repeatable = false;
-        QuestObjectiveDefinition area;
-        area.objectiveId = 40041;
-        area.type = QuestObjectiveType::ReachArea;
-        area.targetId = 0;
-        area.requiredCount = 1;
-        area.mapId = 1;
-        area.areaX = 1500.0f;
-        area.areaY = 1500.0f;
-        area.areaRadius = 100.0f;
-        quest.objectives.push_back(area);
-        quest.reward.exp = 50;
-        quest.reward.gold = 10;
-        quest.startNpcDefinitionId = 5004; // Explorer Guide
-        quest.turnInNpcDefinitionId = 5004;
-        m_quests.push_back(std::move(quest));
-    }
-    // ------------------------------------------------------------------
-    // Quest 4005 Slime Cleanup：多目标 Kill Slime x3 + Collect Core x2，
-    // 奖励 EXP 150 / Gold 30 / Rusty Sword x1，前置 4002 Completed。
-    // ------------------------------------------------------------------
-    {
-        QuestDefinition quest;
-        quest.questId = kQuestIdSlimeCleanup;
-        quest.name = "Slime Cleanup";
-        quest.description = "Kill 3 slimes and gather 2 cores.";
-        quest.minLevel = 1;
-        quest.prerequisiteQuestId = kQuestIdCoreCollector;
-        quest.repeatable = false;
-        QuestObjectiveDefinition kill;
-        kill.objectiveId = 40051;
-        kill.type = QuestObjectiveType::KillMonster;
-        kill.targetId = kTrainingSlimeTypeId;
-        kill.requiredCount = 3;
-        quest.objectives.push_back(kill);
-        QuestObjectiveDefinition collect;
-        collect.objectiveId = 40052;
-        collect.type = QuestObjectiveType::CollectItem;
-        collect.targetId = kItemSlimeCoreId;
-        collect.requiredCount = 2;
-        quest.objectives.push_back(collect);
-        quest.reward.exp = 150;
-        quest.reward.gold = 30;
-        quest.reward.itemDefinitionId = kItemRustySwordId;
-        quest.reward.itemQuantity = 1;
-        quest.startNpcDefinitionId = 5001;
-        quest.turnInNpcDefinitionId = 5001;
-        m_quests.push_back(std::move(quest));
-    }
+    // 阶段23 23.22：构造即填充出厂默认（DB Worker 离线推进等早期调用点依赖）。
+    // 注意：必须直接填充成员——经 Mutable()/Instance() 会在 MSVC magic-static
+    // 初始化中重入死锁（构造期调用 LoadDefaults→Mutable→Instance）。
+    m_quests = MakeDefaultGameData().quests;
 }
 
 const QuestDefinition* QuestRegistry::FindQuest(QuestId questId) const {
@@ -201,6 +78,15 @@ bool QuestRegistry::ValidateDefinitions(const ItemRegistry* rewardItemRegistry,
         }
     }
     return true;
+}
+
+
+void QuestRegistry::LoadFromDefinitions(std::vector<QuestDefinition> quests) {
+    Mutable().m_quests = std::move(quests);
+}
+
+void QuestRegistry::LoadDefaults() {
+    LoadFromDefinitions(MakeDefaultGameData().quests);
 }
 
 } // namespace legend::world

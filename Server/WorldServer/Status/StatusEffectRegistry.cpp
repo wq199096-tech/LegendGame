@@ -1,14 +1,12 @@
 #include "Server/WorldServer/Status/StatusEffectRegistry.h"
 
+#include "Shared/GameData/GameDataJson.h"
+
 namespace legend::world {
 
 StatusEffectRegistry::StatusEffectRegistry() {
-    // 阶段16：硬编码五个状态效果（指令一/七~十一）。
-    m_effects.push_back(kBattleFocusDefinition);
-    m_effects.push_back(kArmorBreakDefinition);
-    m_effects.push_back(kBurnDefinition);
-    m_effects.push_back(kPoisonDefinition);
-    m_effects.push_back(kSlowDefinition);
+    // 阶段23 23.22：构造即装载出厂默认（保持"构造后可用"语义）；Start 覆盖注入。
+    LoadDefaults();
 }
 
 const StatusEffectDefinition* StatusEffectRegistry::FindEffect(StatusEffectId effectId) const {
@@ -18,6 +16,15 @@ const StatusEffectDefinition* StatusEffectRegistry::FindEffect(StatusEffectId ef
         }
     }
     return nullptr;
+}
+
+void StatusEffectRegistry::LoadFromDefinitions(
+    std::vector<StatusEffectDefinition> effects) {
+    m_effects = std::move(effects);
+}
+
+void StatusEffectRegistry::LoadDefaults() {
+    LoadFromDefinitions(MakeDefaultGameData().statuses);
 }
 
 } // namespace legend::world

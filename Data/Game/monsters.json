@@ -1,0 +1,25 @@
+{
+  "monsters": [
+    {
+      "aggroRange": 350.0,
+      "attackCooldownMs": 1200,
+      "attackPower": 10,
+      "attackRange": 60.0,
+      "collisionRadius": 24.0,
+      "defense": 2,
+      "enabled": true,
+      "expReward": 25,
+      "goldReward": 3,
+      "leashRange": 600.0,
+      "level": 1,
+      "lootTableId": 1,
+      "maxHp": 80,
+      "modelId": 1,
+      "monsterDefinitionId": 1,
+      "moveSpeed": 80.0,
+      "name": "Training Slime",
+      "patrolRadius": 180.0
+    }
+  ],
+  "schemaVersion": 1
+}

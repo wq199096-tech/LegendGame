@@ -1,0 +1,44 @@
+{
+  "items": [
+    {
+      "attackBonus": 3,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 0,
+      "enabled": true,
+      "equipSlot": "Weapon",
+      "iconKey": "item_rusty_sword",
+      "itemDefinitionId": 3001,
+      "maxStack": 1,
+      "name": "Rusty Sword",
+      "type": "Weapon"
+    },
+    {
+      "attackBonus": 0,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 2,
+      "enabled": true,
+      "equipSlot": "Armor",
+      "iconKey": "item_cloth_armor",
+      "itemDefinitionId": 3002,
+      "maxStack": 1,
+      "name": "Cloth Armor",
+      "type": "Armor"
+    },
+    {
+      "attackBonus": 0,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 0,
+      "enabled": true,
+      "equipSlot": "None",
+      "iconKey": "item_slime_core",
+      "itemDefinitionId": 3003,
+      "maxStack": 99,
+      "name": "Slime Core",
+      "type": "Material"
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -9,7 +9,8 @@
 namespace legend::world {
 
 // ---------------------------------------------------------------------------
-// 阶段20 指令五十九/六十：TeleportRegistry —— 传送点 7001/7002 硬编码注册表。
+// 阶段20 指令五十九/六十 → 阶段23 23.22：TeleportRegistry —— 传送点注册表。
+// 生产从 Data/Game/teleports.json 加载（WorldServer::Start 注入）；
 // 只读单例；NpcRegistry 启动校验引用。
 // ---------------------------------------------------------------------------
 class TeleportRegistry {
@@ -20,7 +21,13 @@ public:
 
     const TeleportDefinition* FindTeleport(std::uint32_t teleportId) const;
 
+    // 数据注入（WorldServer::Start；阶段23 23.22）。
+    static void LoadFromDefinitions(std::vector<TeleportDefinition> teleports);
+    static void LoadDefaults();
+
 private:
+    static TeleportRegistry& Mutable();
+
     std::vector<TeleportDefinition> m_teleports;
 };
 

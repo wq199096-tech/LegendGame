@@ -7,7 +7,11 @@
 
 namespace legend::world {
 
-// 阶段13 指令四：MonsterDefinition —— 怪物静态配置（阶段13 硬编码，不上 JSON，指令五）。
+// ---------------------------------------------------------------------------
+// 阶段13 指令四 → 阶段23 23.4/23.17：MonsterDefinition —— 怪物静态配置。
+// 阶段22 起从 Server 层移至 Shared（GameData/Editor/Server 三方共用）；
+// 阶段23 数据驱动（Data/Game/monsters.json）+ lootTableId 引用 + enabled 开关。
+// ---------------------------------------------------------------------------
 struct MonsterDefinition {
     std::uint32_t monsterTypeId = 0;
     std::string name;
@@ -27,9 +31,12 @@ struct MonsterDefinition {
     // 阶段17 指令六：击杀奖励（WorldServer 权威发放，Client 不能决定奖励倍率）。
     std::uint32_t rewardExp = 0;
     std::uint32_t rewardGold = 0;
+    // 阶段23 23.4/23.17：掉落表引用（0 = 无掉落表）+ 数据驱动开关。
+    std::uint32_t lootTableId = 0;
+    bool enabled = true;
 };
 
-// 指令二：Training Slime 基础配置。
+// 指令二：Training Slime 基础配置（阶段23 前为唯一硬编码；现为迁移数据源/单一事实）。
 // level=1 / moveSpeed=80 / aggroRadius=350 / leashRadius=600 / patrolRadius=180。
 // 阶段14 指令五：maxHp=80 / attackPower=10 / defense=2 / attackRange=60 / attackCooldown=1.2s。
 // 阶段17 指令六：rewardExp=25 / rewardGold=3。
@@ -37,9 +44,10 @@ inline const MonsterDefinition kTrainingSlimeDefinition{
     kTrainingSlimeTypeId, kTrainingSlimeName, 1, 80.0f, 350.0f, 600.0f, 180.0f, 24.0f, 1,
     80u, 10u, 2u, 60.0f, 1.2f,
     25u, 3u,
+    1u, true, // lootTableId=1（阶段23 Loot Table V1：Training Slime 表）
 };
 
-// 按 typeId 查找定义（阶段13 只注册 Training Slime，指令五）。
+// 按 typeId 查找定义（阶段13 全局查找签名保留；阶段23 内部走 MonsterDefinitionRegistry）。
 const MonsterDefinition* FindMonsterDefinition(std::uint32_t monsterTypeId);
 
 } // namespace legend::world

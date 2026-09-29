@@ -29,6 +29,8 @@ struct SkillDefinition {
     // 阶段16 指令十八：技能命中后施加的状态效果（0 = 无）。
     StatusEffectId applyStatusEffectId = 0;
     std::uint8_t applyStatusStacks = 0;
+    // 阶段23 23.5：数据驱动开关（23.5 的 statusEffectIds 数组映射到 applyStatusEffectId）。
+    bool enabled = true;
 };
 
 // 指令八：Quick Strike —— Instant 单体（阶段16：命中施加 Armor Break +1 层）。

@@ -13,7 +13,7 @@
 #include "Server/LoginServer/Account/AccountRepository.h"
 #include "Server/WorldServer/Item/InventoryRepository.h"
 #include "Server/WorldServer/Item/ItemRegistry.h"
-#include "Server/WorldServer/Monster/MonsterDefinition.h"
+#include "Shared/Monster/MonsterDefinition.h"
 #include "Server/WorldServer/Monster/MonsterEntity.h"
 #include "Server/WorldServer/Quest/PlayerQuestContainer.h"
 #include "Server/WorldServer/Quest/QuestRegistry.h"

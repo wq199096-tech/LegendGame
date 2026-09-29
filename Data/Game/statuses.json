@@ -1,0 +1,75 @@
+{
+  "statuses": [
+    {
+      "attackModifier": 10,
+      "defenseModifier": 0,
+      "dotDamage": 0,
+      "durationMs": 10000,
+      "enabled": true,
+      "maxStacks": 1,
+      "movementMultiplier": 1.0,
+      "name": "Battle Focus",
+      "stackPolicy": "RefreshDuration",
+      "statusId": 2001,
+      "tickMs": 0,
+      "type": "Buff"
+    },
+    {
+      "attackModifier": 0,
+      "defenseModifier": -2,
+      "dotDamage": 0,
+      "durationMs": 8000,
+      "enabled": true,
+      "maxStacks": 3,
+      "movementMultiplier": 1.0,
+      "name": "Armor Break",
+      "stackPolicy": "AddStackRefresh",
+      "statusId": 2002,
+      "tickMs": 0,
+      "type": "Debuff"
+    },
+    {
+      "attackModifier": 0,
+      "defenseModifier": 0,
+      "dotDamage": 8,
+      "durationMs": 8000,
+      "enabled": true,
+      "maxStacks": 1,
+      "movementMultiplier": 1.0,
+      "name": "Burn",
+      "stackPolicy": "RefreshDuration",
+      "statusId": 2003,
+      "tickMs": 2000,
+      "type": "Debuff"
+    },
+    {
+      "attackModifier": 0,
+      "defenseModifier": 0,
+      "dotDamage": 4,
+      "durationMs": 6000,
+      "enabled": true,
+      "maxStacks": 3,
+      "movementMultiplier": 1.0,
+      "name": "Poison",
+      "stackPolicy": "AddStackRefresh",
+      "statusId": 2004,
+      "tickMs": 1000,
+      "type": "Debuff"
+    },
+    {
+      "attackModifier": 0,
+      "defenseModifier": 0,
+      "dotDamage": 0,
+      "durationMs": 5000,
+      "enabled": true,
+      "maxStacks": 1,
+      "movementMultiplier": 0.6,
+      "name": "Slow",
+      "stackPolicy": "RefreshDuration",
+      "statusId": 2005,
+      "tickMs": 0,
+      "type": "Debuff"
+    }
+  ],
+  "schemaVersion": 1
+}

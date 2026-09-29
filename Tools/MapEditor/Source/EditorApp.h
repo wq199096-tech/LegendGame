@@ -9,6 +9,7 @@
 #include "Engine/Render/Renderer.h"
 #include "Engine/Core/Window.h"
 #include "Engine/Resource/ResourceManager.h"
+#include "Tools/MapEditor/Source/GameDataDocument.h"
 #include "Tools/MapEditor/Source/WorldDocument.h"
 
 namespace legend::render {
@@ -65,8 +66,11 @@ private:
     void HandleWorldShortcuts();
     void DrawWorldWorkspace();      // 三栏 + 底部 Validation + 状态条
     void DrawWorldTree();           // 左：Maps/NPCs/Spawns/Portals 树
+    void DrawGameDataTree();        // 左：Items/Monsters/Skills/Statuses/Quests/Shops/Teleports/Loot（23.1/23.12）
     void DrawWorldCanvas();         // 中：Pan/Zoom/Grid/对象绘制/拾取/拖拽
     void DrawWorldInspector();      // 右：选中对象字段编辑
+    void DrawWorldInspectorFields(); // World 字段编辑主体（World/Game 两个 Inspector 共存）
+    void DrawGameDataInspector();   // 右：Game 定义字段编辑（23.3~23.10/23.18）
     void DrawWorldBottomPanel();    // 下：Validation/Console/Status/Save
     void DrawWorldObjects();        // canvas 绘制具体对象
     void WorldScreenToWorld(float sx, float sy, float& wx, float& wy) const;
@@ -131,6 +135,18 @@ private:
     bool m_worldLoaded = false;
     std::string m_worldMessage;      // Console 行（Load/Save/Launch 结果）
     bool m_worldMessageIsError = false;
+
+    // ---- 阶段23：Game Data Editor 状态 ----
+    std::unique_ptr<legend::editor::GameDataDocument> m_game;
+    std::string m_gameDir = "Data/Game";
+    bool m_gameLoaded = false;
+    char m_gameSearch[96] = {};      // 23.12：ID/Name 过滤
+    char m_gInsName[128] = {};       // Inspector 文本缓冲（owner 跟踪）
+    char m_gInsText[256] = {};
+    char m_gInsDesc[256] = {};
+    legend::editor::GameDataDocument::ObjectType m_gOwnerType =
+        legend::editor::GameDataDocument::ObjectType::None;
+    std::uint32_t m_gOwnerId = 0;
 
     // canvas 视图（世界坐标 → 屏幕像素：screen = (world - origin) * zoom）
     float m_worldOriginX = -100.0f;

@@ -14,7 +14,7 @@
 #include "Server/WorldServer/Item/InventoryRepository.h"
 #include "Server/WorldServer/Item/ItemRegistry.h"
 #include "Server/WorldServer/Item/WorldItemDrop.h"
-#include "Server/WorldServer/Monster/MonsterDefinition.h"
+#include "Shared/Monster/MonsterDefinition.h"
 #include "Server/WorldServer/Monster/MonsterEntity.h"
 #include "Shared/Item/ItemDefinition.h"
 #include "Shared/Item/ItemProtocol.h"

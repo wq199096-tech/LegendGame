@@ -138,6 +138,9 @@ public:
         // 阶段22 22.11/22.12：世界数据目录（maps/npcs/monster_spawns/portals JSON）。
         // 存在 → 加载+校验（失败拒绝启动）；不存在 → 出厂默认（MakeDefaultWorldData）。
         std::string worldDataDir = "Data/World";
+        // 阶段23 23.22：Game 数据目录（items/monsters/skills/statuses/quests/
+        // shops/teleports/loot_tables JSON）；策略与 worldDataDir 一致。
+        std::string gameDataDir = "Data/Game";
     };
 
     struct Hooks {

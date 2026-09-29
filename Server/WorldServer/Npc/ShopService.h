@@ -21,7 +21,13 @@ public:
 
     const ShopDefinition* FindShop(std::uint32_t shopId) const;
 
+    // 数据注入（WorldServer::Start；阶段23 23.22）。
+    static void LoadFromDefinitions(std::vector<ShopDefinition> shops);
+    static void LoadDefaults();
+
 private:
+    static ShopRegistry& Mutable();
+
     std::vector<ShopDefinition> m_shops;
 };
 

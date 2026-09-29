@@ -1,7 +1,7 @@
 #include "Server/WorldServer/Monster/MonsterSpawnRegistry.h"
 
 #include "Server/WorldServer/Map/MapRegistry.h"
-#include "Shared/Monster/MonsterTypes.h"
+#include "Server/WorldServer/Monster/MonsterDefinitionRegistry.h"
 #include "Shared/WorldData/WorldDataJson.h"
 
 namespace legend::world {
@@ -27,10 +27,10 @@ const MonsterSpawnDefinition* MonsterSpawnRegistry::FindSpawn(std::uint32_t spaw
 
 bool MonsterSpawnRegistry::ValidateSpawns(const MapRegistry& maps, std::string& error) const {
     for (const auto& spawn : m_spawns) {
-        if (spawn.monsterDefinitionId != kTrainingSlimeTypeId) {
-            // 阶段22 单怪物类型（阶段23 数据驱动 Monster Definition 后放开）。
-            error = "spawn " + std::to_string(spawn.spawnId) + ": unknown monsterDefinitionId " +
-                    std::to_string(spawn.monsterDefinitionId);
+        // 阶段23 23.11：spawn 引用的 Monster 必须存在于 Data/Game monsters。
+        if (MonsterDefinitionRegistry::Instance().Find(spawn.monsterDefinitionId) == nullptr) {
+            error = "spawn " + std::to_string(spawn.spawnId) + ": monster " +
+                    std::to_string(spawn.monsterDefinitionId) + " does not exist";
             return false;
         }
         const MapDefinition* map = maps.FindMap(spawn.mapId);

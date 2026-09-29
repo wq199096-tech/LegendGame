@@ -28,6 +28,8 @@ void RunWorldNpcChecks();
 void RunWorldMapChecks(); // 阶段21：多地图 / Portal / 复活
 void RunWorldDataChecks(); // 阶段22：Data/World 数据层
 void RunMapEditorDataChecks(); // 阶段22：World Editor 文档模型
+void RunGameDataChecks(); // 阶段23：Data/Game 数据层 + 迁移回归
+void RunDefinitionValidationChecks(); // 阶段23：定义校验 + GameDataDocument
 }
 
 namespace {
@@ -881,6 +883,8 @@ int main() {
     RunWorldMapChecks();
     RunWorldDataChecks();
     RunMapEditorDataChecks();
+    RunGameDataChecks();
+    RunDefinitionValidationChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

@@ -1,14 +1,13 @@
 #include "Server/WorldServer/Skill/SkillRegistry.h"
 
+#include "Shared/GameData/GameDataJson.h"
+
 namespace legend::world {
 
 SkillRegistry::SkillRegistry() {
-    // 阶段15 指令三十四：硬编码固定测试技能；阶段16 指令十九/二十：+Battle Focus/Crippling Strike。
-    m_skills.push_back(kQuickStrikeDefinition);
-    m_skills.push_back(kFireBoltDefinition);
-    m_skills.push_back(kWhirlwindDefinition);
-    m_skills.push_back(kBattleFocusSkillDefinition);
-    m_skills.push_back(kCripplingStrikeSkillDefinition);
+    // 阶段23 23.22：构造即装载出厂默认（保持"构造后可用"语义——早期调用点/
+    // 测试依赖）；WorldServer::Start 随后用 Data/Game 数据覆盖注入。
+    LoadDefaults();
 }
 
 const SkillDefinition* SkillRegistry::FindSkill(SkillId skillId) const {
@@ -18,6 +17,14 @@ const SkillDefinition* SkillRegistry::FindSkill(SkillId skillId) const {
         }
     }
     return nullptr;
+}
+
+void SkillRegistry::LoadFromDefinitions(std::vector<SkillDefinition> skills) {
+    m_skills = std::move(skills);
+}
+
+void SkillRegistry::LoadDefaults() {
+    LoadFromDefinitions(MakeDefaultGameData().skills);
 }
 
 } // namespace legend::world
