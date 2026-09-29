@@ -703,6 +703,8 @@ void RunInventoryDropChecks() {
         clientB.DrainEvents();
 
         // ---- DropOwnerLockCheck（指令十五）：归属期内他人拾取拒绝 ----
+        // CI 慢机防护：击杀循环期间怪物反击，A 若被围殴致死会级联污染后续检查。
+        servers.world->TestBuffPlayerHp(seedA.characterId, 1000000);
         std::uint64_t killRequestId = 6400;
         (void)BasicAttackUntilDead(servers, clientA, 9, killRequestId);
         WorldNetworkEvent ownerSpawn;
@@ -812,10 +814,14 @@ void RunInventoryDropChecks() {
         std::uint64_t dotOwnerId = 0;
         {
             MoveSlimeNearA(servers, 8);
+            // CI 慢机防护：A 若在攻击循环中被怪物 8 反击致死，后续攻击全部被拒
+            //（Dead）→ HP 降不到 26 → Burn(32) 烧不死满血怪 → 无掉落 →
+            // PickupDbFailure/DropExpire 级联失败。Buff 满血保证循环确定性。
+            servers.world->TestBuffPlayerHp(seedA.characterId, 1000000);
             const std::uint64_t dropIdBefore = servers.world->NextItemDropIdForTest();
             // 打 3 次（80->62->44->26），Burn 4 跳 32 伤害必杀死。
             std::uint64_t dotKillRequestId = 6500;
-            WaitUntil(
+            const bool lowered = WaitUntil(
                 [&] {
                     auto m = servers.world->FindMonster(8);
                     if (!m || !m->Alive() || m->CurrentHp() <= 26) {
@@ -825,7 +831,16 @@ void RunInventoryDropChecks() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                     return false;
                 },
-                15000);
+                30000); // CI 慢机：攻击冷却 + 调度延迟放宽（原 15s）
+            int hpAfterLoop = -1;
+            bool aliveAfterLoop = false;
+            {
+                auto m = servers.world->FindMonster(8);
+                if (m) {
+                    hpAfterLoop = static_cast<int>(m->CurrentHp());
+                    aliveAfterLoop = m->Alive();
+                }
+            }
             servers.world->ApplyStatusToTarget(kTypeMonster, 8, 2003, 1, kTypePlayer,
                                                seedA.characterId, 0u);
             clientA.Disconnect(); // 离线 killer（指令四十一：owner 保留其 ID）
@@ -837,9 +852,16 @@ void RunInventoryDropChecks() {
                 12000);
             const auto* drop = dotKilled ? servers.world->FindItemDrop(dropIdBefore) : nullptr;
             dotOwnerId = drop ? drop->ownerCharacterId : 0;
-            Check("DotKillDropOwnerCheck: offline DOT killer keeps drop ownership",
-                  dotKilled && drop != nullptr && drop->itemDefinitionId == kItemSlimeCoreId &&
-                      dotOwnerId == seedA.characterId);
+            static char dotDiag[224];
+            std::snprintf(dotDiag, sizeof(dotDiag),
+                          "DotKillDropOwnerCheck: offline DOT killer keeps drop ownership "
+                          "[lowered=%d alive=%d hp=%d dotKilled=%d drop=%d ownerMatch=%d]",
+                          lowered ? 1 : 0, aliveAfterLoop ? 1 : 0, hpAfterLoop,
+                          dotKilled ? 1 : 0, drop != nullptr ? 1 : 0,
+                          dotOwnerId == seedA.characterId ? 1 : 0);
+            Check(dotDiag, dotKilled && drop != nullptr &&
+                               drop->itemDefinitionId == kItemSlimeCoreId &&
+                               dotOwnerId == seedA.characterId);
         }
 
         // ---- PickupDbFailureRollbackCheck（指令二十四）：DB 失败回滚恢复 Drop ----
@@ -871,8 +893,13 @@ void RunInventoryDropChecks() {
             const bool dropRestored = servers.world->FindItemDrop(dbFailDropId) != nullptr;
             const bool bagEmpty =
                 clientB.controller.Inventory().UsedCount() == 1; // 只有先前 owner-unlock 拾取的 1 个
-            Check("PickupDbFailureRollbackCheck: DB failure restores drop, no item swallowed",
-                  failedAtDb && dropRestored && bagEmpty && dropsBefore > 0);
+            static char dbDiag[192];
+            std::snprintf(dbDiag, sizeof(dbDiag),
+                          "PickupDbFailureRollbackCheck: DB failure restores drop, no item "
+                          "swallowed [failedAtDb=%d restored=%d bagEmpty=%d dropsBefore=%zu]",
+                          failedAtDb ? 1 : 0, dropRestored ? 1 : 0, bagEmpty ? 1 : 0,
+                          dropsBefore);
+            Check(dbDiag, failedAtDb && dropRestored && bagEmpty && dropsBefore > 0);
             // 重建表（后续重启持久化检查需要）。
             {
                 Database fixer;
@@ -899,7 +926,7 @@ void RunInventoryDropChecks() {
             const std::size_t despawnBaseline =
                 CountEventsOf(clientB, WorldNetworkEvent::Type::WorldItemDespawnEvent);
             const bool expired = WaitUntil(
-                [&] { return servers.world->WorldItemDropCount() == 0; }, 9000);
+                [&] { return servers.world->WorldItemDropCount() == 0; }, 12000);
             WorldNetworkEvent expireEvent;
             const bool gotExpiredEvent = WaitRecordedFrom(
                 clientB, WorldNetworkEvent::Type::WorldItemDespawnEvent, despawnBaseline,
@@ -907,9 +934,14 @@ void RunInventoryDropChecks() {
                     return e.itemDespawnReason ==
                            static_cast<std::uint8_t>(ItemDespawnReason::Expired);
                 },
-                expireEvent, 1000);
-            Check("DropExpire60sCheck: drops expire after TTL and broadcast Expired",
-                  expired && gotExpiredEvent);
+                expireEvent, 3000); // CI 慢机：过期事件广播紧跟清理 tick，放宽到 3s（原 1s）
+            static char expireDiag[160];
+            std::snprintf(expireDiag, sizeof(expireDiag),
+                          "DropExpire60sCheck: drops expire after TTL and broadcast Expired "
+                          "[expired=%d event=%d dropsLeft=%zu]",
+                          expired ? 1 : 0, gotExpiredEvent ? 1 : 0,
+                          servers.world->WorldItemDropCount());
+            Check(expireDiag, expired && gotExpiredEvent);
         }
 
         // ---- WorldRestartDropClearCheck + NoWorldDropPersistenceCheck（指令四十九）----

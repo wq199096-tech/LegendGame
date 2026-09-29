@@ -5,12 +5,14 @@
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
-- HEAD SHA: a674786d3c1b66ec59ec761b328347b5cf698147（阶段19 收尾提交；阶段20 代码尚未正式提交）
-- 当前阶段: **阶段20 —— NPC / Dialogue / Shop / Teleport / Quest Interaction Core V0.20，编码全部完成，本地验证中**
-- 阶段目标: 见 CURRENT_STAGE.md（Todo 除"提交/Actions"外全部勾选）
+- HEAD SHA: 8032ee0cee3a45dc5d8e9def863a65dc153946f6（阶段20 正式提交，已推送）
+- 本地: `d:\LegendGame-main`（**本机无中文路径仓库**；本目录 2026-09-29 由 ZIP 快照 git init
+  + fetch + reset --mixed origin/main 重建，工作区与远端一致；push 走 SOCKS5 10808）
+- 当前阶段: **阶段20 收尾——CI run 36545873665（8032ee0）= failure，WorldTests 5 FAIL 修复中**
+- 阶段目标: 见 CURRENT_STAGE.md（编码全部完成；唯一剩余 = Actions 绿）
 - 阶段禁止项: 复杂剧情分支/Lua 脚本/动态 NPC/NPC 战斗 AI/NPC 死亡/护送/摆摊/拍卖行/玩家交易/
   仓库/强化/锻造/耐久/公会/转职/声望/每日商店/动态物价/共享 NPC 状态/语音/Cutscene/电影镜头
-- 最终 commit msg: `feat(world): add npc dialogue shop teleport and quest interaction core`
+- CI 修复 commit msg: `fix(test): stabilize world checks against slow ci runners`
 - 完成后停止，不进入阶段21
 
 ## 已完成任务
@@ -48,17 +50,23 @@
 - NpcError.h 缺 include NpcTypes.h（Client 侧 81 错）；`far`/`home` 是 Windows 宏改 farTp/homeTp；
   NpcChecks 多余 `} // namespace`；bool ok 重定义；shared_ptr 不能 `const auto*`
 
+## CI 失败与修复（run 36545873665 = failure，2026-09-29）
+- WorldTests 5 FAIL（CI）：DotKill/PickupDb/DropExpire（根因：场景2 A 未 Buff，
+  CI 慢机攻击循环拉长 → A 被怪物 8 反击致死 → 级联）+ DialogueSessionTtl/
+  DialogueMoveOutOfRange（疑因：单次交互在 io 饥饿窗口超时，后续检查正常）。
+- 修复：A TestBuffPlayerHp(1e6)×2；DotKill 循环 30s；InteractAndWaitDialogue 重试×3；
+  FAIL 行内嵌诊断；DropExpire 事件等待 3s；workflow 发射 [Diag] 注解。
+- 排查通道：注解 API（curl --socks5-hostname 127.0.0.1:10808）；artifact 401 不可匿名下。
+
 ## 下一步
-1. run6 结果：0 FAIL → 更新 CURRENT_STAGE 测试结果；有 FAIL → 继续修（注意上表已修项勿回退）
-2. 回归 Network/Account 两套件（ctest 三套）
-3. WIP 提交（含 4 个上下文文件）→ 正式 commit `feat(world): add npc dialogue shop teleport and quest interaction core`
-4. push（SOCKS5：`git -c http.proxy=socks5h://127.0.0.1:10808 -c https.proxy=socks5h://127.0.0.1:10808 push origin main`）
-5. 等 Actions 绿（无 token 时用 `::error::` 注解通道查失败：curl.exe --socks5-hostname 127.0.0.1:10808）
-6. 最终汇报 45 项（含自动续接情况）；完成后停止，不进入阶段21
+1. 本地 WorldTests 0 FAIL（×2 轮）→ commit `fix(test): stabilize world checks against slow ci runners` → push（SOCKS5）
+2. 等 Actions 绿；若再失败：读注解 [FAIL]/[Diag] 行定位（勿回退本文件已列修复）
+3. 成功后更新 CURRENT_STAGE 测试结果与 Actions 状态；最终汇报；完成后停止，不进入阶段21
 
 ## git status（写入时点）
-- 分支 main，与 origin/main 同步于 a674786；阶段20 全部改动未提交
-- 未跟踪新文件：PROJECT_CONTEXT.md / CURRENT_STAGE.md / ARCHITECTURE.md / TRAE_CONTINUATION_CONTEXT.md
+- 分支 main，HEAD=8032ee0 与 origin/main 一致；CI 修复改动（WorldInventoryChecks/
+  WorldNpcChecks/windows-build.yml/CURRENT_STAGE/TRAE_CONTINUATION_CONTEXT）待提交
 
 ## Actions 状态
-- 最新 run 36527767372（a674786）= success（阶段20 提交后更新）
+- 最新：run 36545873665（8032ee0）= **failure**（WorldTests 5 FAIL，修复中）
+- 前一：run 36527767372（a674786）= success（阶段19）

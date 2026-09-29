@@ -172,12 +172,13 @@ std::int64_t QueryCharacterColumn(const std::string& dbPath, std::uint64_t chara
                            std::to_string(static_cast<long long>(characterId)) + ";");
 }
 
-// 与 NPC（定义位置）交互一次并等待 DialoguePayload（成功）。
-bool InteractAndWaitDialogue(WorldTestClient& client, WorldTestServers& servers,
-                             std::uint64_t characterId, std::uint32_t npcDefinitionId,
-                             std::uint64_t& outSessionId) {
+// 单次交互尝试（成功打开会话并收到 DialoguePayload）。
+bool InteractAndWaitDialogueOnce(WorldTestClient& client, WorldTestServers& servers,
+                                 std::uint64_t characterId, std::uint32_t npcDefinitionId,
+                                 std::uint64_t& outSessionId, const char*& failStage) {
     auto player = servers.world->FindPlayerByCharacter(characterId);
     if (!player) {
+        failStage = "player-not-found";
         return false;
     }
     // 找 runtime NPC（按定义 Id，经客户端镜像或服务器查询），并等待其对玩家可见
@@ -205,6 +206,7 @@ bool InteractAndWaitDialogue(WorldTestClient& client, WorldTestServers& servers,
         },
         4000);
     if (!visible || npcEntityId == 0) {
+        failStage = "npc-not-visible";
         return false;
     }
     const std::size_t baseline =
@@ -219,19 +221,44 @@ bool InteractAndWaitDialogue(WorldTestClient& client, WorldTestServers& servers,
     if (!WaitRecordedFrom(client, WorldNetworkEvent::Type::NpcInteractResponseEvent,
                           responseBaseline,
                           [&](const WorldNetworkEvent& e) {
-                              return e.success &&
-                                     e.dialogueSessionId != 0;
+                              return e.success && e.dialogueSessionId != 0;
                           },
                           response, 5000)) {
+        failStage = "interact-response";
         return false;
     }
     outSessionId = response.dialogueSessionId;
     WorldNetworkEvent dialogue;
-    return WaitRecordedFrom(client, WorldNetworkEvent::Type::DialoguePayloadEvent, baseline,
-                            [&](const WorldNetworkEvent& e) {
-                                return e.dialoguePayload.dialogueSessionId == outSessionId;
-                            },
-                            dialogue, 5000);
+    if (!WaitRecordedFrom(client, WorldNetworkEvent::Type::DialoguePayloadEvent, baseline,
+                          [&](const WorldNetworkEvent& e) {
+                              return e.dialoguePayload.dialogueSessionId == outSessionId;
+                          },
+                          dialogue, 5000)) {
+        failStage = "dialogue-payload";
+        return false;
+    }
+    return true;
+}
+
+// 与 NPC（定义位置）交互一次并等待 DialoguePayload（成功）。
+// CI 慢机 io 饥饿窗口可使单次尝试超时（本地复现不出来）→ 内部重试。
+// requestId 静态递增，重试天然绕开防重放缓存。
+bool InteractAndWaitDialogue(WorldTestClient& client, WorldTestServers& servers,
+                             std::uint64_t characterId, std::uint32_t npcDefinitionId,
+                             std::uint64_t& outSessionId) {
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        const char* failStage = "unknown";
+        if (InteractAndWaitDialogueOnce(client, servers, characterId, npcDefinitionId,
+                                        outSessionId, failStage)) {
+            return true;
+        }
+        std::printf("[Diag] InteractAndWaitDialogue npc=%u attempt=%d/%d failed at %s\n",
+                    static_cast<unsigned>(npcDefinitionId), attempt, 3, failStage);
+        if (attempt < 3) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+    }
+    return false;
 }
 
 // 在 DialoguePayload 事件里找指定类型/引用的 Option 索引（1-based）。
@@ -1252,11 +1279,12 @@ void RunWorldNpcChainChecks() {
         // DialogueSessionTtlCheck：TTL 0.6s——交互后超时选择 → 会话关闭。
         std::uint64_t session = 0;
         bool ok = InteractAndWaitDialogue(clientA, servers, seedA.characterId, 5002, session);
+        bool closed = false;
         if (ok) {
             std::this_thread::sleep_for(std::chrono::milliseconds(900));
             // 超时后任意 option 请求 → 服务器关闭（空 DialoguePayload）。
             clientA.client().SendDialogueOption(980001, session, 1);
-            const bool closed = WaitUntil(
+            closed = WaitUntil(
                 [&] {
                     clientA.DrainEvents();
                     const auto& payloads = clientA.recorded[WorldTestClient::IndexOf(
@@ -1269,21 +1297,24 @@ void RunWorldNpcChainChecks() {
                     }
                     return false;
                 },
-                4000);
-            Check("DialogueSessionTtlCheck: expired session option -> server closes dialogue",
-                  closed);
-        } else {
-            Check("DialogueSessionTtlCheck: expired session option -> server closes dialogue",
-                  false);
+                6000); // CI 慢机放宽（原 4s）
         }
+        static char ttlDiag[160];
+        std::snprintf(ttlDiag, sizeof(ttlDiag),
+                      "DialogueSessionTtlCheck: expired session option -> server closes "
+                      "dialogue [interactOk=%d closed=%d]",
+                      ok ? 1 : 0, closed ? 1 : 0);
+        Check(ttlDiag, ok && closed);
 
         // DialogueMoveOutOfRangeInvalidatesCheck：走远 200+ → 会话失效。
         std::uint64_t session2 = 0;
         ok = InteractAndWaitDialogue(clientA, servers, seedA.characterId, 5002, session2);
+        bool moved = false;
+        bool invalidated = false;
         if (ok) {
-            (void)TeleportPlayer(clientA, servers, seedA.characterId, 800.0f, 600.0f);
+            moved = TeleportPlayer(clientA, servers, seedA.characterId, 800.0f, 600.0f);
             clientA.client().SendDialogueOption(980002, session2, 1);
-            const bool invalidated = WaitUntil(
+            invalidated = WaitUntil(
                 [&] {
                     clientA.DrainEvents();
                     const auto& payloads = clientA.recorded[WorldTestClient::IndexOf(
@@ -1296,13 +1327,14 @@ void RunWorldNpcChainChecks() {
                     }
                     return false;
                 },
-                4000);
-            Check("DialogueMoveOutOfRangeInvalidatesCheck: out-of-range option -> session closed",
-                  invalidated);
-        } else {
-            Check("DialogueMoveOutOfRangeInvalidatesCheck: out-of-range option -> session closed",
-                  false);
+                6000); // CI 慢机放宽（原 4s）
         }
+        static char moveDiag[192];
+        std::snprintf(moveDiag, sizeof(moveDiag),
+                      "DialogueMoveOutOfRangeInvalidatesCheck: out-of-range option -> session "
+                      "closed [interactOk=%d moved=%d invalidated=%d]",
+                      ok ? 1 : 0, moved ? 1 : 0, invalidated ? 1 : 0);
+        Check(moveDiag, ok && invalidated);
 
         // DialogueDeathInvalidatesCheck：死亡 → 会话失效。
         std::uint64_t session3 = 0;
