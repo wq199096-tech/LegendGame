@@ -31,16 +31,19 @@ Teleport7001（→1500,1500 费20G）、7002（→300,300 免费）；QuestDefin
 - [x] Tests/WorldNpcChecks.cpp（纯逻辑 + 真实链路全部 Check）+ 加入 LegendWorldTests
 - [x] README（NPC & Interaction Core V0.20 章节 + 按键表）
 - [x] 提交 `feat(world): add npc dialogue shop teleport and quest interaction core`（8032ee0 已推送）
-- [ ] **Actions 绿（run 36545873665 = failure，修复中——见"CI 失败修复"）**
+- [x] **Actions 绿（run 36563287848 = run #42，HEAD 4312087 = success）——阶段20 完成**
 
-## CI 失败修复（round1 run 36545873665 / round2 run 36558569975 均 failure，修复中）
-- round1（8032ee0）5 FAIL：DotKill/PickupDb/DropExpire（A 未 Buff → CI 慢机攻击循环拉长 →
-  A 被围殴致死 → 级联，已修复验证）+ DialogueSessionTtl/MoveOutOfRange（单次交互超时）。
-- round2（759f7d9）仅剩 Dialogue 2 FAIL。[Diag] 实锤：重进世界后商人 5002（entity 2，
-  cell(1,0)）12s+ 不进 visibleNpcs；长老 5001（cell(0,0)）正常。服务器静态排查无果
-  （QueryRange/NpcEntity/Grid/Manager/Start/Stop/AOI tick 全部正确；种子位 (360,300)）。
-- round3：重进后 move+wait（(372,306)+600ms，同死亡检查通过模式）+ 可见性等待 8s +
-  失败时打印服务器状态（pos/map/visibleNpcs）+ workflow diag 上限 12。详见 TRAE_CONTINUATION_CONTEXT。
+## CI 失败修复（阶段20 收尾，3 轮完成）
+- round1（8032ee0，run 36545873665）5 FAIL：DotKill/PickupDb/DropExpire（A 未 Buff → CI 慢机
+  攻击循环拉长 → A 被围殴致死 → 级联）+ DialogueSessionTtl/MoveOutOfRange。
+  修复：击杀循环前 TestBuffPlayerHp(1e6)×2、DOT 循环 30s、过期事件等待 3s。
+- round2（759f7d9，run 36558569975）仅剩 Dialogue 2 FAIL。[Diag] 实锤：重进世界后商人 5002
+  （entity 2，cell(1,0)）12s+ 不进 visibleNpcs；长老 5001（cell(0,0)）正常。服务器静态排查无果。
+- round3（4312087，run 36563287848 = success）：重进后 move+wait（(372,306)+600ms，同死亡
+  检查通过模式）+ 可见性等待 8s + 失败时打印服务器状态 + workflow [Diag] 注解通道（上限 12）。
+- 经验：CI（2 核慢机）时序与本地差异大——测试内所有"静止后立即交互/长循环中间不设防死亡"
+  模式都必须按最坏时序加固；[FAIL] 行内嵌诊断 + [Diag] 注解通道是无 token 排查的唯一手段
+  （GitHub 每步仅保留前 10 条 error 注解，emission 顺序 = names→FAIL→Diag→tail）。
 
 ## 本阶段编译修复记录
 - NpcError.h 缺 `#include "Shared/Npc/NpcTypes.h"`（Client 侧 81 个 C2065/C2653）

@@ -5,15 +5,22 @@
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
-- HEAD SHA: 8032ee0cee3a45dc5d8e9def863a65dc153946f6（阶段20 正式提交，已推送）
-- 本地: `d:\LegendGame-main`（**本机无中文路径仓库**；本目录 2026-09-29 由 ZIP 快照 git init
-  + fetch + reset --mixed origin/main 重建，工作区与远端一致；push 走 SOCKS5 10808）
-- 当前阶段: **阶段20 收尾——CI run 36545873665（8032ee0）= failure，WorldTests 5 FAIL 修复中**
-- 阶段目标: 见 CURRENT_STAGE.md（编码全部完成；唯一剩余 = Actions 绿）
+- HEAD SHA: 4312087748026aadb262e1bbeb341dfafeaf4f33（阶段20 CI 修复最终提交）
+- 本地: `d:\LegendGame-main`（本目录 2026-09-29 由 ZIP 快照 git init + fetch + reset --mixed
+  origin/main 重建；push 走 SOCKS5 10808；git 身份已按远端作者配置 user.name/email）
+- 当前阶段: **阶段20 —— 完成（run 36563287848 = run #42 = success）**
+- 阶段目标: 见 CURRENT_STAGE.md（全部完成）
 - 阶段禁止项: 复杂剧情分支/Lua 脚本/动态 NPC/NPC 战斗 AI/NPC 死亡/护送/摆摊/拍卖行/玩家交易/
   仓库/强化/锻造/耐久/公会/转职/声望/每日商店/动态物价/共享 NPC 状态/语音/Cutscene/电影镜头
-- CI 修复 commit msg: `fix(test): stabilize world checks against slow ci runners`
-- 完成后停止，不进入阶段21
+- 完成后停止，不进入阶段21（下一阶段 = 阶段21，待新指令）
+
+## CI 修复历史（阶段20 收尾，3 轮）
+- round1 8032ee0 run 36545873665 failure：5 FAIL → A 未 Buff 级联（inventory 3 个）已修。
+- round2 759f7d9 run 36558569975 failure：剩 Dialogue 2 FAIL（商人 5002 重进后不可见）。
+- round3 4312087 run 36563287848 **success**：重进后 move+wait + 可见性等待 8s + [Diag] 状态。
+- 本地验证：三套件全绿（World 434 checks 级 / Network / Account 均 0 FAIL）。
+- CI 调试方法论沉淀：[FAIL] 行内嵌诊断 + [Diag] 注解通道（每步前 10 条 error 注解；
+  emission 顺序 names→FAIL→Diag→tail）；CI 慢机下"静止重进直接交互"必须 move+wait。
 
 ## 已完成任务
 - Shared 四模块（Npc/Dialogue/Shop/Teleport，MessageId 320~334）+ QuestDefinition start/turnInNpc + SkillCancelReason::Teleported
@@ -65,15 +72,12 @@
   GitHub 每步仅保留前 10 条 error 注解（emission 顺序 = names→FAIL→Diag→tail）。
 
 ## 下一步
-1. 本地 WorldTests 0 FAIL → commit `fix(test): stabilize world checks against slow ci runners` → push（SOCKS5）
-2. 等 Actions；若 Dialogue 2 检查仍 FAIL：读 [Diag] state 行（pos/visibleNpcs）定位——
-   visibleNpcs 缺 2 → 查 grid/add 路径；player-missing → 查会话生命周期；pos 远 → 存档竞态
-3. 成功后更新 CURRENT_STAGE 测试结果与 Actions 状态；最终汇报；完成后停止，不进入阶段21
+- 阶段20 已完成（CI 绿），按纪律停止，不进入阶段21
+- 新会话续接时：读本文件 + 三上下文文件 → git status / log 确认 → 等待用户阶段21指令
 
 ## git status（写入时点）
-- 分支 main，HEAD=8032ee0 与 origin/main 一致；CI 修复改动（WorldInventoryChecks/
-  WorldNpcChecks/windows-build.yml/CURRENT_STAGE/TRAE_CONTINUATION_CONTEXT）待提交
+- 分支 main，HEAD=4312087 与 origin/main 一致，工作区干净（本文档更新随最终 docs 提交入库）
 
 ## Actions 状态
-- 最新：run 36545873665（8032ee0）= **failure**（WorldTests 5 FAIL，修复中）
-- 前一：run 36527767372（a674786）= success（阶段19）
+- 最新：run 36563287848（4312087，run #42）= **success**（阶段20 完成）
+- 历史：36558569975（759f7d9）= failure；36545873665（8032ee0）= failure；36527767372（a674786）= success
