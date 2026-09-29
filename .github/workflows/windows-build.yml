@@ -55,6 +55,32 @@ jobs:
           name: ctest-log
           path: ctest.log
           if-no-files-found: warn
+      - name: Emit failure diagnostics (annotations)
+        if: failure()
+        shell: pwsh
+        run: |
+          # 注解 API 公开可读（无 token 排查通道）：FAILED 测试名 + FAIL 检查行。
+          $log = Get-Content ctest.log
+          $inFailed = $false
+          $count = 0
+          foreach ($line in $log) {
+            if ($line -match 'The following tests FAILED:') { $inFailed = $true; continue }
+            if ($inFailed -and $count -lt 6) {
+              if ($line.Trim().Length -gt 0) {
+                Write-Host "::error::$($line.Trim())"
+                ++$count
+              }
+              if ($line -match 'tests (failed|passed)') { break }
+            }
+          }
+          $fails = $log | Select-String '^\[FAIL\]' | Select-Object -Last 6
+          foreach ($f in $fails) {
+            Write-Host "::error::$($f.Line.Substring(0, [Math]::Min(220, $f.Line.Length)))"
+          }
+          $tail = $log | Select-Object -Last 12
+          foreach ($line in $tail) {
+            Write-Host "::error::$($line.Substring(0, [Math]::Min(220, $line.Length)))"
+          }
       - name: Runtime gate result
         shell: pwsh
         run: |
