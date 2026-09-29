@@ -1,4 +1,4 @@
-#include "Client/WorldNetwork/WorldNetworkClient.h"
+﻿#include "Client/WorldNetwork/WorldNetworkClient.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
@@ -158,6 +158,52 @@ void WorldNetworkClient::SendSkillCast(std::uint64_t requestId, std::uint32_t sk
     Packet out;
     out.header.messageId = static_cast<std::uint16_t>(MessageId::SkillCastRequest);
     if (world::EncodeSkillCastRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段18：拾取/装备/卸下请求（Client 只发 id/槽位，数值全部服务器权威）
+// ---------------------------------------------------------------------------
+
+void WorldNetworkClient::SendItemPickup(std::uint64_t requestId, std::uint64_t dropEntityId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::ItemPickupRequestPayload request;
+    request.requestId = requestId;
+    request.dropEntityId = dropEntityId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ItemPickupRequest);
+    if (world::EncodeItemPickupRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendEquipItem(std::uint64_t requestId, std::uint32_t slotIndex) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::EquipItemRequestPayload request;
+    request.requestId = requestId;
+    request.slotIndex = slotIndex;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::EquipItemRequest);
+    if (world::EncodeEquipItemRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendUnequipItem(std::uint64_t requestId, std::uint8_t equipmentSlot) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::UnequipItemRequestPayload request;
+    request.requestId = requestId;
+    request.equipmentSlot = equipmentSlot;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::UnequipItemRequest);
+    if (world::EncodeUnequipItemRequest(request, out.payload)) {
         m_connection->Send(out);
     }
 }
@@ -783,6 +829,145 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.progression.expToNext = payload.expToNext;
             event.progression.newGold = payload.gold;
             event.progression.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // 阶段18：掉落/背包/装备（Client 只做镜像）
+        // ------------------------------------------------------------------
+        case MessageId::WorldItemSpawn: {
+            world::WorldItemSpawnPayload payload;
+            std::string decodeError;
+            if (!world::DecodeWorldItemSpawn(packet.payload.data(), packet.payload.size(),
+                                            payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::WorldItemSpawnEvent;
+            event.dropEntityId = payload.dropEntityId;
+            event.itemDefinitionId = payload.itemDefinitionId;
+            event.itemQuantity = payload.quantity;
+            event.mapId = payload.mapId;
+            event.positionX = payload.x;
+            event.positionY = payload.y;
+            event.itemOwnedByYou = payload.isOwnedByYou;
+            event.ownerLockRemainingMs = payload.ownerLockRemainingMs;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::WorldItemDespawn: {
+            world::WorldItemDespawnPayload payload;
+            std::string decodeError;
+            if (!world::DecodeWorldItemDespawn(packet.payload.data(), packet.payload.size(),
+                                              payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::WorldItemDespawnEvent;
+            event.dropEntityId = payload.dropEntityId;
+            event.itemDespawnReason = payload.reason;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ItemPickupResponse: {
+            world::ItemPickupResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeItemPickupResponse(packet.payload.data(), packet.payload.size(),
+                                                payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ItemPickupResponseEvent;
+            event.requestId = payload.requestId;
+            event.dropEntityId = payload.dropEntityId;
+            event.success = payload.success;
+            event.itemResultCode = payload.resultCode;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::InventorySnapshot: {
+            world::InventorySnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeInventorySnapshot(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::InventorySnapshotEvent;
+            event.characterId = payload.characterId;
+            event.inventoryEntries = payload.entries;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::InventoryDelta: {
+            world::InventoryDeltaPayload payload;
+            std::string decodeError;
+            if (!world::DecodeInventoryDelta(packet.payload.data(), packet.payload.size(),
+                                            payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::InventoryDeltaEvent;
+            event.characterId = payload.characterId;
+            event.inventoryInstanceId = payload.entry.instanceId;
+            event.itemDefinitionId = payload.entry.definitionId;
+            event.itemQuantity = payload.entry.quantity;
+            event.inventorySlotIndex = payload.entry.slotIndex;
+            event.inventoryOpcode = payload.opcode; // 1=Set 2=Remove
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::EquipItemResponse: {
+            world::EquipItemResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeEquipItemResponse(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::EquipItemResponseEvent;
+            event.requestId = payload.requestId;
+            event.success = payload.success;
+            event.itemResultCode = payload.resultCode;
+            event.itemEquipmentSlot = payload.equipmentSlot;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::UnequipItemResponse: {
+            world::UnequipItemResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeUnequipItemResponse(packet.payload.data(), packet.payload.size(),
+                                                 payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::UnequipItemResponseEvent;
+            event.requestId = payload.requestId;
+            event.success = payload.success;
+            event.itemResultCode = payload.resultCode;
+            event.itemEquipmentSlot = payload.equipmentSlot;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::EquipmentSnapshot: {
+            world::EquipmentSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeEquipmentSnapshot(packet.payload.data(), packet.payload.size(),
+                                               payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::EquipmentSnapshotEvent;
+            event.characterId = payload.characterId;
+            event.equipmentSnapshot = payload;
+            event.serverTime = payload.serverTime;
             PushEvent(std::move(event));
             return;
         }

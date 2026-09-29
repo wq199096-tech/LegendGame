@@ -66,6 +66,17 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::RewardGranted: return "RewardGranted";
         case MessageId::LevelUpEvent: return "LevelUpEvent";
         case MessageId::ProgressionSnapshot: return "ProgressionSnapshot";
+        case MessageId::WorldItemSpawn: return "WorldItemSpawn";
+        case MessageId::WorldItemDespawn: return "WorldItemDespawn";
+        case MessageId::ItemPickupRequest: return "ItemPickupRequest";
+        case MessageId::ItemPickupResponse: return "ItemPickupResponse";
+        case MessageId::InventorySnapshot: return "InventorySnapshot";
+        case MessageId::InventoryDelta: return "InventoryDelta";
+        case MessageId::EquipItemRequest: return "EquipItemRequest";
+        case MessageId::EquipItemResponse: return "EquipItemResponse";
+        case MessageId::UnequipItemRequest: return "UnequipItemRequest";
+        case MessageId::UnequipItemResponse: return "UnequipItemResponse";
+        case MessageId::EquipmentSnapshot: return "EquipmentSnapshot";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

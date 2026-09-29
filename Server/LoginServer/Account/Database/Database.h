@@ -29,6 +29,9 @@ public:
     // 执行无结果 SQL（DDL/PRAGMA/事务控制）。错误信息进 error（不直接下发客户端）。
     bool Execute(const char* sql, std::string& error);
 
+    // 阶段18 指令九：INSERT 后取 INTEGER PRIMARY KEY rowid（DB Worker 线程内调用）。
+    std::int64_t LastInsertRowid() const;
+
 private:
     sqlite3* m_db = nullptr;
     std::string m_path;

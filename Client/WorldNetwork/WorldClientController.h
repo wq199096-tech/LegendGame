@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 
+#include "Client/WorldNetwork/RemoteItemModels.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/RemoteStatusEffectContainer.h"
@@ -70,6 +71,23 @@ public:
     std::int64_t LocalExperience() const { return m_localExperience; }
     std::int64_t LocalExpToNext() const { return m_localExpToNext; }
     std::int64_t LocalGold() const { return m_localGold; }
+
+    // ------------------------------------------------------------------
+    // 阶段18：掉落/背包/装备镜像与 Debug 操作（E/I/6/7/8/9）。
+    // ------------------------------------------------------------------
+    const RemoteWorldItemManager& WorldItems() const { return m_worldItems; }
+    const ClientInventoryModel& Inventory() const { return m_inventory; }
+    const ClientEquipmentModel& Equipment() const { return m_equipment; }
+    std::uint64_t LastPickupRequestId() const { return m_lastPickupRequestId; }
+    std::uint64_t LastEquipRequestId() const { return m_lastEquipRequestId; }
+    // Debug E：拾取指定掉落（requestId 自动单调）。
+    void SendPickup(std::uint64_t dropEntityId);
+    // Debug 6：装备背包中第一件 Weapon；7：第一件 Armor（返回是否发出请求）。
+    bool SendEquipFirstOf(std::uint32_t definitionId);
+    // Debug 8/9：卸下 Weapon/Armor 槽。
+    void SendUnequip(std::uint8_t equipmentSlot);
+    // 背包中查找第一件指定 definition 的槽位（无则返回 false）。
+    bool FindFirstBagSlotOf(std::uint32_t definitionId, std::uint32_t& outSlotIndex) const;
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -127,6 +145,13 @@ private:
     std::int64_t m_localExperience = 0;
     std::int64_t m_localExpToNext = 100;
     std::int64_t m_localGold = 0;
+    // 阶段18：掉落/背包/装备镜像 + 请求 id 计数。
+    RemoteWorldItemManager m_worldItems;
+    ClientInventoryModel m_inventory;
+    ClientEquipmentModel m_equipment;
+    std::uint64_t m_nextItemRequestId = 1;
+    std::uint64_t m_lastPickupRequestId = 0;
+    std::uint64_t m_lastEquipRequestId = 0;
 };
 
 } // namespace legend::client

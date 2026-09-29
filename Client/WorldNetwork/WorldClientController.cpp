@@ -1,4 +1,4 @@
-#include "Client/WorldNetwork/WorldClientController.h"
+﻿#include "Client/WorldNetwork/WorldClientController.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Shared/Progression/ProgressionTypes.h"
@@ -90,12 +90,18 @@ void WorldClientController::Disconnect() {
     m_client->Disconnect(true);
     m_remotePlayers.Clear();   // 阶段12 指令五十九（客户端侧）：断开清空远程实体
     m_remoteMonsters.Clear();  // 阶段13：断开清空远程怪物
+    m_worldItems.Clear();      // 阶段18：断开清空掉落/背包/装备镜像
+    m_inventory.Clear();
+    m_equipment.Clear();
     SetState(WorldFlowState::Disconnected);
 }
 
 void WorldClientController::OnDisconnected() {
     m_remotePlayers.Clear();
     m_remoteMonsters.Clear();
+    m_worldItems.Clear();
+    m_inventory.Clear();
+    m_equipment.Clear();
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -136,6 +142,9 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_lastRemoteBatchSize = 0;
             m_remoteMonsters.Clear(); // 阶段13：新世界会话不残留上次远程怪物
             m_lastMonsterBatchSize = 0;
+            m_worldItems.Clear(); // 阶段18：新会话清空掉落/背包/装备镜像（等服务器 Snapshot）
+            m_inventory.Clear();
+            m_equipment.Clear();
             // 阶段14 指令十七/六十五：本地玩家 HP 初始化（服务器权威值）。
             m_localCurrentHp = event.currentHp;
             m_localMaxHp = event.maxHp;
@@ -459,7 +468,106 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                 m_localGold = event.progression.newGold;
             }
             break;
+        // ------------------------------------------------------------------
+        // 阶段18：掉落/背包/装备镜像（Client 只是服务器状态投影，指令二十九）
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::WorldItemSpawnEvent: {
+            RemoteWorldItem item;
+            item.dropEntityId = event.dropEntityId;
+            item.itemDefinitionId = event.itemDefinitionId;
+            item.quantity = event.itemQuantity;
+            item.mapId = event.mapId;
+            item.x = event.positionX;
+            item.y = event.positionY;
+            item.isOwnedByYou = event.itemOwnedByYou;
+            item.ownerLockRemainingMs = event.ownerLockRemainingMs;
+            m_worldItems.OnSpawn(item);
+            LOG_DEBUG("[Item] WorldItemSpawn drop=" + std::to_string(event.dropEntityId) +
+                      " item=" + std::to_string(event.itemDefinitionId));
+            break;
+        }
+        case WorldNetworkEvent::Type::WorldItemDespawnEvent:
+            // 指令四十八：Despawn 即移除（不保留幽灵掉落）。
+            m_worldItems.OnDespawn(event.dropEntityId);
+            LOG_DEBUG("[Item] WorldItemDespawn drop=" + std::to_string(event.dropEntityId) +
+                      " reason=" + std::to_string(static_cast<int>(event.itemDespawnReason)));
+            break;
+        case WorldNetworkEvent::Type::ItemPickupResponseEvent:
+            LOG_DEBUG("[Item] PickupResponse drop=" + std::to_string(event.dropEntityId) +
+                      " success=" + (event.success ? "1" : "0") + " code=" +
+                      std::to_string(static_cast<int>(event.itemResultCode)));
+            break;
+        case WorldNetworkEvent::Type::InventorySnapshotEvent:
+            if (event.characterId == m_characterId) {
+                m_inventory.ApplySnapshot(event.inventoryEntries);
+            }
+            break;
+        case WorldNetworkEvent::Type::InventoryDeltaEvent:
+            if (event.characterId == m_characterId) {
+                world::InventoryEntryData entry;
+                entry.instanceId = event.inventoryInstanceId;
+                entry.definitionId = event.itemDefinitionId;
+                entry.quantity = event.itemQuantity;
+                entry.slotIndex = event.inventorySlotIndex;
+                m_inventory.ApplyDelta(event.inventoryOpcode, entry);
+            }
+            break;
+        case WorldNetworkEvent::Type::EquipItemResponseEvent:
+        case WorldNetworkEvent::Type::UnequipItemResponseEvent:
+            LOG_DEBUG("[Item] Equip/Unequip response success=" + std::string(event.success ? "1" : "0") +
+                      " code=" + std::to_string(static_cast<int>(event.itemResultCode)));
+            break;
+        case WorldNetworkEvent::Type::EquipmentSnapshotEvent:
+            if (event.characterId == m_characterId) {
+                m_equipment.ApplySnapshot(event.equipmentSnapshot);
+            }
+            break;
     }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段18：Debug 操作（E 拾取 / 6/7 装备 / 8/9 卸下；requestId 单调防重放）
+// ---------------------------------------------------------------------------
+
+void WorldClientController::SendPickup(std::uint64_t dropEntityId) {
+    if (!IsWorldReady() || dropEntityId == 0) {
+        return;
+    }
+    m_lastPickupRequestId = m_nextItemRequestId++;
+    m_client->SendItemPickup(m_lastPickupRequestId, dropEntityId);
+}
+
+bool WorldClientController::FindFirstBagSlotOf(std::uint32_t definitionId,
+                                               std::uint32_t& outSlotIndex) const {
+    for (std::size_t i = 0; i < ClientInventoryModel::kSlots; ++i) {
+        const auto& slot = m_inventory.Slot(i);
+        if (slot.quantity > 0 && slot.definitionId == definitionId) {
+            outSlotIndex = static_cast<std::uint32_t>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorldClientController::SendEquipFirstOf(std::uint32_t definitionId) {
+    if (!IsWorldReady()) {
+        return false;
+    }
+    std::uint32_t slotIndex = 0;
+    if (!FindFirstBagSlotOf(definitionId, slotIndex)) {
+        return false;
+    }
+    m_lastEquipRequestId = m_nextItemRequestId++;
+    m_client->SendEquipItem(m_lastEquipRequestId, slotIndex);
+    return true;
+}
+
+void WorldClientController::SendUnequip(std::uint8_t equipmentSlot) {
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_lastEquipRequestId = m_nextItemRequestId++;
+    m_client->SendUnequipItem(m_lastEquipRequestId, equipmentSlot);
 }
 
 void WorldClientController::HandleStatusEvent(const WorldNetworkEvent& event) {

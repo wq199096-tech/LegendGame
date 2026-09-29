@@ -58,6 +58,32 @@ const char* kMigration2Statements[] = {
     "ALTER TABLE characters ADD COLUMN gold INTEGER NOT NULL DEFAULT 0;",
 };
 
+// 阶段18 指令八：Migration 3 —— inventory_items / character_equipment。
+// instance_id = INTEGER PRIMARY KEY AUTOINCREMENT（指令九：持久唯一，重启不碰撞）；
+// 装备中的物品保留行，slot_index = 1000 + equipment_slot（1001 Weapon / 1002 Armor）；
+// character_equipment.item_instance_id 外键引用 inventory_items(instance_id)。
+const char* kMigration3Statements[] = {
+    "CREATE TABLE IF NOT EXISTS inventory_items ("
+    "  instance_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  character_id INTEGER NOT NULL,"
+    "  item_definition_id INTEGER NOT NULL,"
+    "  quantity INTEGER NOT NULL,"
+    "  slot_index INTEGER NOT NULL,"
+    "  created_at INTEGER NOT NULL,"
+    "  FOREIGN KEY(character_id) REFERENCES characters(id)"
+    ");",
+    "CREATE INDEX IF NOT EXISTS idx_inventory_items_character_id "
+    "ON inventory_items(character_id);",
+    "CREATE TABLE IF NOT EXISTS character_equipment ("
+    "  character_id INTEGER NOT NULL,"
+    "  equipment_slot INTEGER NOT NULL,"
+    "  item_instance_id INTEGER NOT NULL,"
+    "  PRIMARY KEY(character_id, equipment_slot),"
+    "  FOREIGN KEY(character_id) REFERENCES characters(id),"
+    "  FOREIGN KEY(item_instance_id) REFERENCES inventory_items(instance_id)"
+    ");",
+};
+
 struct Migration {
     int version;
     const char* const* statements;
@@ -67,6 +93,7 @@ struct Migration {
 const Migration kMigrations[] = {
     {1, kMigration1Statements, static_cast<int>(std::size(kMigration1Statements))},
     {2, kMigration2Statements, static_cast<int>(std::size(kMigration2Statements))},
+    {3, kMigration3Statements, static_cast<int>(std::size(kMigration3Statements))},
 };
 
 // ---------------------------------------------------------------------------

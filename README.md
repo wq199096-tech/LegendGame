@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Progression/Reward/Respawn Core V0.17**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Loot/Inventory/Equipment Core V0.18**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -335,6 +335,45 @@ SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发
   持久化）
 - **MoveMonsterTo 语义**：测试布景搬移怪物 = "重新安家"，同步更新 Respawn slot 出生点
   （respawn 发生在当前 home，与 SpatialGrid/AOI 一致）
+
+**服务器权威掉落、背包与装备（阶段18：Loot/Inventory/Equipment Core V0.18）**：
+
+- **100% 服务器权威**：掉落结果/物品实例/拾取/背包/装备/属性加成全部由 WorldServer 决定；
+  Client 只发 requestId + dropEntityId/slotIndex（不能上报 definitionId/quantity/position/
+  instanceId），背包/装备只是服务器 Snapshot/Delta 的镜像
+- **3 个 ItemDefinition**（`Shared/Item/` + `Server/WorldServer/Item/ItemRegistry` 硬编码）：
+  3001 Rusty Sword（Weapon，Attack +3）/ 3002 Cloth Armor（Armor，Defense +2）/
+  3003 Slime Core（Material，堆叠 99）；协议 290~300（WorldItemSpawn/Despawn、
+  ItemPickup、InventorySnapshot/Delta、Equip/Unequip、EquipmentSnapshot）
+- **Drop Table**（Training Slime）：Slime Core 100% ×1 / Rusty Sword 20% / Cloth Armor 20%
+  （Gold 走阶段17）；DropRoller 可注入 RNG（生产 mt19937_64，测试固定 seed 可复现，
+  CI 不因概率失败）；掉落位置 = 死亡位置 + 轻微确定性偏移
+- **Owner Lock 10s + TTL 60s**：击杀者（含离线/DOT source）独占 10s 后公共拾取；60s 无人
+  拾取服务器删除（Expired）；统一 Drop cleanup Tick 500ms（不建 per-drop Timer）；
+  World Drop runtime-only 不持久化（重启清空、NoWorldDropPersistence）
+- **Pickup range 100**：拾取校验链 = alive → 防重放(64) → drop 存在 → visibleItemDrops
+  （服务器 AOI 权威）→ 同图 → 距离 ≤100 → owner 允许 → 背包有空间；remove-before-grant
+  （single-thread world authority + claim 原子）防两玩家同帧争抢同一 Drop（必有一个失败）；
+  DB 失败自动回滚恢复 Drop（不能吞物品）
+- **Inventory 40 格**（InventoryContainer）：服务器权威；Slime Core 同 definition 优先
+  堆叠（≤99，溢出新格）；只并入已持久化堆叠（避免 DB 回填前竞争）；进世界下发完整
+  InventorySnapshot，变更走 InventoryDelta（Set/Remove）
+- **SQLite 持久化**（Migration 3：inventory_items + character_equipment，旧库自动升级）：
+  instance_id = INTEGER PRIMARY KEY AUTOINCREMENT（持久唯一，重启不碰撞）；装备中物品
+  slot_index = 1000+槽位；Equip/Unequip/Pickup 一律事务化（prepared statements + FK +
+  BEGIN IMMEDIATE）；DbWorker 异步落库（io 线程禁止同步 SQLite）
+- **Weapon/Armor 装备槽**（EquipmentService 纯逻辑 + WorldServer 编排）：Equip 原子替换
+  （旧装备回新装备腾出的原槽）；Unequip 背包满失败且装备保持不变；装备 quantity 恒 1；
+  Material 拒绝装备
+- **Derived Stats 集成**：EffectiveAttack = Base/Level + Equipment + Status（统一
+  RecalculateDerivedStats 入口，不覆盖状态加成）；lv1 + 剑 +3 + Battle Focus +10 = 33；
+  普攻与技能（QuickStrike 等）全部使用 Effective 值；装备/卸下即时重算
+- **防重放**：最近 64 个成功 Pickup/Equip/Unequip requestId（失败请求允许重试；重复请求
+  不重复获得物品/不重复变更装备）
+- **客户端镜像**（`Client/WorldNetwork/RemoteItemModels.h`）：RemoteWorldItemManager/
+  ClientInventoryModel/ClientEquipmentModel——只展示服务器 Spawn 过的掉落（Despawn 即移除，
+  不凭空创建）；Debug 键 E 拾取最近 100 内掉落 / I 输出背包 / 6/7 装备剑·甲 / 8/9 卸下
+  Weapon·Armor；F12 显示 Inventory Used/40、Weapon/Armor、Effective Attack/Defense
 
 ## Engine V0.2 操作说明
 

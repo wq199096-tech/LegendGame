@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Server/WorldServer/Item/InventoryContainer.h"
 #include "Server/WorldServer/Status/StatusEffectContainer.h"
 
 #include "Shared/Combat/CombatTypes.h"
@@ -241,6 +242,56 @@ public:
     StatusEffectContainer& StatusEffects() { return m_statusEffects; }
     const StatusEffectContainer& StatusEffects() const { return m_statusEffects; }
 
+    // ------------------------------------------------------------------
+    // 阶段18 指令十八：可见掉落集合（dropEntityId，WorldServer 权威维护）。
+    // ------------------------------------------------------------------
+    const std::unordered_set<std::uint64_t>& VisibleItemDrops() const {
+        return m_visibleItemDrops;
+    }
+    void AddVisibleItemDrop(std::uint64_t dropEntityId) { m_visibleItemDrops.insert(dropEntityId); }
+    bool EraseVisibleItemDrop(std::uint64_t dropEntityId) {
+        return m_visibleItemDrops.erase(dropEntityId) != 0;
+    }
+    void ClearVisibleItemDrops() { m_visibleItemDrops.clear(); }
+
+    // ------------------------------------------------------------------
+    // 阶段18 指令六/七：服务器权威背包 + 装备槽（io 线程；持久化经 DbWorker）。
+    // ------------------------------------------------------------------
+    InventoryContainer& Inventory() { return m_inventory; }
+    const InventoryContainer& Inventory() const { return m_inventory; }
+    EquipmentSlots& EquipmentRef() { return m_equipment; }
+    const EquipmentSlots& EquipmentRef() const { return m_equipment; }
+    // 指令三十一：装备加成（Derived 重算时并入 Base）。
+    std::uint32_t EquipmentAttackBonus() const {
+        return m_equipment.weapon.quantity > 0 ? m_equippedWeaponAttack : 0;
+    }
+    std::uint32_t EquipmentDefenseBonus() const {
+        return m_equipment.armor.quantity > 0 ? m_equippedArmorDefense : 0;
+    }
+    // WorldServer 装备变化后刷新加成缓存（由 ItemRegistry 查询结果写入）。
+    void SetEquipmentBonuses(std::uint32_t attack, std::uint32_t defense) {
+        m_equippedWeaponAttack = attack;
+        m_equippedArmorDefense = defense;
+    }
+
+    // ------------------------------------------------------------------
+    // 阶段18 指令三十六/三十七：最近 64 个成功 Pickup/Equip/Unequip requestId
+    //（防重放：重复请求不重复获得物品/不重复变更装备）。
+    // ------------------------------------------------------------------
+    bool IsRecentItemRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentItemRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberItemRequest(std::uint64_t requestId) {
+        m_recentItemRequestIds[m_recentItemRequestCursor] = requestId;
+        m_recentItemRequestCursor =
+            (m_recentItemRequestCursor + 1) % m_recentItemRequestIds.size();
+    }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -293,6 +344,15 @@ private:
     // 阶段17 指令二：成长数据（level 已在 m_level；exp/gold 服务器权威 + DB 持久化）。
     std::int64_t m_experience = 0;
     std::int64_t m_gold = 0;
+
+    // 阶段18：可见掉落 / 服务器权威背包 / 装备槽（io 线程）。
+    std::unordered_set<std::uint64_t> m_visibleItemDrops;
+    InventoryContainer m_inventory;
+    EquipmentSlots m_equipment;
+    std::uint32_t m_equippedWeaponAttack = 0; // 装备攻击加成缓存（Registry 查询结果）
+    std::uint32_t m_equippedArmorDefense = 0; // 装备防御加成缓存
+    std::array<std::uint64_t, kAttackRequestHistorySize> m_recentItemRequestIds{};
+    std::size_t m_recentItemRequestCursor = 0;
 };
 
 } // namespace legend::world

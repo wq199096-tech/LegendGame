@@ -14,6 +14,7 @@ using namespace worldtest;
 // 阶段15 指令九十九：技能检查入口（WorldSkillChecks.cpp，自带 servers 生命周期）。
 // 阶段16 指令八十四：状态效果检查入口（WorldStatusChecks.cpp，自带 servers 生命周期）。
 // 阶段17 指令三十二：成长/奖励/重生检查入口（WorldProgressionChecks.cpp）。
+// 阶段18：掉落/背包/装备检查入口（WorldInventoryChecks.cpp）。
 namespace worldtest {
 void RunWorldAoiChecks();
 void RunWorldMonsterChecks();
@@ -21,6 +22,7 @@ void RunWorldCombatChecks();
 void RunWorldSkillChecks();
 void RunWorldStatusChecks();
 void RunWorldProgressionChecks();
+void RunWorldInventoryChecks();
 }
 
 namespace {
@@ -860,6 +862,9 @@ int main() {
 
     // ---- 阶段17 成长/奖励/重生检查（独立 servers 生命周期） ----
     RunWorldProgressionChecks();
+
+    // ---- 阶段18 掉落/背包/装备检查（独立 servers 生命周期） ----
+    RunWorldInventoryChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
@@ -7,6 +7,10 @@
 #include "Server/LoginServer/Account/Database/Database.h"
 #include "Server/LoginServer/Account/DbWorker.h"
 #include "Server/WorldServer/AOI/WorldSpatialGrid.h"
+#include "Server/WorldServer/Item/DropRoller.h"
+#include "Server/WorldServer/Item/InventoryRepository.h"
+#include "Server/WorldServer/Item/ItemRegistry.h"
+#include "Server/WorldServer/Item/WorldItemDrop.h"
 #include "Server/WorldServer/Monster/MonsterAi.h"
 #include "Server/WorldServer/Monster/MonsterManager.h"
 #include "Server/WorldServer/Monster/MonsterRespawnManager.h"
@@ -23,6 +27,8 @@
 
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/Item/ItemProtocol.h"
+#include "Shared/Item/ItemTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/Progression/ProgressionProtocol.h"
 #include "Shared/Skill/SkillProtocol.h"
@@ -88,6 +94,16 @@ public:
         std::uint32_t respawnDelayMs = 8000;
         // 阶段17 指令十五：ProgressionSnapshot 纠偏周期（30s，发给本人）
         int progressionSnapshotIntervalMs = 30000;
+        // 阶段18 指令四十三：Drop cleanup tick 500ms（统一轮询，不每 drop 一个 Timer）
+        int itemDropTickMs = 500;
+        // 阶段18 指令十五/十六/二十二：Owner lock 10s / TTL 60s / 拾取距离 100
+        std::uint32_t itemOwnerLockMs = kItemOwnerLockMs;
+        std::uint32_t itemDropTtlMs = kItemDropTtlMs;
+        float itemPickupRange = kItemPickupRange;
+        // 阶段18 指令十一：DropRoller 种子（0 = 随机）；测试固定 seed 可复现。
+        std::uint64_t dropRollerSeed = 0;
+        // 阶段18 测试专用：掉落表按 100% 掷骰（链路完全不变，仅概率确定性）。
+        bool testForceDropAll = false;
     };
 
     struct Hooks {
@@ -194,6 +210,61 @@ public:
     void RunRespawnTick();
     std::shared_ptr<MonsterEntity> SpawnMonsterAtSlot(const MonsterSpawnSlot& slot,
                                                       std::uint64_t entityId);
+
+    // 阶段18：服务器权威掉落/背包/装备（Client 不能决定，指令一）
+    // 指令三十九：MonsterDeath 时 GenerateLoot（在阶段17 Reward 之后）。
+    void GenerateMonsterDrops(const std::shared_ptr<MonsterEntity>& monster,
+                              std::uint64_t killerCharacterId);
+    // 指令四十三：Drop cleanup tick（TTL 过期）。
+    void ScheduleItemDropTick();
+    void RunItemDropTick();
+    // 指令十八：Drop AOI（Enter 600 / Leave 700，visibleItemDrops 权威维护）。
+    void UpdatePlayerItemDropVisibility(const std::shared_ptr<PlayerSession>& player,
+                                        bool initialVisibility);
+    void NotifyItemDropGoneToObservers(std::uint64_t dropEntityId,
+                                       ItemDespawnReason reason);
+    void SendWorldItemSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                            const WorldItemDrop& drop);
+    void SendWorldItemDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                              std::uint64_t dropEntityId, ItemDespawnReason reason);
+    // 指令二十一~二十五：拾取校验/原子 claim/DB 事务/失败回滚。
+    void HandleItemPickupRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void SendItemPickupResponse(const std::shared_ptr<PlayerSession>& player,
+                                std::uint64_t requestId, std::uint64_t dropEntityId, bool success,
+                                ItemResultCode code);
+    // 指令二十七/三十三/三十四：装备/卸下（原子 + Derived 统一重算）。
+    void HandleEquipItemRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleUnequipItemRequest(std::uint64_t connectionId,
+                                  const legend::network::Packet& packet);
+    void SendEquipItemResponse(const std::shared_ptr<PlayerSession>& player,
+                               std::uint64_t requestId, bool success, ItemResultCode code,
+                               EquipmentSlot slot);
+    void SendUnequipItemResponse(const std::shared_ptr<PlayerSession>& player,
+                                 std::uint64_t requestId, bool success,
+                                 ItemResultCode code, EquipmentSlot slot);
+    // 指令二十八/二十九：Snapshot/Delta 同步（Client 只是镜像）。
+    void SendInventorySnapshot(const std::shared_ptr<PlayerSession>& player);
+    void SendInventoryDelta(const std::shared_ptr<PlayerSession>& player, std::uint8_t opcode,
+                            const InventoryEntry& entry, std::uint32_t slotIndex);
+    void SendEquipmentSnapshot(const std::shared_ptr<PlayerSession>& player);
+    // 指令三十一/三十二：装备加成并入 Derived（统一 RecalculateDerivedStats 入口）。
+    void RefreshEquipmentBonuses(const std::shared_ptr<PlayerSession>& player);
+    // 进入世界加载持久化背包/装备（DB Worker 线程任务里调用，io 线程应用结果）。
+    void ApplyLoadedItems(const std::shared_ptr<PlayerSession>& player,
+                          const std::vector<InventoryRepository::InventoryRow>& rows);
+    // 测试/运维访问器（白盒）。
+    std::size_t WorldItemDropCount() const { return m_itemDrops.Count(); }
+    const WorldItemDrop* FindItemDrop(std::uint64_t dropEntityId) const {
+        return m_itemDrops.Find(dropEntityId);
+    }
+    std::uint64_t NextItemDropIdForTest() const { return m_nextItemDropId; }
+    // 阶段18 测试布景辅助（全部经 m_service.Post 投递 io 线程，与游戏逻辑串行）。
+    bool TestSpawnDrop(float x, float y, std::uint16_t mapId, std::uint64_t ownerCharacterId,
+                       std::uint32_t definitionId);
+    bool TestEraseVisibleItemDrop(std::uint64_t characterId, std::uint64_t dropEntityId);
+    bool TestAddVisibleItemDrop(std::uint64_t characterId, std::uint64_t dropEntityId);
+    bool TestFillInventory(std::uint64_t characterId);
+    bool TestMarkPlayerDead(std::uint64_t characterId);
 
 private:
     struct PendingTicket {
@@ -364,6 +435,13 @@ private:
     MonsterRespawnManager m_respawnManager;
     asio::steady_timer m_respawnTimer;     // 指令二十四：Respawn Tick 250ms
     asio::steady_timer m_progressionTimer; // 指令十五：30s ProgressionSnapshot 纠偏
+
+    // 阶段18：物品/掉落/背包（runtime；背包/装备持久化，World Drop 不持久化）。
+    ItemRegistry m_itemRegistry;
+    std::unique_ptr<DropRoller> m_dropRoller; // 指令十一：可注入 RNG
+    WorldItemDropManager m_itemDrops;         // 指令十二/十七：Drop 容器 + Spatial Grid
+    std::uint64_t m_nextItemDropId = 1;       // 指令十三：dropEntityId 单调（≠ instanceId）
+    asio::steady_timer m_itemDropTimer;       // 指令四十三：Drop cleanup tick 500ms
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;

@@ -81,6 +81,18 @@ enum class MessageId : std::uint16_t {
     RewardGranted = 280,
     LevelUpEvent = 281,
     ProgressionSnapshot = 282,
+    // 阶段18：服务器权威物品/掉落/背包/装备（290~300）。
+    WorldItemSpawn = 290,
+    WorldItemDespawn = 291,
+    ItemPickupRequest = 292,
+    ItemPickupResponse = 293,
+    InventorySnapshot = 294,
+    InventoryDelta = 295,
+    EquipItemRequest = 296,
+    EquipItemResponse = 297,
+    UnequipItemRequest = 298,
+    UnequipItemResponse = 299,
+    EquipmentSnapshot = 300,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -194,6 +206,17 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::RewardGranted:
         case MessageId::LevelUpEvent:
         case MessageId::ProgressionSnapshot:
+        case MessageId::WorldItemSpawn:
+        case MessageId::WorldItemDespawn:
+        case MessageId::ItemPickupRequest:
+        case MessageId::ItemPickupResponse:
+        case MessageId::InventorySnapshot:
+        case MessageId::InventoryDelta:
+        case MessageId::EquipItemRequest:
+        case MessageId::EquipItemResponse:
+        case MessageId::UnequipItemRequest:
+        case MessageId::UnequipItemResponse:
+        case MessageId::EquipmentSnapshot:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

@@ -131,6 +131,11 @@ add_library(LegendWorldCore STATIC
     WorldServer/Status/StatusEffectContainer.cpp
     WorldServer/Progression/ProgressionService.cpp
     WorldServer/Progression/RewardService.cpp
+    WorldServer/Item/ItemRegistry.cpp
+    WorldServer/Item/DropRoller.cpp
+    WorldServer/Item/WorldItemDrop.cpp
+    WorldServer/Item/InventoryContainer.cpp
+    WorldServer/Item/InventoryRepository.cpp
     WorldServer/Monster/MonsterRespawnManager.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})

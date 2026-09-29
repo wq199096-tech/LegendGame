@@ -157,6 +157,11 @@ struct WorldTestServers {
     std::string dbPath;
     // 阶段17：测试可调 respawnDelay（长 delay = 测试期间无重生怪干扰围殴）。
     std::uint32_t worldRespawnDelayMs = 8000;
+    // 阶段18：测试可调物品参数（owner lock/TTL/强制掉落/固定 seed）。
+    std::uint32_t itemOwnerLockMs = 10000;
+    std::uint32_t itemDropTtlMs = 60000;
+    bool testForceDropAll = false;
+    std::uint64_t dropRollerSeed = 0;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -188,6 +193,11 @@ struct WorldTestServers {
         world->GetConfig().snapshotIntervalMs = 50;      // 快照加速（默认 100ms）
         world->GetConfig().positionSaveIntervalSeconds = 0.5; // 指令一百：测试短周期
         world->GetConfig().respawnDelayMs = worldRespawnDelayMs; // 阶段17：测试可调
+        // 阶段18：物品测试参数（Start 前设置——DropRoller 在 Start 时构建）。
+        world->GetConfig().itemOwnerLockMs = itemOwnerLockMs;
+        world->GetConfig().itemDropTtlMs = itemDropTtlMs;
+        world->GetConfig().testForceDropAll = testForceDropAll;
+        world->GetConfig().dropRollerSeed = dropRollerSeed;
         std::string error;
         if (!world->Start(error)) {
             std::printf("[TestServers] world start failed: %s\n", error.c_str());

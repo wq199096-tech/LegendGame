@@ -1,6 +1,10 @@
-#include "Client/Network/ClientNetworkController.h"
+﻿#include "Client/Network/ClientNetworkController.h"
 
 #include "Engine/Debug/Logger.h"
+#include "Shared/Item/ItemTypes.h"
+#include "Shared/Progression/ProgressionTypes.h"
+
+#include <cmath>
 
 namespace legend::client {
 
@@ -73,6 +77,66 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
         m_debugVisible = !m_debugVisible;
         LOG_INFO(std::string("[Network] Debug overlay: ") +
                  (m_debugVisible ? "enabled (F8)" : "disabled (F8)"));
+    }
+
+    // ------------------------------------------------------------------
+    // 阶段18 指令四十六/四十七：Debug 物品操作（不做正式 UI）。
+    // E：拾取最近 100 内服务器 Spawn 过的掉落；I：Debug 日志输出背包；
+    // 6/7：装备背包第一把 Rusty Sword / 第一件 Cloth Armor；8/9：卸下 Weapon/Armor。
+    // ------------------------------------------------------------------
+    if (m_world.IsWorldReady()) {
+        if (input.IsKeyPressed(SDL_SCANCODE_E)) {
+            const RemoteWorldItem* nearest = nullptr;
+            float nearestDistSq = world::kItemPickupRange * world::kItemPickupRange;
+            for (const auto& [id, drop] : m_world.WorldItems().Items()) {
+                const float dx = drop.x - m_world.ServerPositionX();
+                const float dy = drop.y - m_world.ServerPositionY();
+                const float distSq = dx * dx + dy * dy;
+                if (distSq <= nearestDistSq) {
+                    nearestDistSq = distSq;
+                    nearest = &drop;
+                }
+            }
+            if (nearest) {
+                LOG_INFO("[Item] Pickup request drop=" + std::to_string(nearest->dropEntityId) +
+                         " item=" + std::to_string(nearest->itemDefinitionId) + " (E)");
+                m_world.SendPickup(nearest->dropEntityId);
+            } else {
+                LOG_INFO("[Item] no drop within pickup range (E)");
+            }
+        }
+        if (input.IsKeyPressed(SDL_SCANCODE_I)) {
+            const auto& inventory = m_world.Inventory();
+            LOG_INFO("[Inventory] used=" + std::to_string(inventory.UsedCount()) + "/" +
+                     std::to_string(ClientInventoryModel::kSlots));
+            for (std::size_t i = 0; i < ClientInventoryModel::kSlots; ++i) {
+                const auto& slot = inventory.Slot(i);
+                if (slot.quantity > 0) {
+                    LOG_INFO("[Inventory] slot " + std::to_string(i) + ": item=" +
+                             std::to_string(slot.definitionId) + " x" +
+                             std::to_string(slot.quantity) + " inst=" +
+                             std::to_string(slot.instanceId));
+                }
+            }
+        }
+        // 指令四十六：6 = 装备第一把 Rusty Sword；7 = 第一件 Cloth Armor。
+        if (input.IsKeyPressed(SDL_SCANCODE_6)) {
+            if (!m_world.SendEquipFirstOf(world::kItemRustySwordId)) {
+                LOG_INFO("[Item] no Rusty Sword in bag (6)");
+            }
+        }
+        if (input.IsKeyPressed(SDL_SCANCODE_7)) {
+            if (!m_world.SendEquipFirstOf(world::kItemClothArmorId)) {
+                LOG_INFO("[Item] no Cloth Armor in bag (7)");
+            }
+        }
+        // 指令四十六：8 = 卸下 Weapon；9 = 卸下 Armor。
+        if (input.IsKeyPressed(SDL_SCANCODE_8)) {
+            m_world.SendUnequip(static_cast<std::uint8_t>(world::EquipmentSlot::Weapon));
+        }
+        if (input.IsKeyPressed(SDL_SCANCODE_9)) {
+            m_world.SendUnequip(static_cast<std::uint8_t>(world::EquipmentSlot::Armor));
+        }
     }
 
     // 指令三十一：主线程消费事件队列（绝不跨线程操作游戏对象）
@@ -321,6 +385,26 @@ std::string ClientNetworkController::WorldStatusText() const {
     text += std::to_string(m_world.LocalExpToNext());
     text += " gold=";
     text += std::to_string(m_world.LocalGold());
+    // 阶段18 指令四十七：F12 增加 Inventory Used/40、Weapon/Armor、Effective Atk/Def
+    //（Effective = Base/Level + Equipment，仅 Debug 展示；战斗数值以服务器为准）。
+    text += " inv=";
+    text += std::to_string(m_world.Inventory().UsedCount());
+    text += "/40";
+    text += " wpn=";
+    text += std::to_string(m_world.Equipment().WeaponDefinitionId());
+    text += " arm=";
+    text += std::to_string(m_world.Equipment().ArmorDefinitionId());
+    {
+        const std::uint32_t level = m_world.LocalLevel();
+        const std::uint32_t baseAttack = 20 + 2 * (level - 1);
+        const std::uint32_t baseDefense = 5 + 1 * (level - 1);
+        text += " effAtk=";
+        text += std::to_string(baseAttack + m_world.Equipment().AttackBonus());
+        text += " effDef=";
+        text += std::to_string(baseDefense + m_world.Equipment().DefenseBonus());
+        text += " drops=";
+        text += std::to_string(m_world.WorldItems().Count());
+    }
     if (m_world.LocalCasting()) {
         text += " casting=skill:";
         text += std::to_string(m_world.ActiveSkillId());

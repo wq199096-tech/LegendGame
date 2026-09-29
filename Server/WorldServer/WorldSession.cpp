@@ -122,10 +122,15 @@ bool WorldSession::HandlePostHandshake(const Packet& packet, std::string& error)
         case MessageId::PlayerMoveInput:
         case MessageId::PlayerAttackRequest:
         case MessageId::SkillCastRequest:
+        case MessageId::ItemPickupRequest:
+        case MessageId::EquipItemRequest:
+        case MessageId::UnequipItemRequest:
             // 阶段11 指令三十四：移动输入放行（InWorld 校验在 WorldServer/
             // WorldMapManager：非 InWorld 玩家直接忽略）。
             // 阶段14 指令三十八：攻击请求放行（验证在 CombatService/WorldServer）。
             // 阶段15 指令二十二：技能施放请求放行（验证在 SkillService/WorldServer）。
+            // 阶段18 指令二十一/二十七/三十四：拾取/装备/卸下请求放行
+            //（校验在 WorldServer 服务器权威逻辑）。
             return true;
         case MessageId::WorldDisconnectNotice: {
             // 阶段11 指令七十九：客户端主动退出世界

@@ -1,10 +1,12 @@
-#pragma once
+﻿#pragma once
 
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
 
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/Item/ItemProtocol.h"
+#include "Shared/Item/ItemTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/MessageId.h"
@@ -100,6 +102,15 @@ struct WorldNetworkEvent {
         RewardGrantedEvent,
         LevelUpEvent,
         ProgressionSnapshotEvent,
+        // 阶段18：服务器权威掉落/背包/装备事件
+        WorldItemSpawnEvent,
+        WorldItemDespawnEvent,
+        ItemPickupResponseEvent,
+        InventorySnapshotEvent,
+        InventoryDeltaEvent,
+        EquipItemResponseEvent,
+        UnequipItemResponseEvent,
+        EquipmentSnapshotEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -184,6 +195,20 @@ struct WorldNetworkEvent {
     std::uint32_t maxManaVal = 0;   // ManaSnapshot（maxMana 名与 CombatEvent 冲突改用）
     std::vector<world::SkillImpactTarget> impactTargets; // Impact
     StatusEventData status;         // 阶段16：状态事件（Applied/Updated/Removed/Snapshot）
+    // 阶段18：物品/背包/装备事件数据（复用 entityId/dropEntityId/resultCode 等）。
+    std::uint64_t dropEntityId = 0;   // WorldItemSpawn/Despawn、ItemPickupResponse
+    std::uint32_t itemDefinitionId = 0; // WorldItemSpawn
+    std::uint32_t itemQuantity = 1;     // WorldItemSpawn / Inventory 条目
+    bool itemOwnedByYou = false;        // WorldItemSpawn isOwnedByYou
+    std::uint32_t ownerLockRemainingMs = 0; // WorldItemSpawn
+    std::uint8_t itemDespawnReason = 0;     // WorldItemDespawn
+    std::uint8_t itemResultCode = 0;        // ItemPickupResponse/Equip/Unequip（ItemResultCode）
+    std::uint8_t inventoryOpcode = 0;       // InventoryDelta（1=Set 2=Remove）
+    std::uint8_t itemEquipmentSlot = 0;     // Equip/Unequip Response（EquipmentSlot）
+    std::uint32_t inventorySlotIndex = 0;   // Inventory 条目槽位
+    std::uint64_t inventoryInstanceId = 0;  // Inventory 条目 instanceId
+    std::vector<world::InventoryEntryData> inventoryEntries; // InventorySnapshot
+    world::EquipmentSnapshotPayload equipmentSnapshot;       // EquipmentSnapshot
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -225,6 +250,14 @@ public:
     //（禁止传伤害/Mana/CD/CastTime/AOE 位置/命中结果，指令二十三/九十六/九十七）。
     void SendSkillCast(std::uint64_t requestId, std::uint32_t skillId, std::uint8_t targetType,
                        std::uint64_t targetEntityId);
+
+    // 阶段18 指令二十一：拾取——只发 requestId + dropEntityId（禁止上报
+    // itemDefinitionId/quantity/position，指令一/二十一）。
+    void SendItemPickup(std::uint64_t requestId, std::uint64_t dropEntityId);
+    // 阶段18 指令二十七：装备背包槽位物品（服务器按权威槽内容校验）。
+    void SendEquipItem(std::uint64_t requestId, std::uint32_t slotIndex);
+    // 阶段18 指令三十四：卸下装备槽。
+    void SendUnequipItem(std::uint64_t requestId, std::uint8_t equipmentSlot);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);

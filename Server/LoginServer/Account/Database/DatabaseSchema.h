@@ -8,7 +8,9 @@ namespace legend::account {
 // 阶段10.1：schema_version 恒单行（id=1 主键 + UPSERT 写版本），
 // 旧 v1 结构（仅 version 列）由 InitializeSchema 自动兼容升级。
 // 阶段17 指令三：Migration 2 —— characters 增加 gold 列（旧角色默认 0）。
-inline constexpr int kCurrentSchemaVersion = 2;
+// 阶段18 指令八：Migration 3 —— inventory_items / character_equipment 两表
+//（旧库自动升级；instance_id = INTEGER PRIMARY KEY 持久唯一，重启不碰撞）。
+inline constexpr int kCurrentSchemaVersion = 3;
 
 // 初始化：quick_check 损坏检测 + 旧结构兼容升级 + 建表 + Migration 到
 // kCurrentSchemaVersion。新库 -> 应用全部 Migration 并写入 version；

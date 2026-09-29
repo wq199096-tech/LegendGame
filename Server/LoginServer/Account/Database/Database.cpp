@@ -66,6 +66,10 @@ bool Database::Execute(const char* sql, std::string& error) {
     return true;
 }
 
+std::int64_t Database::LastInsertRowid() const {
+    return m_db != nullptr ? sqlite3_last_insert_rowid(m_db) : 0;
+}
+
 Statement::~Statement() {
     if (m_stmt != nullptr) {
         sqlite3_finalize(m_stmt);

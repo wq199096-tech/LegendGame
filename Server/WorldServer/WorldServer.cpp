@@ -1,4 +1,4 @@
-#include "Server/WorldServer/WorldServer.h"
+﻿#include "Server/WorldServer/WorldServer.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <random>
 
 namespace legend::world {
 
@@ -61,7 +62,8 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_statusTimer(service.Io()),
       m_statusSnapshotTimer(service.Io()),
       m_respawnTimer(service.Io()),
-      m_progressionTimer(service.Io()) {}
+      m_progressionTimer(service.Io()),
+      m_itemDropTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -104,6 +106,12 @@ bool WorldServer::Start(std::string& error) {
     ScheduleStatusSnapshotTick(); // 阶段16 指令五十九：状态快照 2s
     ScheduleRespawnTick();    // 阶段17 指令二十四：Respawn Tick 250ms
     ScheduleProgressionSnapshotTick(); // 阶段17 指令十五：30s ProgressionSnapshot
+    // 阶段18 指令十一：DropRoller（Config 在 Start 前设置完成——固定 seed 可复现）。
+    m_dropRoller = m_config.dropRollerSeed != 0
+                       ? std::make_unique<SeededDropRoller>(m_config.dropRollerSeed)
+                       : std::make_unique<SeededDropRoller>(
+                             std::random_device{}());
+    ScheduleItemDropTick();   // 阶段18 指令四十三：Drop cleanup Tick 500ms
     return true;
 }
 
@@ -124,6 +132,10 @@ void WorldServer::Stop() {
     m_statusSnapshotTimer.cancel(); // 阶段16：停止状态快照 timer
     m_respawnTimer.cancel();    // 阶段17：停止 Respawn Timer
     m_progressionTimer.cancel(); // 阶段17：停止成长快照 timer
+    m_itemDropTimer.cancel();   // 阶段18：停止 Drop cleanup Timer
+    // 阶段18 指令四十九：World Drop runtime-only，重启不持久化（ServerCleanup）。
+    m_itemDrops.RemoveAll();
+    m_nextItemDropId = 1;
     // 阶段17 指令二十九：重启 Respawn Queue 不持久化，全部清空（slot 重新满怪）。
     m_respawnManager.Reset();
     // 阶段13 指令六十五/六十六：清 Monster（runtime only，无持久化）。
@@ -210,6 +222,12 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
             HandlePlayerAttack(connectionId, packet); // 阶段14 指令三十九
         } else if (messageId == MessageId::SkillCastRequest) {
             HandleSkillCastRequest(connectionId, packet); // 阶段15 指令二十二
+        } else if (messageId == MessageId::ItemPickupRequest) {
+            HandleItemPickupRequest(connectionId, packet); // 阶段18 指令二十一
+        } else if (messageId == MessageId::EquipItemRequest) {
+            HandleEquipItemRequest(connectionId, packet);  // 阶段18 指令二十七
+        } else if (messageId == MessageId::UnequipItemRequest) {
+            HandleUnequipItemRequest(connectionId, packet); // 阶段18 指令三十四
         }
     }
 }
@@ -475,8 +493,20 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
     const std::uint64_t characterId = response.characterId;
     m_dbWorker.Post([self, connectionId, requestId, accountId, characterId]() {
         auto found = CharacterRepository::FindCharacterById(self->m_database, characterId);
+        // 阶段18 指令二十八：同一 DB 任务加载持久化背包（装备从 slot_index 码还原）。
+        std::vector<InventoryRepository::InventoryRow> itemRows;
+        std::string itemLoadError;
+        if (found.success && found.value.has_value() && !found.value->deleted) {
+            if (!InventoryRepository::LoadInventory(self->m_database, characterId, itemRows,
+                                                    itemLoadError)) {
+                LOG_ERROR("[Inventory] load failed for #" + std::to_string(characterId) + ": " +
+                          itemLoadError);
+                itemRows.clear();
+            }
+        }
         // 结果 post 回 io 线程（self 保活，Stop 时 m_stopped 丢弃）
-        self->m_service.Post([self, connectionId, requestId, accountId, characterId, found]() {
+        self->m_service.Post([self, connectionId, requestId, accountId, characterId, found,
+                              itemRows]() {
             if (self->m_stopped.load()) {
                 return;
             }
@@ -541,12 +571,17 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
             self->m_spatialGrid.AddPlayer(player);
             session->SetState(WorldSessionState::InWorld);
             self->SendEnterWorldSuccess(connectionId, requestId, player);
+            // 阶段18 指令二十八：应用持久化背包/装备（Snapshot 在进场后下发）。
+            self->ApplyLoadedItems(player, itemRows);
             // 阶段12 指令十八：进入世界初始可见性（双向 Spawn）。
             self->InitializePlayerVisibility(player);
             LOG_INFO("[World] Player entered character=" + row.name + " (#" +
                      std::to_string(characterId) + ") map=" + std::to_string(mapId));
             // 阶段17 指令十五：进入世界立即下发本人 ProgressionSnapshot。
             self->SendProgressionSnapshot(player);
+            // 阶段18 指令二十八：进入世界下发完整背包/装备 Snapshot（Client 只是镜像）。
+            self->SendInventorySnapshot(player);
+            self->SendEquipmentSnapshot(player);
             if (self->m_hooks.onPlayerChanged) {
                 self->m_hooks.onPlayerChanged(characterId, true);
             }
@@ -896,6 +931,8 @@ void WorldServer::RunAoiTick() {
         }
         // 阶段13 指令二十五~二十九：怪物 AOI 差量（同一 tick，独立 resolver）。
         UpdatePlayerMonsterVisibility(player, false);
+        // 阶段18 指令十八：掉落 AOI 差量（同一 tick，独立 resolver + Spatial Grid）。
+        UpdatePlayerItemDropVisibility(player, false);
     }
 }
 
@@ -930,6 +967,8 @@ void WorldServer::InitializePlayerVisibility(const std::shared_ptr<PlayerSession
     }
     // 阶段13 指令二十四：进入世界还必须收到附近怪物 MonsterSpawn。
     UpdatePlayerMonsterVisibility(player, true);
+    // 阶段18 指令十八：进入世界初始掉落可见性（只发 <=600 的初始 spawn）。
+    UpdatePlayerItemDropVisibility(player, true);
 }
 
 void WorldServer::NotifyPlayerGoneToObservers(std::uint64_t characterId,
@@ -1440,6 +1479,8 @@ void WorldServer::KillMonster(const std::shared_ptr<MonsterEntity>& monster,
     // 阶段17 指令七/八：击杀归属（最后致死伤害的 Player；DOT 用 StatusEffect 的
     // sourceEntityId）-> 服务器发放 EXP/Gold（先奖励，指令三十九顺序）。
     GrantMonsterReward(monster, killerCharacterId);
+    // 阶段18 指令三十九：Reward 之后 GenerateLoot（服务器权威掉落）。
+    GenerateMonsterDrops(monster, killerCharacterId);
     // 阶段16 指令三十八/一百一十四：死亡 -> 逐个 StatusRemoved(TargetDied) + 清空容器。
     ClearStatusOnDeath(CombatEntityType::Monster, monster->EntityId(), monster->StatusEffects(),
                        observers);
@@ -2272,8 +2313,11 @@ void WorldServer::RecalculateTargetDerivedStats(CombatEntityType targetType,
     }
     auto player = m_players.FindByCharacter(targetEntityId);
     if (player) {
+        // 阶段18 指令三十一/三十二：Effective = Base/Level + Equipment + Status。
+        // 装备加成并入 Base 传给统一 RecalculateDerivedStats（不另写一套属性）。
         const auto stats =
-            RecalculateDerivedStats(player->BaseAttackPower(), player->BaseDefense(),
+            RecalculateDerivedStats(player->BaseAttackPower() + player->EquipmentAttackBonus(),
+                                    player->BaseDefense() + player->EquipmentDefenseBonus(),
                                     player->BaseMoveSpeed(), player->StatusEffects(),
                                     m_statusRegistry);
         player->SetEffectiveCombatStats(stats.attackPower, stats.defense, stats.moveSpeed);
@@ -2809,6 +2853,786 @@ void WorldServer::SendMonsterBatches(const std::shared_ptr<PlayerSession>& playe
             SendPacketToPlayer(player, out);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段18：服务器权威掉落/背包/装备（指令一~五十七）
+// ---------------------------------------------------------------------------
+
+void WorldServer::GenerateMonsterDrops(const std::shared_ptr<MonsterEntity>& monster,
+                                       std::uint64_t killerCharacterId) {
+    // 指令三十九：MonsterDeath -> GenerateLoot（Gold/EXP 已由 GrantMonsterReward 处理）。
+    if (!m_dropRoller) {
+        return; // Stop 后残余调用防御
+    }
+    auto table = DropRoller::TrainingSlimeTable();
+    if (m_config.testForceDropAll) {
+        // 阶段18 测试专用：概率确定性（链路完全不变，见阶段十七 SetTestLootOverride 先例）。
+        for (auto& entry : table) {
+            entry.chance = 1.0;
+        }
+    }
+    const auto results = m_dropRoller->Roll(table);
+    if (results.empty()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    // 指令十四：死亡位置 + 轻微确定性偏移（不生成到地图外——偏移 <= 24 单位）。
+    static constexpr float kDropOffsets[][2] = {
+        {0.0f, 0.0f}, {14.0f, 0.0f}, {0.0f, 14.0f}, {-14.0f, 0.0f}, {0.0f, -14.0f},
+    };
+    std::size_t dropIndex = 0;
+    for (const auto& result : results) {
+        const ItemDefinition* definition = m_itemRegistry.Find(result.definitionId);
+        if (!definition) {
+            continue;
+        }
+        WorldItemDrop drop;
+        drop.dropEntityId = m_nextItemDropId++; // 指令十三：与 instanceId 严格区分
+        drop.itemDefinitionId = result.definitionId;
+        drop.quantity = result.quantity;
+        drop.mapId = monster->MapId();
+        const auto& offset = kDropOffsets[dropIndex % 5];
+        drop.x = monster->PositionX() + offset[0];
+        drop.y = monster->PositionY() + offset[1];
+        // 指令十五/四十/四十一：owner = 击杀者（含离线/DOT source），独占 10s（配置可调）。
+        drop.ownerCharacterId = killerCharacterId;
+        drop.ownerUntil = now + std::chrono::milliseconds(m_config.itemOwnerLockMs);
+        drop.expireAt = now + std::chrono::milliseconds(m_config.itemDropTtlMs);
+        drop.active = true;
+        m_itemDrops.Add(drop);
+        LOG_INFO("[ItemDrop] drop=" + std::to_string(drop.dropEntityId) + " item=" +
+                 std::to_string(drop.itemDefinitionId) + " x" + std::to_string(drop.quantity) +
+                 " at (" + std::to_string(drop.x) + "," + std::to_string(drop.y) + ") owner=#" +
+                 std::to_string(killerCharacterId));
+        ++dropIndex;
+    }
+}
+
+void WorldServer::ScheduleItemDropTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_itemDropTimer.expires_after(std::chrono::milliseconds(m_config.itemDropTickMs));
+    auto self = shared_from_this();
+    m_itemDropTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->RunItemDropTick();
+        self->ScheduleItemDropTick();
+    });
+}
+
+void WorldServer::RunItemDropTick() {
+    // 指令四十三：统一 500ms 扫描 TTL 过期（不建 per-drop Timer）。
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& expired : m_itemDrops.ExpireScan(now)) {
+        NotifyItemDropGoneToObservers(expired.dropEntityId, ItemDespawnReason::Expired);
+        LOG_INFO("[ItemDrop] drop=" + std::to_string(expired.dropEntityId) + " expired (TTL)");
+    }
+}
+
+void WorldServer::UpdatePlayerItemDropVisibility(const std::shared_ptr<PlayerSession>& player,
+                                                 bool initialVisibility) {
+    // 指令十八：Enter 600 / Leave 700 滞回；visibleItemDrops 由服务器权威维护。
+    auto candidates = m_itemDrops.QueryNearby(player->PositionX(), player->PositionY(),
+                                              m_config.aoiLeaveRadius, player->MapId());
+    const DropAoiDelta delta =
+        ResolveDropAoiVisibility(candidates, player->MapId(), player->VisibleItemDrops(),
+                                 m_config.aoiEnterRadius, m_config.aoiLeaveRadius,
+                                 m_config.aoiVisibleLimit);
+    for (const auto* drop : delta.spawns) {
+        SendWorldItemSpawn(player, *drop);
+        player->AddVisibleItemDrop(drop->dropEntityId);
+        LOG_DEBUG("[ItemDrop] AOI enter char=" + std::to_string(player->CharacterId()) +
+                  " drop=" + std::to_string(drop->dropEntityId));
+    }
+    if (!initialVisibility) {
+        for (const auto dropId : delta.despawns) {
+            SendWorldItemDespawn(player, dropId, ItemDespawnReason::ServerCleanup);
+            player->EraseVisibleItemDrop(dropId);
+            LOG_DEBUG("[ItemDrop] AOI leave char=" + std::to_string(player->CharacterId()) +
+                      " drop=" + std::to_string(dropId));
+        }
+    }
+}
+
+void WorldServer::NotifyItemDropGoneToObservers(std::uint64_t dropEntityId,
+                                                ItemDespawnReason reason) {
+    // 指令四十二：所有可见该掉落的玩家收到 Despawn 并清除 visibleItemDrops。
+    for (const auto& observer : m_players.SnapshotPlayers()) {
+        if (observer->EraseVisibleItemDrop(dropEntityId)) {
+            SendWorldItemDespawn(observer, dropEntityId, reason);
+        }
+    }
+}
+
+void WorldServer::SendWorldItemSpawn(const std::shared_ptr<PlayerSession>& receiver,
+                                     const WorldItemDrop& drop) {
+    // 指令二十：不直接暴露完整 owner——isOwnedByYou + ownerLockRemainingMs。
+    const auto now = std::chrono::steady_clock::now();
+    WorldItemSpawnPayload payload;
+    payload.dropEntityId = drop.dropEntityId;
+    payload.itemDefinitionId = drop.itemDefinitionId;
+    payload.quantity = drop.quantity;
+    payload.mapId = drop.mapId;
+    payload.x = drop.x;
+    payload.y = drop.y;
+    payload.isOwnedByYou =
+        drop.ownerCharacterId != 0 && drop.ownerCharacterId == receiver->CharacterId();
+    payload.ownerLockRemainingMs =
+        now >= drop.ownerUntil
+            ? 0
+            : static_cast<std::uint32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(drop.ownerUntil - now)
+                    .count());
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::WorldItemSpawn);
+    if (EncodeWorldItemSpawn(payload, out.payload)) {
+        SendPacketToPlayer(receiver, out);
+    }
+}
+
+void WorldServer::SendWorldItemDespawn(const std::shared_ptr<PlayerSession>& receiver,
+                                       std::uint64_t dropEntityId,
+                                       ItemDespawnReason reason) {
+    WorldItemDespawnPayload payload;
+    payload.dropEntityId = dropEntityId;
+    payload.reason = static_cast<std::uint8_t>(reason);
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::WorldItemDespawn);
+    if (EncodeWorldItemDespawn(payload, out.payload)) {
+        SendPacketToPlayer(receiver, out);
+    }
+}
+
+void WorldServer::SendItemPickupResponse(const std::shared_ptr<PlayerSession>& player,
+                                         std::uint64_t requestId, std::uint64_t dropEntityId,
+                                         bool success, ItemResultCode code) {
+    ItemPickupResponsePayload payload;
+    payload.requestId = requestId;
+    payload.dropEntityId = dropEntityId;
+    payload.success = success;
+    payload.resultCode = static_cast<std::uint8_t>(code);
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ItemPickupResponse);
+    if (EncodeItemPickupResponse(payload, out.payload)) {
+        SendPacketToPlayer(player, out);
+    }
+}
+
+void WorldServer::HandleItemPickupRequest(std::uint64_t connectionId,
+                                          const legend::network::Packet& packet) {
+    // 指令八十六：Malformed 回 MalformedRequest（requestId 尽力回显），不断开。
+    ItemPickupRequestPayload request;
+    std::string decodeError;
+    if (!DecodeItemPickupRequest(packet.payload.data(), packet.payload.size(), request,
+                                       decodeError)) {
+        LOG_INFO("[Item] Malformed ItemPickupRequest from #" + std::to_string(connectionId));
+        SendItemPickupResponse(nullptr, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::MalformedRequest);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendItemPickupResponse(nullptr, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::NotInWorld);
+        return;
+    }
+    // 指令二十二：死亡玩家不能拾取。
+    if (!player->Alive()) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::Dead);
+        return;
+    }
+    // 指令三十六：重复成功 requestId 不重复获得物品。
+    if (player->IsRecentItemRequest(request.requestId)) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::DuplicateRequest);
+        return;
+    }
+    const WorldItemDrop* drop = m_itemDrops.Find(request.dropEntityId);
+    if (!drop || !drop->active) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::DropNotFound);
+        return;
+    }
+    // 指令二十二：必须在 visibleItemDrops（服务器 AOI 权威，防远程作弊）。
+    if (player->VisibleItemDrops().count(request.dropEntityId) == 0) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::NotVisible);
+        return;
+    }
+    if (drop->mapId != player->MapId()) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::WrongMap);
+        return;
+    }
+    const float dx = drop->x - player->PositionX();
+    const float dy = drop->y - player->PositionY();
+    if (dx * dx + dy * dy > m_config.itemPickupRange * m_config.itemPickupRange) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::TooFar);
+        return;
+    }
+    // 指令十五：归属他人且仍在独占期内 -> 拒绝。
+    const auto now = std::chrono::steady_clock::now();
+    if (drop->ownerCharacterId != 0 && drop->ownerCharacterId != player->CharacterId() &&
+        now < drop->ownerUntil) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::OwnerLocked);
+        return;
+    }
+    // 指令二十五：背包空间预检（拷贝容器试算，满则 Drop 留在地上）。
+    InventoryContainer trial = player->Inventory();
+    const auto addResult =
+        trial.Add(m_itemRegistry, drop->itemDefinitionId, drop->quantity, 0, 0);
+    if (addResult.code == InventoryAddCode::Full) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::InventoryFull);
+        return;
+    }
+    // 指令二十三/二十四：remove-before-grant（single-thread world authority；
+    // claim 失败 = 同 tick 已被抢走 -> DropNotFound）。
+    WorldItemDrop claimed;
+    if (!m_itemDrops.Claim(request.dropEntityId, claimed)) {
+        SendItemPickupResponse(player, request.requestId, request.dropEntityId, false,
+                               ItemResultCode::DropNotFound);
+        return;
+    }
+    // 提交背包变更（io 线程权威）。
+    player->Inventory() = trial;
+    // 指令三十六：只缓存成功请求。
+    player->RememberItemRequest(request.requestId);
+    LOG_INFO("[Item] Pickup char=" + player->CharacterName() + " drop=" +
+             std::to_string(claimed.dropEntityId) + " item=" +
+             std::to_string(claimed.itemDefinitionId) + " x" +
+             std::to_string(claimed.quantity));
+    // 指令二十四：claimed -> DB 事务 -> 成功后 Delta + Despawn；失败回滚恢复 Drop。
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    const std::uint32_t definitionId = claimed.itemDefinitionId;
+    const std::uint32_t quantity = claimed.quantity;
+    const std::uint64_t requestId = request.requestId;
+    const std::uint64_t dropEntityId = claimed.dropEntityId;
+    const bool mergedIntoStack = addResult.code == InventoryAddCode::Merged;
+    const std::uint32_t bagSlotIndex = addResult.slotIndex;
+    // 并入堆叠：捕获既有 instanceId 与合并后总量（提交后读取，同 io 线程一致）。
+    std::uint64_t mergeInstanceId = 0;
+    std::uint32_t mergeQuantity = 0;
+    if (mergedIntoStack) {
+        const InventoryEntry* current = player->Inventory().At(bagSlotIndex);
+        if (current) {
+            mergeInstanceId = current->instanceId;
+            mergeQuantity = current->quantity;
+        }
+    }
+    m_dbWorker.Post([self, characterId, definitionId, quantity, bagSlotIndex, requestId,
+                     dropEntityId, mergedIntoStack, mergeInstanceId, mergeQuantity,
+                     claimed]() {
+        // DB 线程：写 inventory_items（prepared statement，指令五十四）。
+        bool dbOk = false;
+        std::uint64_t newInstanceId = 0;
+        if (mergedIntoStack) {
+            dbOk = mergeInstanceId != 0 &&
+                   InventoryRepository::UpdateQuantity(self->m_database, mergeInstanceId,
+                                                       mergeQuantity);
+        } else {
+            newInstanceId = InventoryRepository::InsertItem(
+                self->m_database, characterId, definitionId, quantity,
+                static_cast<std::int64_t>(bagSlotIndex), legend::account::UnixNow());
+            dbOk = newInstanceId != 0;
+        }
+        // 结果回 io 线程。
+        self->m_service.Post([self, characterId, requestId, dropEntityId, bagSlotIndex,
+                              definitionId, quantity, mergedIntoStack, dbOk, newInstanceId,
+                              claimed]() {
+            if (self->m_stopped.load()) {
+                return;
+            }
+            auto player = self->m_players.FindByCharacter(characterId);
+            if (!player) {
+                return; // 玩家已离线：DB 已持久化，重进加载
+            }
+            if (!dbOk) {
+                // 指令二十四：DB 失败 -> 回滚背包 + 恢复 Drop（不能吞物品）。
+                if (mergedIntoStack) {
+                    InventoryEntry* entry = player->Inventory().MutableAt(bagSlotIndex);
+                    if (entry) {
+                        entry->quantity =
+                            entry->quantity > quantity ? entry->quantity - quantity : 0;
+                    }
+                } else {
+                    InventoryEntry removed;
+                    (void)player->Inventory().TakeAt(bagSlotIndex, removed);
+                }
+                self->m_itemDrops.Restore(claimed);
+                LOG_ERROR("[Item] pickup DB failed -> drop " + std::to_string(dropEntityId) +
+                          " restored");
+                self->SendItemPickupResponse(player, requestId, dropEntityId, false,
+                                             ItemResultCode::InternalError);
+                return;
+            }
+            // 成功：回填 instanceId（新堆叠）。
+            if (!mergedIntoStack && newInstanceId != 0) {
+                InventoryEntry entry;
+                if (player->Inventory().TakeAt(bagSlotIndex, entry)) {
+                    entry.instanceId = newInstanceId;
+                    player->Inventory().PutAt(bagSlotIndex, entry);
+                }
+            }
+            // Delta（opcode 1 = Set）：merged 取容器当前总量，新堆叠取插入值。
+            const InventoryEntry* current = player->Inventory().At(bagSlotIndex);
+            InventoryEntry deltaEntry;
+            if (current) {
+                deltaEntry = *current;
+            } else {
+                deltaEntry.definitionId = definitionId;
+                deltaEntry.quantity = quantity;
+                deltaEntry.instanceId = newInstanceId;
+            }
+            self->SendInventoryDelta(player, 1, deltaEntry, bagSlotIndex);
+            self->SendItemPickupResponse(player, requestId, dropEntityId, true,
+                                         ItemResultCode::Success);
+            // 指令二十四：Despawn 广播给所有可见者（含本人）。
+            self->NotifyItemDropGoneToObservers(dropEntityId,
+                                                ItemDespawnReason::PickedUp);
+        });
+    });
+}
+
+void WorldServer::HandleEquipItemRequest(std::uint64_t connectionId,
+                                         const legend::network::Packet& packet) {
+    EquipItemRequestPayload request;
+    std::string decodeError;
+    if (!DecodeEquipItemRequest(packet.payload.data(), packet.payload.size(), request,
+                                      decodeError)) {
+        LOG_INFO("[Item] Malformed EquipItemRequest from #" + std::to_string(connectionId));
+        SendEquipItemResponse(nullptr, request.requestId, false,
+                              ItemResultCode::MalformedRequest, EquipmentSlot::None);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendEquipItemResponse(nullptr, request.requestId, false,
+                              ItemResultCode::NotInWorld, EquipmentSlot::None);
+        return;
+    }
+    // 指令三十七：防重放。
+    if (player->IsRecentItemRequest(request.requestId)) {
+        SendEquipItemResponse(player, request.requestId, false,
+                              ItemResultCode::DuplicateRequest,
+                              EquipmentSlot::None);
+        return;
+    }
+    const auto result =
+        EquipmentService::Equip(m_itemRegistry, player->Inventory(), request.slotIndex,
+                                player->EquipmentRef());
+    if (result.code == EquipResultCode::InvalidSlot) {
+        SendEquipItemResponse(player, request.requestId, false, ItemResultCode::InvalidItem,
+                              EquipmentSlot::None);
+        return;
+    }
+    if (result.code == EquipResultCode::InvalidItem) {
+        SendEquipItemResponse(player, request.requestId, false, ItemResultCode::InvalidItem,
+                              EquipmentSlot::None);
+        return;
+    }
+    if (result.code == EquipResultCode::WrongSlot) {
+        SendEquipItemResponse(player, request.requestId, false, ItemResultCode::WrongSlot,
+                              EquipmentSlot::None);
+        return;
+    }
+    // instanceId 待持久化（拾取 DB 未完成）-> 拒绝（防孤儿装备行）。
+    if (result.equipped.instanceId == 0) {
+        // 回滚内存状态：新装备回原槽；Replaced 时装备槽恢复旧装备。
+        if (result.code == EquipResultCode::Replaced) {
+            if (result.slot == EquipmentSlot::Weapon) {
+                player->EquipmentRef().weapon = result.unequipped;
+            } else {
+                player->EquipmentRef().armor = result.unequipped;
+            }
+        } else if (result.slot == EquipmentSlot::Weapon) {
+            player->EquipmentRef().weapon = InventoryEntry{};
+        } else {
+            player->EquipmentRef().armor = InventoryEntry{};
+        }
+        (void)player->Inventory().PutAt(request.slotIndex, result.equipped);
+        SendEquipItemResponse(player, request.requestId, false,
+                              ItemResultCode::InternalError, EquipmentSlot::None);
+        return;
+    }
+    // 指令三十七：只缓存成功请求。
+    player->RememberItemRequest(request.requestId);
+    LOG_INFO("[Item] Equip char=" + player->CharacterName() + " instance=" +
+             std::to_string(result.equipped.instanceId) + " slot=" +
+             std::to_string(static_cast<int>(result.slot)));
+    RefreshEquipmentBonuses(player);
+    // 指令三十二：装备变化走统一 Derived 重算（不覆盖状态加成）。
+    RecalculateTargetDerivedStats(CombatEntityType::Player, player->CharacterId());
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    const std::uint64_t requestId = request.requestId;
+    const EquipmentSlot slot = result.slot;
+    InventoryRepository::EquipTransaction tx;
+    tx.characterId = characterId;
+    tx.newItemInstanceId = result.equipped.instanceId;
+    tx.equipmentSlotCode = static_cast<std::int64_t>(
+        result.slot == EquipmentSlot::Weapon
+            ? InventoryRepository::kWeaponSlotCode
+            : InventoryRepository::kArmorSlotCode);
+    tx.hadPrevious = result.code == EquipResultCode::Replaced;
+    tx.previousInstanceId = tx.hadPrevious ? result.unequipped.instanceId : 0;
+    tx.freedBagSlotIndex = static_cast<std::int64_t>(request.slotIndex);
+    m_dbWorker.Post([self, characterId, requestId, slot, tx]() {
+        const bool dbOk = InventoryRepository::RunEquipTransaction(self->m_database, tx);
+        self->m_service.Post([self, characterId, requestId, slot, dbOk]() {
+            if (self->m_stopped.load()) {
+                return;
+            }
+            auto player = self->m_players.FindByCharacter(characterId);
+            if (!player) {
+                return;
+            }
+            // 指令二十八/二十九：装备变化后以 Snapshot 全量纠偏（Client 只是镜像）。
+            self->SendInventorySnapshot(player);
+            self->SendEquipmentSnapshot(player);
+            self->SendEquipItemResponse(player, requestId, dbOk,
+                                        dbOk ? ItemResultCode::Success
+                                             : ItemResultCode::InternalError,
+                                        slot);
+        });
+    });
+}
+
+void WorldServer::HandleUnequipItemRequest(std::uint64_t connectionId,
+                                           const legend::network::Packet& packet) {
+    UnequipItemRequestPayload request;
+    std::string decodeError;
+    if (!DecodeUnequipItemRequest(packet.payload.data(), packet.payload.size(), request,
+                                        decodeError)) {
+        LOG_INFO("[Item] Malformed UnequipItemRequest from #" + std::to_string(connectionId));
+        SendUnequipItemResponse(nullptr, request.requestId, false,
+                                ItemResultCode::MalformedRequest,
+                                EquipmentSlot::None);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendUnequipItemResponse(nullptr, request.requestId, false,
+                                ItemResultCode::NotInWorld, EquipmentSlot::None);
+        return;
+    }
+    if (player->IsRecentItemRequest(request.requestId)) {
+        SendUnequipItemResponse(player, request.requestId, false,
+                                ItemResultCode::DuplicateRequest,
+                                EquipmentSlot::None);
+        return;
+    }
+    const auto slot = static_cast<EquipmentSlot>(request.equipmentSlot);
+    const auto result =
+        EquipmentService::Unequip(m_itemRegistry, player->Inventory(), slot,
+                                  player->EquipmentRef());
+    if (result.code == EquipResultCode::InvalidSlot) {
+        SendUnequipItemResponse(player, request.requestId, false,
+                                ItemResultCode::NotEquipped, slot);
+        return;
+    }
+    if (result.code == EquipResultCode::InvalidItem) {
+        SendUnequipItemResponse(player, request.requestId, false,
+                                ItemResultCode::InvalidItem, slot);
+        return;
+    }
+    if (result.code == EquipResultCode::BagFull) {
+        // 指令三十四：背包满 -> 失败且装备保持不变。
+        SendUnequipItemResponse(player, request.requestId, false,
+                                ItemResultCode::InventoryFull, slot);
+        return;
+    }
+    // instanceId 待持久化 -> 回滚并拒绝。
+    if (result.unequipped.instanceId == 0) {
+        InventoryEntry back;
+        (void)player->Inventory().TakeAt(result.bagSlotIndex, back);
+        if (slot == EquipmentSlot::Weapon) {
+            player->EquipmentRef().weapon = back;
+        } else {
+            player->EquipmentRef().armor = back;
+        }
+        SendUnequipItemResponse(player, request.requestId, false,
+                                ItemResultCode::InternalError, slot);
+        return;
+    }
+    player->RememberItemRequest(request.requestId);
+    LOG_INFO("[Item] Unequip char=" + player->CharacterName() + " instance=" +
+             std::to_string(result.unequipped.instanceId) + " -> bag slot " +
+             std::to_string(result.bagSlotIndex));
+    RefreshEquipmentBonuses(player);
+    RecalculateTargetDerivedStats(CombatEntityType::Player, player->CharacterId());
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    const std::uint64_t requestId = request.requestId;
+    InventoryRepository::UnequipTransaction tx;
+    tx.instanceId = result.unequipped.instanceId;
+    tx.equipmentSlotCode =
+        slot == EquipmentSlot::Weapon ? InventoryRepository::kWeaponSlotCode
+                                            : InventoryRepository::kArmorSlotCode;
+    tx.bagSlotIndex = static_cast<std::int64_t>(result.bagSlotIndex);
+    m_dbWorker.Post([self, characterId, requestId, slot, tx]() {
+        const bool dbOk = InventoryRepository::RunUnequipTransaction(self->m_database, tx);
+        self->m_service.Post([self, characterId, requestId, slot, dbOk]() {
+            if (self->m_stopped.load()) {
+                return;
+            }
+            auto player = self->m_players.FindByCharacter(characterId);
+            if (!player) {
+                return;
+            }
+            self->SendInventorySnapshot(player);
+            self->SendEquipmentSnapshot(player);
+            self->SendUnequipItemResponse(player, requestId, dbOk,
+                                          dbOk ? ItemResultCode::Success
+                                               : ItemResultCode::InternalError,
+                                          slot);
+        });
+    });
+}
+
+void WorldServer::SendEquipItemResponse(const std::shared_ptr<PlayerSession>& player,
+                                        std::uint64_t requestId, bool success,
+                                        ItemResultCode code, EquipmentSlot slot) {
+    EquipItemResponsePayload payload;
+    payload.requestId = requestId;
+    payload.success = success;
+    payload.resultCode = static_cast<std::uint8_t>(code);
+    payload.equipmentSlot = static_cast<std::uint8_t>(slot);
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::EquipItemResponse);
+    if (EncodeEquipItemResponse(payload, out.payload)) {
+        SendPacketToPlayer(player, out);
+    }
+}
+
+void WorldServer::SendUnequipItemResponse(const std::shared_ptr<PlayerSession>& player,
+                                          std::uint64_t requestId, bool success,
+                                          ItemResultCode code, EquipmentSlot slot) {
+    UnequipItemResponsePayload payload;
+    payload.requestId = requestId;
+    payload.success = success;
+    payload.resultCode = static_cast<std::uint8_t>(code);
+    payload.equipmentSlot = static_cast<std::uint8_t>(slot);
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::UnequipItemResponse);
+    if (EncodeUnequipItemResponse(payload, out.payload)) {
+        SendPacketToPlayer(player, out);
+    }
+}
+
+void WorldServer::SendInventorySnapshot(const std::shared_ptr<PlayerSession>& player) {
+    // 指令二十八：完整 40 格 Snapshot（Client 只是镜像，指令二十九）。
+    InventorySnapshotPayload payload;
+    payload.characterId = player->CharacterId();
+    for (std::size_t i = 0; i < player->Inventory().SlotCount(); ++i) {
+        const InventoryEntry* entry = player->Inventory().At(i);
+        if (!entry || entry->quantity == 0) {
+            continue;
+        }
+        InventoryEntryData data;
+        data.instanceId = entry->instanceId;
+        data.definitionId = entry->definitionId;
+        data.quantity = entry->quantity;
+        data.slotIndex = static_cast<std::uint32_t>(i);
+        payload.entries.push_back(data);
+    }
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::InventorySnapshot);
+    if (EncodeInventorySnapshot(payload, out.payload)) {
+        SendPacketToPlayer(player, out);
+    }
+}
+
+void WorldServer::SendInventoryDelta(const std::shared_ptr<PlayerSession>& player,
+                                     std::uint8_t opcode, const InventoryEntry& entry,
+                                     std::uint32_t slotIndex) {
+    InventoryDeltaPayload payload;
+    payload.characterId = player->CharacterId();
+    payload.opcode = opcode;
+    payload.entry.instanceId = entry.instanceId;
+    payload.entry.definitionId = entry.definitionId;
+    payload.entry.quantity = entry.quantity;
+    payload.entry.slotIndex = slotIndex;
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::InventoryDelta);
+    if (EncodeInventoryDelta(payload, out.payload)) {
+        SendPacketToPlayer(player, out);
+    }
+}
+
+void WorldServer::SendEquipmentSnapshot(const std::shared_ptr<PlayerSession>& player) {
+    EquipmentSnapshotPayload payload;
+    payload.characterId = player->CharacterId();
+    payload.weaponInstanceId = player->EquipmentRef().weapon.instanceId;
+    payload.weaponDefinitionId = player->EquipmentRef().weapon.definitionId;
+    payload.armorInstanceId = player->EquipmentRef().armor.instanceId;
+    payload.armorDefinitionId = player->EquipmentRef().armor.definitionId;
+    payload.equipmentAttackBonus = player->EquipmentAttackBonus();
+    payload.equipmentDefenseBonus = player->EquipmentDefenseBonus();
+    payload.serverTime = ServerTimeMs();
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::EquipmentSnapshot);
+    if (EncodeEquipmentSnapshot(payload, out.payload)) {
+        SendPacketToPlayer(player, out);
+    }
+}
+
+void WorldServer::RefreshEquipmentBonuses(const std::shared_ptr<PlayerSession>& player) {
+    // 指令三十一：装备加成缓存刷新（EquipmentAttackBonus/DefenseBonus 读取依据）。
+    std::uint32_t attack = 0;
+    std::uint32_t defense = 0;
+    if (player->EquipmentRef().weapon.quantity > 0) {
+        if (const auto* def = m_itemRegistry.Find(player->EquipmentRef().weapon.definitionId)) {
+            attack += def->attackBonus;
+        }
+    }
+    if (player->EquipmentRef().armor.quantity > 0) {
+        if (const auto* def = m_itemRegistry.Find(player->EquipmentRef().armor.definitionId)) {
+            defense += def->defenseBonus;
+        }
+    }
+    player->SetEquipmentBonuses(attack, defense);
+}
+
+void WorldServer::ApplyLoadedItems(const std::shared_ptr<PlayerSession>& player,
+                                   const std::vector<InventoryRepository::InventoryRow>& rows) {
+    // 指令二十八：进世界加载持久化背包/装备（slot_index 1001/1002 = 装备中）。
+    player->Inventory().Clear();
+    player->EquipmentRef() = EquipmentSlots{};
+    for (const auto& row : rows) {
+        InventoryEntry entry;
+        entry.instanceId = row.instanceId;
+        entry.definitionId = row.definitionId;
+        entry.quantity = row.quantity;
+        if (row.slotIndex >= InventoryRepository::kEquippedSlotBase) {
+            if (row.slotIndex == InventoryRepository::kWeaponSlotCode) {
+                player->EquipmentRef().weapon = entry;
+            } else if (row.slotIndex == InventoryRepository::kArmorSlotCode) {
+                player->EquipmentRef().armor = entry;
+            }
+        } else if (row.slotIndex >= 0 &&
+                   row.slotIndex < static_cast<std::int64_t>(kInventorySlots)) {
+            player->Inventory().PutAt(static_cast<std::size_t>(row.slotIndex), entry);
+        }
+    }
+    RefreshEquipmentBonuses(player);
+    RecalculateTargetDerivedStats(CombatEntityType::Player, player->CharacterId());
+    LOG_INFO("[Inventory] loaded char #" + std::to_string(player->CharacterId()) + " rows=" +
+             std::to_string(rows.size()));
+}
+
+// ---------------------------------------------------------------------------
+// 阶段18：测试布景辅助（io 线程投递，与游戏逻辑串行；仅供测试白盒使用）
+// ---------------------------------------------------------------------------
+
+bool WorldServer::TestSpawnDrop(float x, float y, std::uint16_t mapId,
+                                std::uint64_t ownerCharacterId, std::uint32_t definitionId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    const auto now = std::chrono::steady_clock::now();
+    m_service.Post([self, x, y, mapId, ownerCharacterId, definitionId, now]() {
+        if (self->m_stopped.load()) {
+            return;
+        }
+        WorldItemDrop drop;
+        drop.dropEntityId = self->m_nextItemDropId++;
+        drop.itemDefinitionId = definitionId;
+        drop.quantity = 1;
+        drop.mapId = mapId;
+        drop.x = x;
+        drop.y = y;
+        drop.ownerCharacterId = ownerCharacterId;
+        drop.ownerUntil = now + std::chrono::milliseconds(self->m_config.itemOwnerLockMs);
+        drop.expireAt = now + std::chrono::milliseconds(self->m_config.itemDropTtlMs);
+        drop.active = true;
+        self->m_itemDrops.Add(drop);
+        LOG_INFO("[ItemDrop] test drop=" + std::to_string(drop.dropEntityId) + " at (" +
+                 std::to_string(x) + "," + std::to_string(y) + ") map=" + std::to_string(mapId));
+    });
+    return true;
+}
+
+bool WorldServer::TestEraseVisibleItemDrop(std::uint64_t characterId,
+                                           std::uint64_t dropEntityId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, dropEntityId]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player) {
+            player->EraseVisibleItemDrop(dropEntityId);
+        }
+    });
+    return true;
+}
+
+bool WorldServer::TestAddVisibleItemDrop(std::uint64_t characterId, std::uint64_t dropEntityId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, dropEntityId]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player) {
+            player->AddVisibleItemDrop(dropEntityId);
+        }
+    });
+    return true;
+}
+
+bool WorldServer::TestFillInventory(std::uint64_t characterId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (!player) {
+            return;
+        }
+        player->Inventory().Clear();
+        for (std::size_t i = 0; i < player->Inventory().SlotCount(); ++i) {
+            InventoryEntry entry;
+            entry.instanceId = 900000 + i; // 伪持久 instanceId（测试布景）
+            entry.definitionId = kItemSlimeCoreId;
+            entry.quantity = kSlimeCoreMaxStack;
+            player->Inventory().PutAt(i, entry);
+        }
+        LOG_INFO("[Inventory] test-filled char #" + std::to_string(characterId));
+    });
+    return true;
+}
+
+bool WorldServer::TestMarkPlayerDead(std::uint64_t characterId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (player) {
+            player->MarkDead(); // 指令二十二：死亡玩家拾取由服务器拒绝
+        }
+    });
+    return true;
 }
 
 } // namespace legend::world
