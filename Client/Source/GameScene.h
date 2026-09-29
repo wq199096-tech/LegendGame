@@ -329,8 +329,10 @@ private:
     bool m_skillTestLootSaved = false;
     // 阶段8.1：世界快照（Integration Check / Auto Test 的保存/恢复 + 隔离验证）
     legend::skill::SkillWorldSnapshot m_skillWorldSnapshot;
-    // 阶段8.1：LEGEND_RUN_SKILL_CHECKS=1（或 Auto Skill Test）时才执行 Integration Check
+    // ---- 阶段8.1：LEGEND_RUN_SKILL_CHECKS=1（或 Auto Skill Test）时才执行 Integration Check
     bool m_skillChecks = false;
+    // ---- 阶段19：Quest Debug（F8；F7 已被 Skill Debug 占用——指令五十允许调整）----
+    bool m_questDebug = false;
     // ---- 阶段8.1 新增 Check / 快照方法（实现在 SkillChecks.cpp） ----
     void CaptureSkillWorldSnapshot();
     void RunSkillWorldStateIsolationCheck();

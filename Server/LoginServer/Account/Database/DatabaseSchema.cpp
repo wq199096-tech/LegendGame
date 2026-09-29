@@ -84,6 +84,35 @@ const char* kMigration3Statements[] = {
     ");",
 };
 
+// 阶段19 指令十六/六十九：Migration 4 —— character_quests / character_quest_objectives。
+// 只保存角色任务状态（state/时间戳/目标进度），任务定义绝不入库；
+// Abandoned 记录保留（指令十七：推荐保留 state=Abandoned）；
+// Completed 记录永久保留（指令六十七：一次性任务）。
+const char* kMigration4Statements[] = {
+    "CREATE TABLE IF NOT EXISTS character_quests ("
+    "  character_id INTEGER NOT NULL,"
+    "  quest_id INTEGER NOT NULL,"
+    "  state INTEGER NOT NULL,"
+    "  accepted_at INTEGER,"
+    "  completed_at INTEGER,"
+    "  turned_in_at INTEGER,"
+    "  PRIMARY KEY(character_id, quest_id),"
+    "  FOREIGN KEY(character_id) REFERENCES characters(id)"
+    ");",
+    "CREATE INDEX IF NOT EXISTS idx_character_quests_character_id "
+    "ON character_quests(character_id);",
+    "CREATE TABLE IF NOT EXISTS character_quest_objectives ("
+    "  character_id INTEGER NOT NULL,"
+    "  quest_id INTEGER NOT NULL,"
+    "  objective_id INTEGER NOT NULL,"
+    "  progress INTEGER NOT NULL,"
+    "  PRIMARY KEY(character_id, quest_id, objective_id),"
+    "  FOREIGN KEY(character_id) REFERENCES characters(id)"
+    ");",
+    "CREATE INDEX IF NOT EXISTS idx_character_quest_objectives_character_id "
+    "ON character_quest_objectives(character_id);",
+};
+
 struct Migration {
     int version;
     const char* const* statements;
@@ -94,6 +123,7 @@ const Migration kMigrations[] = {
     {1, kMigration1Statements, static_cast<int>(std::size(kMigration1Statements))},
     {2, kMigration2Statements, static_cast<int>(std::size(kMigration2Statements))},
     {3, kMigration3Statements, static_cast<int>(std::size(kMigration3Statements))},
+    {4, kMigration4Statements, static_cast<int>(std::size(kMigration4Statements))},
 };
 
 // ---------------------------------------------------------------------------

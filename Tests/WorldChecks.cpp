@@ -23,6 +23,7 @@ void RunWorldSkillChecks();
 void RunWorldStatusChecks();
 void RunWorldProgressionChecks();
 void RunWorldInventoryChecks();
+void RunWorldQuestChecks();
 }
 
 namespace {
@@ -865,6 +866,9 @@ int main() {
 
     // ---- 阶段18 掉落/背包/装备检查（独立 servers 生命周期） ----
     RunWorldInventoryChecks();
+
+    // ---- 阶段19 服务器权威任务检查（独立 servers 生命周期） ----
+    RunWorldQuestChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

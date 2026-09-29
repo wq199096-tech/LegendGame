@@ -434,7 +434,13 @@ void GameScene::Update(float deltaTime) {
     // Debug 便利——服务器重新验证一切，指令六十）；3 = Whirlwind（无目标，
     // targetType=Self + targetEntityId=0，指令六十一）。Client 不做本地伤害预测
     //（指令五十九/一百五十九：accepted 后才开始表现，Impact 到达才播命中）。
-    if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+    // 阶段19：修饰键按住时 1~5 让位给 Quest Debug 键（Ctrl/Shift/Alt+1~5）。
+    const bool questModifierDown =
+        input.IsKeyDown(SDL_SCANCODE_LCTRL) || input.IsKeyDown(SDL_SCANCODE_RCTRL) ||
+        input.IsKeyDown(SDL_SCANCODE_LALT) || input.IsKeyDown(SDL_SCANCODE_RALT) ||
+        input.IsKeyDown(SDL_SCANCODE_LSHIFT) || input.IsKeyDown(SDL_SCANCODE_RSHIFT);
+    if (!questModifierDown && m_networkController != nullptr &&
+        m_networkController->World().IsWorldReady()) {
         auto& world = m_networkController->World();
         std::uint32_t skillId = 0;
         if (input.IsKeyPressed(SDL_SCANCODE_1)) {
@@ -524,6 +530,47 @@ void GameScene::Update(float deltaTime) {
                                                 std::to_string(
                                                     m_playerSkill.GetCooldowns().GetRemaining(
                                                         skillId))));
+            }
+        }
+    }
+
+    if (input.IsKeyPressed(SDL_SCANCODE_F8)) {
+        // 阶段19 指令五十/五十一：Quest Debug（F7 已被 Skill Debug 占用——指令五十
+        // 允许"改成 F7 窗口里简单 debug 命令键"的灵活处理，此处用相邻 F8）。
+        m_questDebug = !m_questDebug;
+        if (m_networkController != nullptr) {
+            m_networkController->World().ToggleQuestDebug();
+        }
+        LOG_INFO(m_questDebug ? "Quest debug: enabled (F8) — Ctrl+1~5 Accept / Shift+1~5 "
+                                "TurnIn / Alt+1~5 Abandon"
+                              : "Quest debug: disabled (F8)");
+    }
+    // ---- 阶段19 指令五十：Quest Debug 键（Ctrl+1~5 接取 / Shift+1~5 提交 /
+    // Alt+1~5 放弃 4001~4005；只发 questId，服务器权威校验）----
+    if (m_questDebug && m_networkController != nullptr &&
+        m_networkController->World().IsWorldReady()) {
+        auto& world = m_networkController->World();
+        for (int digit = 1; digit <= 5; ++digit) {
+            const SDL_Scancode scancode =
+                static_cast<SDL_Scancode>(SDL_SCANCODE_1 + (digit - 1));
+            if (!input.IsKeyPressed(scancode)) {
+                continue;
+            }
+            const std::uint32_t questId = 4000 + static_cast<std::uint32_t>(digit);
+            if (input.IsKeyDown(SDL_SCANCODE_LCTRL) || input.IsKeyDown(SDL_SCANCODE_RCTRL)) {
+                world.SendQuestAccept(questId);
+                LOG_INFO("[Quest] Ctrl+" + std::to_string(digit) + " -> accept " +
+                         std::to_string(questId));
+            } else if (input.IsKeyDown(SDL_SCANCODE_LSHIFT) ||
+                       input.IsKeyDown(SDL_SCANCODE_RSHIFT)) {
+                world.SendQuestTurnIn(questId);
+                LOG_INFO("[Quest] Shift+" + std::to_string(digit) + " -> turn in " +
+                         std::to_string(questId));
+            } else if (input.IsKeyDown(SDL_SCANCODE_LALT) ||
+                       input.IsKeyDown(SDL_SCANCODE_RALT)) {
+                world.SendQuestAbandon(questId);
+                LOG_INFO("[Quest] Alt+" + std::to_string(digit) + " -> abandon " +
+                         std::to_string(questId));
             }
         }
     }
@@ -1552,6 +1599,10 @@ void GameScene::LogMapStats(double deltaTime) {
         // 阶段11：F12 World Debug（指令八十）
         (m_networkController && m_networkController->WorldDebugVisible()
              ? m_networkController->WorldStatusText()
+             : std::string()) +
+        // 阶段19 指令五十一：F8 Quest Debug（状态/进度来自服务器事件镜像）
+        (m_networkController && m_networkController->World().QuestDebugVisible()
+             ? m_networkController->World().QuestStatusText()
              : std::string());
 
     // F2：Entity / Direction / State / Clip / Frame

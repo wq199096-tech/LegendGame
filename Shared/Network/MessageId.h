@@ -93,6 +93,17 @@ enum class MessageId : std::uint16_t {
     UnequipItemRequest = 298,
     UnequipItemResponse = 299,
     EquipmentSnapshot = 300,
+    // 阶段19：服务器权威任务（310~319；Client 只能发 310/312/314 三个请求）。
+    QuestAcceptRequest = 310,
+    QuestAcceptResponse = 311,
+    QuestTurnInRequest = 312,
+    QuestTurnInResponse = 313,
+    QuestAbandonRequest = 314,
+    QuestAbandonResponse = 315,
+    QuestProgressUpdated = 316,
+    QuestStateChanged = 317,
+    QuestSnapshot = 318,
+    QuestRewardGranted = 319,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -217,6 +228,16 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::UnequipItemRequest:
         case MessageId::UnequipItemResponse:
         case MessageId::EquipmentSnapshot:
+        case MessageId::QuestAcceptRequest:
+        case MessageId::QuestAcceptResponse:
+        case MessageId::QuestTurnInRequest:
+        case MessageId::QuestTurnInResponse:
+        case MessageId::QuestAbandonRequest:
+        case MessageId::QuestAbandonResponse:
+        case MessageId::QuestProgressUpdated:
+        case MessageId::QuestStateChanged:
+        case MessageId::QuestSnapshot:
+        case MessageId::QuestRewardGranted:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

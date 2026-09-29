@@ -77,6 +77,16 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::UnequipItemRequest: return "UnequipItemRequest";
         case MessageId::UnequipItemResponse: return "UnequipItemResponse";
         case MessageId::EquipmentSnapshot: return "EquipmentSnapshot";
+        case MessageId::QuestAcceptRequest: return "QuestAcceptRequest";
+        case MessageId::QuestAcceptResponse: return "QuestAcceptResponse";
+        case MessageId::QuestTurnInRequest: return "QuestTurnInRequest";
+        case MessageId::QuestTurnInResponse: return "QuestTurnInResponse";
+        case MessageId::QuestAbandonRequest: return "QuestAbandonRequest";
+        case MessageId::QuestAbandonResponse: return "QuestAbandonResponse";
+        case MessageId::QuestProgressUpdated: return "QuestProgressUpdated";
+        case MessageId::QuestStateChanged: return "QuestStateChanged";
+        case MessageId::QuestSnapshot: return "QuestSnapshot";
+        case MessageId::QuestRewardGranted: return "QuestRewardGranted";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

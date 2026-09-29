@@ -1,9 +1,10 @@
-﻿#include "Server/WorldServer/WorldServer.h"
+#include "Server/WorldServer/WorldServer.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
 #include "Server/WorldServer/Combat/CombatService.h"
 #include "Server/WorldServer/Combat/DamageCalculator.h"
+#include "Server/WorldServer/Quest/QuestRegistry.h"
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterProtocol.h"
@@ -63,7 +64,8 @@ WorldServer::WorldServer(net::NetworkService& service)
       m_statusSnapshotTimer(service.Io()),
       m_respawnTimer(service.Io()),
       m_progressionTimer(service.Io()),
-      m_itemDropTimer(service.Io()) {}
+      m_itemDropTimer(service.Io()),
+      m_questSnapshotTimer(service.Io()) {}
 
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
@@ -79,6 +81,13 @@ bool WorldServer::Start(std::string& error) {
     }
     if (!legend::account::InitializeSchema(m_database, error)) {
         error = "world database schema init failed: " + error;
+        m_database.Close();
+        return false;
+    }
+    // 阶段19 指令十二：启动时校验任务定义（questId/objectiveId 唯一、前置存在、
+    // requiredCount>0、奖励 Item 存在 ItemRegistry）。
+    if (!QuestRegistry::Instance().ValidateDefinitions(&m_itemRegistry, error)) {
+        error = "quest registry validation failed: " + error;
         m_database.Close();
         return false;
     }
@@ -112,6 +121,7 @@ bool WorldServer::Start(std::string& error) {
                        : std::make_unique<SeededDropRoller>(
                              std::random_device{}());
     ScheduleItemDropTick();   // 阶段18 指令四十三：Drop cleanup Tick 500ms
+    ScheduleQuestSnapshotTick(); // 阶段19 指令四十七：QuestSnapshot 纠偏 10s
     return true;
 }
 
@@ -133,6 +143,7 @@ void WorldServer::Stop() {
     m_respawnTimer.cancel();    // 阶段17：停止 Respawn Timer
     m_progressionTimer.cancel(); // 阶段17：停止成长快照 timer
     m_itemDropTimer.cancel();   // 阶段18：停止 Drop cleanup Timer
+    m_questSnapshotTimer.cancel(); // 阶段19：停止 QuestSnapshot 纠偏 Timer
     // 阶段18 指令四十九：World Drop runtime-only，重启不持久化（ServerCleanup）。
     m_itemDrops.RemoveAll();
     m_nextItemDropId = 1;
@@ -228,6 +239,12 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
             HandleEquipItemRequest(connectionId, packet);  // 阶段18 指令二十七
         } else if (messageId == MessageId::UnequipItemRequest) {
             HandleUnequipItemRequest(connectionId, packet); // 阶段18 指令三十四
+        } else if (messageId == MessageId::QuestAcceptRequest) {
+            HandleQuestAcceptRequest(connectionId, packet); // 阶段19 指令十九
+        } else if (messageId == MessageId::QuestTurnInRequest) {
+            HandleQuestTurnInRequest(connectionId, packet); // 阶段19 指令三十三
+        } else if (messageId == MessageId::QuestAbandonRequest) {
+            HandleQuestAbandonRequest(connectionId, packet); // 阶段19 指令四十三
         }
     }
 }
@@ -504,9 +521,22 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
                 itemRows.clear();
             }
         }
+        // 阶段19 指令六十八：同一 DB 任务加载持久化任务状态（不能只靠进程内存）。
+        std::vector<QuestRepository::QuestRow> questRows;
+        std::vector<QuestRepository::ObjectiveRow> questObjectiveRows;
+        std::string questLoadError;
+        if (found.success && found.value.has_value() && !found.value->deleted) {
+            if (!QuestRepository::LoadCharacterQuests(self->m_database, characterId, questRows,
+                                                      questObjectiveRows, questLoadError)) {
+                LOG_ERROR("[Quest] load failed for #" + std::to_string(characterId) + ": " +
+                          questLoadError);
+                questRows.clear();
+                questObjectiveRows.clear();
+            }
+        }
         // 结果 post 回 io 线程（self 保活，Stop 时 m_stopped 丢弃）
         self->m_service.Post([self, connectionId, requestId, accountId, characterId, found,
-                              itemRows]() {
+                              itemRows, questRows, questObjectiveRows]() {
             if (self->m_stopped.load()) {
                 return;
             }
@@ -573,6 +603,8 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
             self->SendEnterWorldSuccess(connectionId, requestId, player);
             // 阶段18 指令二十八：应用持久化背包/装备（Snapshot 在进场后下发）。
             self->ApplyLoadedItems(player, itemRows);
+            // 阶段19 指令六十八：应用持久化任务状态（先于初始校验与 Snapshot）。
+            self->ApplyLoadedQuests(player, questRows, questObjectiveRows);
             // 阶段12 指令十八：进入世界初始可见性（双向 Spawn）。
             self->InitializePlayerVisibility(player);
             LOG_INFO("[World] Player entered character=" + row.name + " (#" +
@@ -582,6 +614,9 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
             // 阶段18 指令二十八：进入世界下发完整背包/装备 Snapshot（Client 只是镜像）。
             self->SendInventorySnapshot(player);
             self->SendEquipmentSnapshot(player);
+            // 阶段19 指令四十五：进入世界下发 QuestSnapshot（全部 InProgress/
+            // ReadyToTurnIn/Completed）；重登后离线推进结果经此恢复（指令六十三）。
+            self->SendQuestSnapshot(player);
             if (self->m_hooks.onPlayerChanged) {
                 self->m_hooks.onPlayerChanged(characterId, true);
             }
@@ -707,6 +742,11 @@ void WorldServer::HandleMoveInput(std::uint64_t connectionId, const Packet& pack
     if (moved) {
         // 阶段12 指令十二：移动后重挂 SpatialGrid cell。
         m_spatialGrid.UpdatePlayerCell(player);
+    }
+    if (actuallyMoved) {
+        // 阶段19 指令二十七：位置真正变化才检查 ReachArea（不每 100ms 全量扫描；
+        // 服务器权威位置——Client 不能伪造"我到了"，指令一百零七）。
+        HandleQuestPlayerMoved(player);
     }
 }
 
@@ -1481,6 +1521,11 @@ void WorldServer::KillMonster(const std::shared_ptr<MonsterEntity>& monster,
     GrantMonsterReward(monster, killerCharacterId);
     // 阶段18 指令三十九：Reward 之后 GenerateLoot（服务器权威掉落）。
     GenerateMonsterDrops(monster, killerCharacterId);
+    // 阶段19 指令五十三：Reward/Loot 之后 Quest Kill Progress（一只 Monster 只计
+    // 一次——KillMonster 每次死亡只被调用一次；killer 离线走 DB 推进，指令六十二）。
+    if (killerCharacterId != 0) {
+        HandleQuestMonsterKilled(killerCharacterId, monster->MonsterTypeId());
+    }
     // 阶段16 指令三十八/一百一十四：死亡 -> 逐个 StatusRemoved(TargetDied) + 清空容器。
     ClearStatusOnDeath(CombatEntityType::Monster, monster->EntityId(), monster->StatusEffects(),
                        observers);
@@ -2654,6 +2699,8 @@ void WorldServer::GrantMonsterReward(const std::shared_ptr<MonsterEntity>& monst
             SendLevelUpEvent(receivers, killer, oldLevel, progression.level);
             LOG_INFO("[Progression] Player #" + std::to_string(killerCharacterId) + " leveled " +
                      std::to_string(oldLevel) + " -> " + std::to_string(progression.level));
+            // 阶段19 指令五十六：LevelUp 后推进 ReachLevel 任务（杀怪升级同样触发）。
+            HandleQuestLevelChanged(killer);
         }
         LOG_INFO("[Progression] Reward " + std::to_string(expGain) + " exp / " +
                  std::to_string(goldGain) + " gold to #" + std::to_string(killerCharacterId));
@@ -3198,6 +3245,8 @@ void WorldServer::HandleItemPickupRequest(std::uint64_t connectionId,
             self->SendInventoryDelta(player, 1, deltaEntry, bagSlotIndex);
             self->SendItemPickupResponse(player, requestId, dropEntityId, true,
                                          ItemResultCode::Success);
+            // 指令五十四：成功 Pickup 后重算 Collect 任务（"当前拥有数量"型）。
+            self->HandleQuestInventoryChanged(player);
             // 指令二十四：Despawn 广播给所有可见者（含本人）。
             self->NotifyItemDropGoneToObservers(dropEntityId,
                                                 ItemDespawnReason::PickedUp);
@@ -3631,6 +3680,698 @@ bool WorldServer::TestMarkPlayerDead(std::uint64_t characterId) {
         if (player) {
             player->MarkDead(); // 指令二十二：死亡玩家拾取由服务器拒绝
         }
+    });
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 阶段19：服务器权威任务（Quest Core V0.19）
+// 职责分离（指令一百四十四）：QuestRegistry 定义 / QuestService 规则 /
+// QuestRepository 数据库 / PlayerQuestContainer 状态 / WorldServer 只做编排。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// 指令二十四/五十四：Collect 用"当前拥有数量"——只统计背包 Material
+//（Equip/Unequip 不影响 Material 数量，指令五十四）。
+std::uint32_t OwnedMaterialCount(const PlayerSession& player, std::uint32_t definitionId) {
+    std::uint32_t total = 0;
+    for (std::size_t i = 0; i < player.Inventory().SlotCount(); ++i) {
+        const InventoryEntry* entry = player.Inventory().At(i);
+        if (entry != nullptr && entry->definitionId == definitionId) {
+            total += entry->quantity;
+        }
+    }
+    return total;
+}
+
+QuestService::OwnedCountFn OwnedCountFnFor(const std::shared_ptr<PlayerSession>& player) {
+    return [&player](std::uint32_t definitionId) {
+        return OwnedMaterialCount(*player, definitionId);
+    };
+}
+
+} // namespace
+
+void WorldServer::HandleQuestAcceptRequest(std::uint64_t connectionId,
+                                           const legend::network::Packet& packet) {
+    // 指令八十二：Malformed 回 MalformedRequest（requestId 尽力回显），不断开。
+    QuestAcceptRequestPayload request;
+    std::string decodeError;
+    if (!DecodeQuestAcceptRequest(packet.payload.data(), packet.payload.size(), request,
+                                  decodeError)) {
+        LOG_INFO("[Quest] Malformed QuestAcceptRequest from #" + std::to_string(connectionId));
+        SendQuestAcceptResponse(nullptr, request.requestId, request.questId, false,
+                                QuestResultCode::MalformedRequest);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendQuestAcceptResponse(nullptr, request.requestId, request.questId, false,
+                                QuestResultCode::NotInWorld);
+        return;
+    }
+    // 指令二十：校验链。
+    const QuestDefinition* definition = QuestRegistry::Instance().FindQuest(request.questId);
+    QuestResultCode code = QuestResultCode::Success;
+    if (definition == nullptr) {
+        code = QuestResultCode::UnknownQuest;
+    } else if (!player->Alive()) {
+        code = QuestResultCode::Dead;
+    } else if (player->Level() < definition->minLevel) {
+        code = QuestResultCode::LevelTooLow;
+    } else if (definition->prerequisiteQuestId != 0 &&
+               !player->Quests().IsCompleted(definition->prerequisiteQuestId)) {
+        // 指令六十五/六十六：ReadyToTurnIn / Abandoned 都不算 Completed。
+        code = QuestResultCode::PrerequisiteNotMet;
+    } else if (player->Quests().IsActiveOrReady(request.questId)) {
+        code = QuestResultCode::AlreadyAccepted;
+    } else if (player->Quests().IsCompleted(request.questId)) {
+        // 指令二十：任务没有 Completed 且不可重复（阶段19 全部不可重复）。
+        code = QuestResultCode::AlreadyCompleted;
+    } else if (player->Quests().CountActive() >= kMaxActiveQuests) {
+        // 指令二十一：同时进行中任务上限 20（Completed 不算进行中）。
+        code = QuestResultCode::QuestLogFull;
+    }
+    if (code != QuestResultCode::Success) {
+        SendQuestAcceptResponse(player, request.requestId, request.questId, false, code);
+        return;
+    }
+    // 指令二十三：接取初始化（InProgress + 全部进度 0 + ReachLevel/Collect
+    // 立即初始校验）。
+    auto changes = QuestService::AcceptQuest(QuestRegistry::Instance(), player->Quests(),
+                                             request.questId, player->Level(),
+                                             OwnedCountFnFor(player), legend::account::UnixNow());
+    auto stateChanges = QuestService::EvaluateQuestCompletion(
+        QuestRegistry::Instance(), player->Quests(), legend::account::UnixNow());
+    player->RememberQuestRequest(request.requestId); // 指令五十九：只缓存成功请求
+    LOG_INFO("[Quest] accepted quest=" + std::to_string(request.questId) + " char=" +
+             player->CharacterName());
+    // 指令十七：接取写 DB（先于进度写——DbWorker FIFO 保证顺序）。
+    {
+        auto self = shared_from_this();
+        const std::uint64_t characterId = player->CharacterId();
+        const QuestId questId = request.questId;
+        std::vector<std::uint32_t> objectiveIds;
+        for (const auto& objective : definition->objectives) {
+            objectiveIds.push_back(objective.objectiveId);
+        }
+        const std::int64_t acceptedAt = legend::account::UnixNow();
+        m_dbWorker.Post([self, characterId, questId, acceptedAt, objectiveIds]() {
+            std::string error;
+            if (!QuestRepository::InsertQuest(self->m_database, characterId, questId,
+                                              static_cast<std::int8_t>(QuestState::InProgress),
+                                              acceptedAt, objectiveIds, error)) {
+                LOG_ERROR("[Quest] InsertQuest failed char=" + std::to_string(characterId) +
+                          " quest=" + std::to_string(questId) + ": " + error);
+            }
+        });
+    }
+    SendQuestAcceptResponse(player, request.requestId, request.questId, true,
+                            QuestResultCode::Success);
+    SendQuestStateChanged(player, request.questId, QuestState::NotAccepted,
+                          QuestState::InProgress); // 指令三十二
+    HandleQuestObjectiveChanges(player, changes, stateChanges);
+}
+
+void WorldServer::HandleQuestTurnInRequest(std::uint64_t connectionId,
+                                           const legend::network::Packet& packet) {
+    QuestTurnInRequestPayload request;
+    std::string decodeError;
+    if (!DecodeQuestTurnInRequest(packet.payload.data(), packet.payload.size(), request,
+                                  decodeError)) {
+        LOG_INFO("[Quest] Malformed QuestTurnInRequest from #" + std::to_string(connectionId));
+        SendQuestTurnInResponse(nullptr, request.requestId, request.questId, false,
+                                QuestResultCode::MalformedRequest);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendQuestTurnInResponse(nullptr, request.requestId, request.questId, false,
+                                QuestResultCode::NotInWorld);
+        return;
+    }
+    // 指令六十：TurnIn 防重放最高优先级——重复 requestId 不重复领奖。
+    if (player->IsRecentQuestRequest(request.requestId)) {
+        SendQuestTurnInResponse(player, request.requestId, request.questId, false,
+                                QuestResultCode::DuplicateRequest);
+        return;
+    }
+    // 指令三十四：TurnIn 校验（状态必须 ReadyToTurnIn）。
+    const QuestResultCode validateCode = QuestService::ValidateTurnIn(
+        player->Quests(), request.questId, QuestRegistry::Instance());
+    if (validateCode != QuestResultCode::Success) {
+        SendQuestTurnInResponse(player, request.requestId, request.questId, false, validateCode);
+        return;
+    }
+    const QuestDefinition* definition =
+        QuestRegistry::Instance().FindQuest(request.questId);
+    // 指令三十九：奖励含物品且背包无空间 -> InventoryFull（任务仍 ReadyToTurnIn，
+    // 不先发 EXP/Gold 再因 Item 失败）。
+    InventoryContainer trial = player->Inventory();
+    std::int64_t rewardSlotIndex = -1;
+    if (definition->reward.itemDefinitionId != 0 && definition->reward.itemQuantity > 0) {
+        const auto addResult =
+            trial.Add(m_itemRegistry, definition->reward.itemDefinitionId,
+                      definition->reward.itemQuantity, 0, 0);
+        if (addResult.code == InventoryAddCode::Full) {
+            SendQuestTurnInResponse(player, request.requestId, request.questId, false,
+                                    QuestResultCode::InventoryFull);
+            return;
+        }
+        rewardSlotIndex = static_cast<std::int64_t>(addResult.slotIndex);
+    }
+    // 指令六十：立即缓存 requestId（先于 DB 提交）——连发重放不重复进入结算管线
+    //（请求风暴下首个提交未完成时，后续同 id 必须被拒绝）。
+    player->RememberQuestRequest(request.requestId);
+    // 指令三十五/三十六/三十七：奖励复用 ProgressionService/InventoryService，
+    // 不写第三套经验金币系统；EXP 奖励可能触发升级（支持跨多级）。
+    const auto progression =
+        AddExperience(player->Level(), player->Experience(),
+                      static_cast<std::int64_t>(definition->reward.exp));
+    const std::int64_t newGold = AddGold(player->Gold(),
+                                         static_cast<std::int64_t>(definition->reward.gold));
+    const std::uint32_t oldLevel = player->Level();
+    const std::int64_t oldExp = player->Experience();
+    const std::int64_t oldGold = player->Gold();
+    // 指令四十：原子 TurnIn 事务（Quest Completed + 成长写回 + 物品入库）。
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    const QuestId questId = request.questId;
+    const std::uint64_t requestId = request.requestId;
+    QuestRepository::TurnInTransaction tx;
+    tx.characterId = characterId;
+    tx.questId = questId;
+    tx.turnedInAt = legend::account::UnixNow();
+    tx.newLevel = progression.level;
+    tx.newExperience = progression.exp;
+    tx.newGold = newGold;
+    tx.rewardItemDefinitionId = definition->reward.itemDefinitionId;
+    tx.rewardItemQuantity = definition->reward.itemQuantity;
+    tx.rewardItemSlotIndex = rewardSlotIndex;
+    tx.rewardItemCreatedAt = tx.turnedInAt;
+    m_dbWorker.Post([self, characterId, questId, requestId, tx, definition, oldLevel, oldExp,
+                     oldGold]() {
+        std::string dbError;
+        const auto result = QuestRepository::RunTurnInTransaction(self->m_database, tx, dbError);
+        self->m_service.Post([self, characterId, questId, requestId, tx, result, definition,
+                              oldLevel, oldExp, oldGold, dbError]() {
+            if (self->m_stopped.load()) {
+                return;
+            }
+            auto player = self->m_players.FindByCharacter(characterId);
+            if (!player) {
+                return; // 玩家已离线：DB 事务已提交，重进恢复 Completed
+            }
+            if (!result.ok) {
+                // 指令四十：失败整体回滚——任务仍 ReadyToTurnIn，奖励未发。
+                LOG_ERROR("[Quest] TurnIn transaction failed char=" +
+                          std::to_string(characterId) + " quest=" + std::to_string(questId) +
+                          ": " + dbError);
+                self->SendQuestTurnInResponse(player, requestId, questId, false,
+                                              QuestResultCode::InternalError);
+                return;
+            }
+            // ---- 成功：更新内存并广播（指令四十） ----
+            PlayerQuestState* state = player->Quests().MutableFind(questId);
+            const QuestState oldState = state ? state->state : QuestState::ReadyToTurnIn;
+            if (state) {
+                state->state = QuestState::Completed;
+                state->turnedInAt = tx.turnedInAt;
+            }
+            // 物品奖励入内存（instanceId 回填，同 Pickup 流程）。
+            if (tx.rewardItemDefinitionId != 0 && tx.rewardItemSlotIndex >= 0 &&
+                result.itemInstanceId != 0) {
+                InventoryEntry entry;
+                entry.instanceId = result.itemInstanceId;
+                entry.definitionId = tx.rewardItemDefinitionId;
+                entry.quantity = tx.rewardItemQuantity;
+                player->Inventory().PutAt(static_cast<std::size_t>(tx.rewardItemSlotIndex), entry);
+                self->SendInventoryDelta(player, 1, entry,
+                                         static_cast<std::uint32_t>(tx.rewardItemSlotIndex));
+                // 指令五十五：任务奖励物品影响其它 Collect 任务 -> 重算。
+                self->HandleQuestInventoryChanged(player);
+            }
+            // EXP/Gold 奖励（指令三十六/三十七）：升级 -> 属性成长 + LevelUpEvent。
+            player->SetProgression(tx.newExperience, tx.newGold);
+            if (tx.newLevel != oldLevel) {
+                player->ApplyLevelGrowth(tx.newLevel);
+                self->RecalculateTargetDerivedStats(CombatEntityType::Player, characterId);
+                self->SendEntityHealthSnapshot(player, CombatEntityType::Player, characterId,
+                                               player->CurrentHp(), player->MaxHp(),
+                                               player->Alive());
+                std::vector<std::uint64_t> receivers = self->PlayerStatusReceivers(characterId);
+                self->SendLevelUpEvent(receivers, player, oldLevel, tx.newLevel);
+                // 指令五十七：任务奖励升级也必须推进其它 ReachLevel 任务。
+                self->HandleQuestLevelChanged(player);
+                LOG_INFO("[Quest] reward leveled player #" + std::to_string(characterId) + " " +
+                         std::to_string(oldLevel) + " -> " + std::to_string(tx.newLevel));
+            }
+            // QuestRewardGranted（指令四十一：只发本人）。
+            {
+                QuestRewardGrantedPayload reward;
+                reward.questId = questId;
+                reward.exp = definition->reward.exp;
+                reward.gold = definition->reward.gold;
+                reward.itemDefinitionId = definition->reward.itemDefinitionId;
+                reward.itemQuantity = definition->reward.itemQuantity;
+                reward.newLevel = tx.newLevel;
+                reward.newExperience = tx.newExperience;
+                reward.newGold = tx.newGold;
+                reward.serverTime = ServerTimeMs();
+                Packet packet;
+                packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestRewardGranted);
+                if (EncodeQuestRewardGranted(reward, packet.payload)) {
+                    self->SendPacketToPlayer(player, packet);
+                }
+            }
+            self->SendQuestStateChanged(player, questId, oldState, QuestState::Completed);
+            self->SendQuestTurnInResponse(player, requestId, questId, true,
+                                          QuestResultCode::Success);
+            self->SendProgressionSnapshot(player);
+            LOG_INFO("[Quest] turned in quest=" + std::to_string(questId) + " char=" +
+                     player->CharacterName() + " reward exp=" +
+                     std::to_string(definition->reward.exp) + " gold=" +
+                     std::to_string(definition->reward.gold));
+        });
+    });
+}
+
+void WorldServer::HandleQuestAbandonRequest(std::uint64_t connectionId,
+                                            const legend::network::Packet& packet) {
+    QuestAbandonRequestPayload request;
+    std::string decodeError;
+    if (!DecodeQuestAbandonRequest(packet.payload.data(), packet.payload.size(), request,
+                                   decodeError)) {
+        LOG_INFO("[Quest] Malformed QuestAbandonRequest from #" + std::to_string(connectionId));
+        SendQuestAbandonResponse(nullptr, request.requestId, request.questId, false,
+                                 QuestResultCode::MalformedRequest);
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        SendQuestAbandonResponse(nullptr, request.requestId, request.questId, false,
+                                 QuestResultCode::NotInWorld);
+        return;
+    }
+    if (player->IsRecentQuestRequest(request.requestId)) {
+        SendQuestAbandonResponse(player, request.requestId, request.questId, false,
+                                 QuestResultCode::DuplicateRequest);
+        return;
+    }
+    // 指令四十三：只允许 InProgress / ReadyToTurnIn；Completed 不能 Abandon。
+    const QuestResultCode code = QuestService::ValidateAbandon(
+        player->Quests(), request.questId, QuestRegistry::Instance());
+    if (code != QuestResultCode::Success) {
+        SendQuestAbandonResponse(player, request.requestId, request.questId, false, code);
+        return;
+    }
+    PlayerQuestState* state = player->Quests().MutableFind(request.questId);
+    const QuestState oldState = state ? state->state : QuestState::InProgress;
+    state->state = QuestState::Abandoned;
+    state->ResetProgress(); // 指令四十三：进度清零（以后可再次接取）
+    player->RememberQuestRequest(request.requestId);
+    LOG_INFO("[Quest] abandoned quest=" + std::to_string(request.questId) + " char=" +
+             player->CharacterName());
+    // 指令十七/四十三：保留记录 state=Abandoned + 进度清零。
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    const QuestId questId = request.questId;
+    const std::int64_t nowUnix = legend::account::UnixNow();
+    m_dbWorker.Post([self, characterId, questId, nowUnix]() {
+        std::string error;
+        if (!QuestRepository::MarkAbandoned(self->m_database, characterId, questId, nowUnix,
+                                            error)) {
+            LOG_ERROR("[Quest] MarkAbandoned failed char=" + std::to_string(characterId) +
+                      " quest=" + std::to_string(questId) + ": " + error);
+        }
+    });
+    SendQuestAbandonResponse(player, request.requestId, request.questId, true,
+                             QuestResultCode::Success);
+    SendQuestStateChanged(player, request.questId, oldState, QuestState::Abandoned);
+}
+
+void WorldServer::SendQuestAcceptResponse(const std::shared_ptr<PlayerSession>& player,
+                                          std::uint64_t requestId, QuestId questId, bool success,
+                                          QuestResultCode code) {
+    QuestAcceptResponsePayload out;
+    out.requestId = requestId;
+    out.questId = questId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestAcceptResponse);
+    if (EncodeQuestAcceptResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendQuestTurnInResponse(const std::shared_ptr<PlayerSession>& player,
+                                          std::uint64_t requestId, QuestId questId, bool success,
+                                          QuestResultCode code) {
+    QuestTurnInResponsePayload out;
+    out.requestId = requestId;
+    out.questId = questId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestTurnInResponse);
+    if (EncodeQuestTurnInResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendQuestAbandonResponse(const std::shared_ptr<PlayerSession>& player,
+                                           std::uint64_t requestId, QuestId questId, bool success,
+                                           QuestResultCode code) {
+    QuestAbandonResponsePayload out;
+    out.requestId = requestId;
+    out.questId = questId;
+    out.success = success;
+    out.resultCode = static_cast<std::uint8_t>(code);
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestAbandonResponse);
+    if (EncodeQuestAbandonResponse(out, packet.payload) && player) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendQuestProgressUpdated(const std::shared_ptr<PlayerSession>& player,
+                                           QuestId questId, std::uint32_t objectiveId,
+                                           std::uint32_t current, std::uint32_t required,
+                                           QuestState state) {
+    // 指令三十/一百二十五：QuestProgressUpdated 只发本人。
+    QuestProgressUpdatedPayload out;
+    out.questId = questId;
+    out.objectiveId = objectiveId;
+    out.current = current;
+    out.required = required;
+    out.questState = static_cast<std::uint8_t>(state);
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestProgressUpdated);
+    if (EncodeQuestProgressUpdated(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendQuestStateChanged(const std::shared_ptr<PlayerSession>& player,
+                                        QuestId questId, QuestState oldState, QuestState newState) {
+    // 指令三十一/一百二十六：QuestStateChanged 只发本人（任务不是公开信息）。
+    QuestStateChangedPayload out;
+    out.questId = questId;
+    out.oldState = static_cast<std::uint8_t>(oldState);
+    out.newState = static_cast<std::uint8_t>(newState);
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestStateChanged);
+    if (EncodeQuestStateChanged(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendQuestSnapshot(const std::shared_ptr<PlayerSession>& player) {
+    // 指令四十五/四十六：快照只发本人；Encode 侧 >256 Quest / >16 Objective 截断。
+    QuestSnapshotPayload out;
+    out.characterId = player->CharacterId();
+    out.quests = player->Quests().Snapshot();
+    out.serverTime = ServerTimeMs();
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::QuestSnapshot);
+    if (EncodeQuestSnapshot(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::ScheduleQuestSnapshotTick() {
+    if (m_stopped.load()) {
+        return;
+    }
+    m_questSnapshotTimer.expires_after(
+        std::chrono::milliseconds(m_config.questSnapshotIntervalMs));
+    auto self = shared_from_this();
+    m_questSnapshotTimer.async_wait([self](const std::error_code& ec) {
+        if (ec || self->m_stopped.load()) {
+            return;
+        }
+        self->SendQuestSnapshots();
+        self->ScheduleQuestSnapshotTick();
+    });
+}
+
+void WorldServer::SendQuestSnapshots() {
+    // 指令四十七：每 10s 对每个在线玩家发本人 QuestSnapshot 纠偏。
+    for (const auto& player : m_players.SnapshotPlayers()) {
+        SendQuestSnapshot(player);
+    }
+}
+
+void WorldServer::HandleQuestObjectiveChanges(
+    const std::shared_ptr<PlayerSession>& player,
+    const std::vector<QuestService::ObjectiveChange>& changes,
+    const std::vector<QuestService::StateChange>& stateChanges) {
+    // 编排（指令七十一/七十二）：有实际变化才写 DB（指令七十三）+ 只发本人事件。
+    if (changes.empty() && stateChanges.empty()) {
+        return;
+    }
+    auto self = shared_from_this();
+    const std::uint64_t characterId = player->CharacterId();
+    for (const auto& change : changes) {
+        const PlayerQuestState* state = player->Quests().Find(change.questId);
+        const QuestState questState = state ? state->state : QuestState::InProgress;
+        const QuestDefinition* definition =
+            QuestRegistry::Instance().FindQuest(change.questId);
+        std::uint32_t required = change.newProgress;
+        if (definition != nullptr) {
+            for (const auto& objective : definition->objectives) {
+                if (objective.objectiveId == change.objectiveId) {
+                    required = objective.requiredCount;
+                    break;
+                }
+            }
+        }
+        SendQuestProgressUpdated(player, change.questId, change.objectiveId, change.newProgress,
+                                 required, questState);
+        m_dbWorker.Post([self, characterId, change]() {
+            std::string error;
+            if (!QuestRepository::UpdateObjectiveProgress(self->m_database, characterId,
+                                                          change.questId, change.objectiveId,
+                                                          change.newProgress, error)) {
+                LOG_ERROR("[Quest] UpdateObjectiveProgress failed char=" +
+                          std::to_string(characterId) + " quest=" +
+                          std::to_string(change.questId) + ": " + error);
+            }
+        });
+    }
+    for (const auto& change : stateChanges) {
+        // 指令二十九：InProgress -> ReadyToTurnIn（不自动领奖，指令七十八）。
+        SendQuestStateChanged(player, change.questId, change.oldState, change.newState);
+        m_dbWorker.Post([self, characterId, change]() {
+            std::string error;
+            if (!QuestRepository::UpdateQuestState(
+                    self->m_database, characterId, change.questId,
+                    static_cast<std::int8_t>(change.newState), legend::account::UnixNow(),
+                    false, error)) {
+                LOG_ERROR("[Quest] UpdateQuestState failed char=" + std::to_string(characterId) +
+                          " quest=" + std::to_string(change.questId) + ": " + error);
+            }
+        });
+    }
+}
+
+void WorldServer::HandleQuestMonsterKilled(std::uint64_t killerCharacterId,
+                                           std::uint32_t monsterTypeId) {
+    // 指令二十五：Kill 目标只在玩家是最终 killer 时增加（别人杀不加）；
+    // AOE 多杀每只分别调用（每只 +1）；DOT kill 归 Status source player。
+    const auto& registry = QuestRegistry::Instance();
+    auto killer = m_players.FindByCharacter(killerCharacterId);
+    if (killer) {
+        // 在线 killer：容器推进（io 线程）-> DB + 事件。
+        auto changes = QuestService::OnMonsterKilled(registry, killer->Quests(), monsterTypeId);
+        if (changes.empty()) {
+            return;
+        }
+        auto stateChanges = QuestService::EvaluateQuestCompletion(
+            registry, killer->Quests(), legend::account::UnixNow());
+        HandleQuestObjectiveChanges(killer, changes, stateChanges);
+        return;
+    }
+    // 指令六十二：离线 killer —— DB 直接推进（不加载假 PlayerSession）。
+    std::vector<QuestRepository::KillCandidate> candidates;
+    for (const auto& definition : registry.AllQuests()) {
+        for (const auto& objective : definition.objectives) {
+            if (objective.type == QuestObjectiveType::KillMonster &&
+                objective.targetId == monsterTypeId) {
+                QuestRepository::KillCandidate candidate;
+                candidate.questId = definition.questId;
+                candidate.objectiveId = objective.objectiveId;
+                candidate.requiredCount = objective.requiredCount;
+                candidates.push_back(candidate);
+            }
+        }
+    }
+    if (candidates.empty()) {
+        return;
+    }
+    auto self = shared_from_this();
+    m_dbWorker.Post([self, killerCharacterId, candidates]() {
+        std::string error;
+        if (QuestRepository::OfflineAdvanceKill(self->m_database, killerCharacterId, candidates,
+                                                error)) {
+            LOG_INFO("[Quest] offline kill advanced char=" + std::to_string(killerCharacterId));
+        }
+        if (!error.empty()) {
+            LOG_ERROR("[Quest] OfflineAdvanceKill failed char=" +
+                      std::to_string(killerCharacterId) + ": " + error);
+        }
+    });
+}
+
+void WorldServer::HandleQuestInventoryChanged(const std::shared_ptr<PlayerSession>& player) {
+    // 指令五十四/五十五：Inventory 变化后重算 Collect 任务（"当前拥有数量"型）。
+    const auto& registry = QuestRegistry::Instance();
+    auto changes =
+        QuestService::OnInventoryChanged(registry, player->Quests(), OwnedCountFnFor(player));
+    if (changes.empty()) {
+        return;
+    }
+    auto stateChanges = QuestService::EvaluateQuestCompletion(
+        registry, player->Quests(), legend::account::UnixNow());
+    HandleQuestObjectiveChanges(player, changes, stateChanges);
+}
+
+void WorldServer::HandleQuestLevelChanged(const std::shared_ptr<PlayerSession>& player) {
+    // 指令五十六/五十七：LevelUp（杀怪奖励或任务奖励）推进 ReachLevel 任务。
+    const auto& registry = QuestRegistry::Instance();
+    auto changes = QuestService::OnPlayerLevelChanged(registry, player->Quests(), player->Level());
+    if (changes.empty()) {
+        return;
+    }
+    auto stateChanges = QuestService::EvaluateQuestCompletion(
+        registry, player->Quests(), legend::account::UnixNow());
+    HandleQuestObjectiveChanges(player, changes, stateChanges);
+}
+
+void WorldServer::HandleQuestPlayerMoved(const std::shared_ptr<PlayerSession>& player) {
+    // 指令二十七：服务器权威 MoveInput 位置变化后检查 ReachArea（一次性，指令五十八）。
+    const auto& registry = QuestRegistry::Instance();
+    auto changes = QuestService::OnPlayerMoved(registry, player->Quests(), player->MapId(),
+                                               player->PositionX(), player->PositionY());
+    if (changes.empty()) {
+        return;
+    }
+    auto stateChanges = QuestService::EvaluateQuestCompletion(
+        registry, player->Quests(), legend::account::UnixNow());
+    HandleQuestObjectiveChanges(player, changes, stateChanges);
+}
+
+void WorldServer::ApplyLoadedQuests(
+    const std::shared_ptr<PlayerSession>& player,
+    const std::vector<QuestRepository::QuestRow>& questRows,
+    const std::vector<QuestRepository::ObjectiveRow>& objectiveRows) {
+    // 指令六十八：EnterWorld 从 SQLite 加载任务状态（不能只靠进程内存）；
+    // 未知 questId（定义已删除）防御性跳过。
+    player->Quests().Clear();
+    const auto& registry = QuestRegistry::Instance();
+    for (const auto& row : questRows) {
+        if (registry.FindQuest(row.questId) == nullptr) {
+            continue;
+        }
+        PlayerQuestState& state = player->Quests().Add(row.questId);
+        state.questId = row.questId;
+        state.state = static_cast<QuestState>(row.state);
+        state.acceptedAt = row.acceptedAt;
+        state.completedAt = row.completedAt;
+        state.turnedInAt = row.turnedInAt;
+        const QuestDefinition* definition = registry.FindQuest(row.questId);
+        if (definition != nullptr) {
+            state.InitObjectives(*definition);
+        }
+    }
+    for (const auto& row : objectiveRows) {
+        PlayerQuestState* state = player->Quests().MutableFind(row.questId);
+        if (state != nullptr) {
+            state->SetObjectiveProgress(row.objectiveId, row.progress);
+        }
+    }
+    // 加载后初始校验（离线升级奖励等边界：ReachLevel/Collect 重算；进度变化写 DB）。
+    auto levelChanges =
+        QuestService::OnPlayerLevelChanged(registry, player->Quests(), player->Level());
+    auto collectChanges =
+        QuestService::OnInventoryChanged(registry, player->Quests(), OwnedCountFnFor(player));
+    auto changes = levelChanges;
+    changes.insert(changes.end(), collectChanges.begin(), collectChanges.end());
+    auto stateChanges =
+        QuestService::EvaluateQuestCompletion(registry, player->Quests(), legend::account::UnixNow());
+    if (!changes.empty() || !stateChanges.empty()) {
+        HandleQuestObjectiveChanges(player, changes, stateChanges);
+    }
+    LOG_INFO("[Quest] loaded char #" + std::to_string(player->CharacterId()) + " quests=" +
+             std::to_string(questRows.size()));
+}
+
+// ---------------------------------------------------------------------------
+// 阶段19：测试布景辅助（io 线程投递，与游戏逻辑串行；仅供测试白盒使用）
+// ---------------------------------------------------------------------------
+
+bool WorldServer::TestSeedQuestProgress(
+    std::uint64_t characterId, QuestId questId,
+    const std::unordered_map<std::uint32_t, std::uint32_t>& progress, QuestState state) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, questId, progress, state]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (!player) {
+            return;
+        }
+        const QuestDefinition* definition =
+            QuestRegistry::Instance().FindQuest(questId);
+        PlayerQuestState& questState = player->Quests().Add(questId);
+        questState.questId = questId;
+        questState.state = state;
+        questState.acceptedAt = legend::account::UnixNow();
+        questState.ResetProgress();
+        if (definition != nullptr) {
+            questState.InitObjectives(*definition);
+        }
+        for (const auto& [objectiveId, value] : progress) {
+            questState.SetObjectiveProgress(objectiveId, value);
+        }
+        LOG_INFO("[Quest] test-seeded quest=" + std::to_string(questId) + " char #" +
+                 std::to_string(characterId));
+    });
+    return true;
+}
+
+bool WorldServer::TestAcceptQuest(std::uint64_t characterId, QuestId questId) {
+    if (m_stopped.load()) {
+        return false;
+    }
+    auto self = shared_from_this();
+    m_service.Post([self, characterId, questId]() {
+        auto player = self->m_players.FindByCharacter(characterId);
+        if (!player) {
+            return;
+        }
+        const QuestDefinition* definition =
+            QuestRegistry::Instance().FindQuest(questId);
+        if (definition == nullptr) {
+            return;
+        }
+        auto changes = QuestService::AcceptQuest(QuestRegistry::Instance(), player->Quests(),
+                                                 questId, player->Level(),
+                                                 OwnedCountFnFor(player),
+                                                 legend::account::UnixNow());
+        auto stateChanges = QuestService::EvaluateQuestCompletion(
+            QuestRegistry::Instance(), player->Quests(), legend::account::UnixNow());
+        self->HandleQuestObjectiveChanges(player, changes, stateChanges);
+        LOG_INFO("[Quest] test-accepted quest=" + std::to_string(questId) + " char #" +
+                 std::to_string(characterId));
     });
     return true;
 }

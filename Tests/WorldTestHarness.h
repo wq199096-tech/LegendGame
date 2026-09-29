@@ -162,6 +162,8 @@ struct WorldTestServers {
     std::uint32_t itemDropTtlMs = 60000;
     bool testForceDropAll = false;
     std::uint64_t dropRollerSeed = 0;
+    // 阶段19：QuestSnapshot 周期（默认生产 10s；测试可缩短验证周期纠偏）。
+    int questSnapshotIntervalMs = 10000;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -198,6 +200,7 @@ struct WorldTestServers {
         world->GetConfig().itemDropTtlMs = itemDropTtlMs;
         world->GetConfig().testForceDropAll = testForceDropAll;
         world->GetConfig().dropRollerSeed = dropRollerSeed;
+        world->GetConfig().questSnapshotIntervalMs = questSnapshotIntervalMs;
         std::string error;
         if (!world->Start(error)) {
             std::printf("[TestServers] world start failed: %s\n", error.c_str());
@@ -300,8 +303,9 @@ struct WorldTestClient {
         controller.SetWorldEndpoint("127.0.0.1", kWorldPort);
     }
 
-    // 阶段17：事件枚举扩容（阶段16 末尾 30 个 + 成长 3 个 + 阶段18 余量）。
-    static constexpr int kEventCapacity = 48;
+    // 阶段17：事件枚举扩容（阶段16 末尾 30 个 + 成长 3 个 + 阶段18 8 个 +
+    // 阶段19 任务 7 个 = 48，留余量到 64）。
+    static constexpr int kEventCapacity = 64;
     std::deque<WorldNetworkEvent> recorded[kEventCapacity];
     int counts[kEventCapacity] = {};
     WorldNetworkEvent lastEvent[kEventCapacity];

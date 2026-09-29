@@ -1,9 +1,10 @@
-﻿#include "Client/WorldNetwork/WorldNetworkClient.h"
+#include "Client/WorldNetwork/WorldNetworkClient.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/Protocol.h"
 #include "Shared/Progression/ProgressionProtocol.h"
+#include "Shared/Quest/QuestProtocol.h"
 
 namespace legend::client {
 
@@ -204,6 +205,52 @@ void WorldNetworkClient::SendUnequipItem(std::uint64_t requestId, std::uint8_t e
     Packet out;
     out.header.messageId = static_cast<std::uint16_t>(MessageId::UnequipItemRequest);
     if (world::EncodeUnequipItemRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段19：Quest 请求（Client 只发 requestId + questId，指令二）
+// ---------------------------------------------------------------------------
+
+void WorldNetworkClient::SendQuestAccept(std::uint64_t requestId, std::uint32_t questId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::QuestAcceptRequestPayload request;
+    request.requestId = requestId;
+    request.questId = questId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::QuestAcceptRequest);
+    if (world::EncodeQuestAcceptRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendQuestTurnIn(std::uint64_t requestId, std::uint32_t questId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::QuestTurnInRequestPayload request;
+    request.requestId = requestId;
+    request.questId = questId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::QuestTurnInRequest);
+    if (world::EncodeQuestTurnInRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
+void WorldNetworkClient::SendQuestAbandon(std::uint64_t requestId, std::uint32_t questId) {
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::QuestAbandonRequestPayload request;
+    request.requestId = requestId;
+    request.questId = questId;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::QuestAbandonRequest);
+    if (world::EncodeQuestAbandonRequest(request, out.payload)) {
         m_connection->Send(out);
     }
 }
@@ -967,6 +1014,130 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.type = WorldNetworkEvent::Type::EquipmentSnapshotEvent;
             event.characterId = payload.characterId;
             event.equipmentSnapshot = payload;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // 阶段19：服务器权威任务事件（Client 只响应，不做本地推算——指令四十九）
+        // ------------------------------------------------------------------
+        case MessageId::QuestAcceptResponse: {
+            world::QuestAcceptResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestAcceptResponse(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestAcceptResponseEvent;
+            event.requestId = payload.requestId;
+            event.questId = payload.questId;
+            event.success = payload.success;
+            event.questResultCode = payload.resultCode;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::QuestTurnInResponse: {
+            world::QuestTurnInResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestTurnInResponse(packet.payload.data(), packet.payload.size(),
+                                                  payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestTurnInResponseEvent;
+            event.requestId = payload.requestId;
+            event.questId = payload.questId;
+            event.success = payload.success;
+            event.questResultCode = payload.resultCode;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::QuestAbandonResponse: {
+            world::QuestAbandonResponsePayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestAbandonResponse(packet.payload.data(), packet.payload.size(),
+                                                   payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestAbandonResponseEvent;
+            event.requestId = payload.requestId;
+            event.questId = payload.questId;
+            event.success = payload.success;
+            event.questResultCode = payload.resultCode;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::QuestProgressUpdated: {
+            world::QuestProgressUpdatedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestProgressUpdated(packet.payload.data(), packet.payload.size(),
+                                                   payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestProgressUpdatedEvent;
+            event.questId = payload.questId;
+            event.questObjectiveId = payload.objectiveId;
+            event.questObjectiveCurrent = payload.current;
+            event.questObjectiveRequired = payload.required;
+            event.questState = payload.questState;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::QuestStateChanged: {
+            world::QuestStateChangedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestStateChanged(packet.payload.data(), packet.payload.size(),
+                                                payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestStateChangedEvent;
+            event.questId = payload.questId;
+            event.questOldState = payload.oldState;
+            event.questState = payload.newState;
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::QuestSnapshot: {
+            world::QuestSnapshotPayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestSnapshot(packet.payload.data(), packet.payload.size(), payload,
+                                            decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestSnapshotEvent;
+            event.characterId = payload.characterId;
+            event.questSnapshot = std::move(payload.quests);
+            event.serverTime = payload.serverTime;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::QuestRewardGranted: {
+            world::QuestRewardGrantedPayload payload;
+            std::string decodeError;
+            if (!world::DecodeQuestRewardGranted(packet.payload.data(), packet.payload.size(),
+                                                 payload, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::QuestRewardGrantedEvent;
+            event.questId = payload.questId;
+            event.questRewardExp = payload.exp;
+            event.questRewardGold = payload.gold;
+            event.questRewardItemDefinitionId = payload.itemDefinitionId;
+            event.questRewardItemQuantity = payload.itemQuantity;
+            event.progression.newLevel = payload.newLevel;
+            event.progression.newExperience = payload.newExperience;
+            event.progression.newGold = payload.newGold;
             event.serverTime = payload.serverTime;
             PushEvent(std::move(event));
             return;

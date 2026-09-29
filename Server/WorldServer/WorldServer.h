@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
@@ -17,6 +17,8 @@
 #include "Server/WorldServer/Monster/MonsterSpatialGrid.h"
 #include "Server/WorldServer/Progression/ProgressionService.h"
 #include "Server/WorldServer/Progression/RewardService.h"
+#include "Server/WorldServer/Quest/QuestRepository.h"
+#include "Server/WorldServer/Quest/QuestService.h"
 #include "Server/WorldServer/Skill/SkillRegistry.h"
 #include "Server/WorldServer/Skill/SkillService.h"
 #include "Server/WorldServer/Status/StatusEffectRegistry.h"
@@ -31,6 +33,8 @@
 #include "Shared/Item/ItemTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/Progression/ProgressionProtocol.h"
+#include "Shared/Quest/QuestProtocol.h"
+#include "Shared/Quest/QuestTypes.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/Status/StatusEffectProtocol.h"
@@ -47,6 +51,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace legend::network {
@@ -104,6 +109,8 @@ public:
         std::uint64_t dropRollerSeed = 0;
         // 阶段18 测试专用：掉落表按 100% 掷骰（链路完全不变，仅概率确定性）。
         bool testForceDropAll = false;
+        // 阶段19 指令四十七：QuestSnapshot 周期纠偏（10s，发给本人；测试可缩短）。
+        int questSnapshotIntervalMs = 10000;
     };
 
     struct Hooks {
@@ -265,6 +272,52 @@ public:
     bool TestAddVisibleItemDrop(std::uint64_t characterId, std::uint64_t dropEntityId);
     bool TestFillInventory(std::uint64_t characterId);
     bool TestMarkPlayerDead(std::uint64_t characterId);
+
+    // ------------------------------------------------------------------
+    // 阶段19：服务器权威任务（100% WorldServer 权威，指令二；
+    // Client 只能发 Accept/TurnIn/Abandon——指令二）。
+    // ------------------------------------------------------------------
+    // 请求入口（io 线程；校验链见指令二十/三十四/四十三）。
+    void HandleQuestAcceptRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleQuestTurnInRequest(std::uint64_t connectionId, const legend::network::Packet& packet);
+    void HandleQuestAbandonRequest(std::uint64_t connectionId,
+                                   const legend::network::Packet& packet);
+    // 响应/事件（全部只发本人——指令一百二十五~一百二十七）。
+    void SendQuestAcceptResponse(const std::shared_ptr<PlayerSession>& player,
+                                 std::uint64_t requestId, QuestId questId, bool success,
+                                 QuestResultCode code);
+    void SendQuestTurnInResponse(const std::shared_ptr<PlayerSession>& player,
+                                 std::uint64_t requestId, QuestId questId, bool success,
+                                 QuestResultCode code);
+    void SendQuestAbandonResponse(const std::shared_ptr<PlayerSession>& player,
+                                  std::uint64_t requestId, QuestId questId, bool success,
+                                  QuestResultCode code);
+    void SendQuestProgressUpdated(const std::shared_ptr<PlayerSession>& player, QuestId questId,
+                                  std::uint32_t objectiveId, std::uint32_t current,
+                                  std::uint32_t required, QuestState state);
+    void SendQuestStateChanged(const std::shared_ptr<PlayerSession>& player, QuestId questId,
+                               QuestState oldState, QuestState newState);
+    // 指令四十五/四十七：Snapshot（进世界下发 + 每 10s 本人纠偏）。
+    void SendQuestSnapshot(const std::shared_ptr<PlayerSession>& player);
+    void ScheduleQuestSnapshotTick();
+    void SendQuestSnapshots();
+    // 事件钩子编排（QuestService 推进 -> DB 写 + 事件；指令二十八/五十三~五十七）。
+    void HandleQuestObjectiveChanges(const std::shared_ptr<PlayerSession>& player,
+                                     const std::vector<QuestService::ObjectiveChange>& changes,
+                                     const std::vector<QuestService::StateChange>& stateChanges);
+    void HandleQuestMonsterKilled(std::uint64_t killerCharacterId, std::uint32_t monsterTypeId);
+    void HandleQuestInventoryChanged(const std::shared_ptr<PlayerSession>& player);
+    void HandleQuestLevelChanged(const std::shared_ptr<PlayerSession>& player);
+    void HandleQuestPlayerMoved(const std::shared_ptr<PlayerSession>& player);
+    // 指令六十八：EnterWorld 加载持久化任务（DB Worker 任务里调用，io 线程应用）。
+    void ApplyLoadedQuests(const std::shared_ptr<PlayerSession>& player,
+                           const std::vector<QuestRepository::QuestRow>& questRows,
+                           const std::vector<QuestRepository::ObjectiveRow>& objectiveRows);
+    // 测试白盒：直接设置任务状态/进度（不写 DB；QuestLogFull 等布景用）。
+    bool TestSeedQuestProgress(std::uint64_t characterId, QuestId questId,
+                               const std::unordered_map<std::uint32_t, std::uint32_t>& progress,
+                               QuestState state);
+    bool TestAcceptQuest(std::uint64_t characterId, QuestId questId);
 
 private:
     struct PendingTicket {
@@ -442,6 +495,9 @@ private:
     WorldItemDropManager m_itemDrops;         // 指令十二/十七：Drop 容器 + Spatial Grid
     std::uint64_t m_nextItemDropId = 1;       // 指令十三：dropEntityId 单调（≠ instanceId）
     asio::steady_timer m_itemDropTimer;       // 指令四十三：Drop cleanup tick 500ms
+    // 阶段19：QuestRegistry 硬编码单例（QuestRegistry::Instance()）；
+    // QuestSnapshot 周期纠偏 Timer（指令四十七：10s，Stop 时 cancel）。
+    asio::steady_timer m_questSnapshotTimer;
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
     legend::account::Database m_database;

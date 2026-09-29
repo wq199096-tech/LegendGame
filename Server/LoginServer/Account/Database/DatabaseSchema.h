@@ -10,7 +10,9 @@ namespace legend::account {
 // 阶段17 指令三：Migration 2 —— characters 增加 gold 列（旧角色默认 0）。
 // 阶段18 指令八：Migration 3 —— inventory_items / character_equipment 两表
 //（旧库自动升级；instance_id = INTEGER PRIMARY KEY 持久唯一，重启不碰撞）。
-inline constexpr int kCurrentSchemaVersion = 3;
+// 阶段19 指令十六：Migration 4 —— character_quests / character_quest_objectives
+//（旧库自动升级；只保存角色任务状态，任务定义仍在代码，指令六十九）。
+inline constexpr int kCurrentSchemaVersion = 4;
 
 // 初始化：quick_check 损坏检测 + 旧结构兼容升级 + 建表 + Migration 到
 // kCurrentSchemaVersion。新库 -> 应用全部 Migration 并写入 version；

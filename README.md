@@ -1,6 +1,6 @@
 # LegendGame — 自研 PC MMORPG 项目
 
-自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Loot/Inventory/Equipment Core V0.18**。
+自研 Windows PC 2D/2.5D MMORPG。当前阶段：**Quest Core V0.19**。
 
 - 语言：C++20
 - 构建：CMake + FetchContent（自动下载 SDL3 / nlohmann-json / Dear ImGui / asio / SQLite3 / libsodium）
@@ -375,6 +375,49 @@ SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发
   不凭空创建）；Debug 键 E 拾取最近 100 内掉落 / I 输出背包 / 6/7 装备剑·甲 / 8/9 卸下
   Weapon·Armor；F12 显示 Inventory Used/40、Weapon/Armor、Effective Attack/Defense
 
+**服务器权威任务（阶段19：Quest Core V0.19）**：
+
+- **100% WorldServer 权威**（指令二）：Client 只能发 Accept/TurnIn/Abandon 三个请求
+  （requestId + questId，协议 310~319）；任务是否完成/杀怪数量/物品数量/等级/区域到达/
+  奖励内容/任务状态/任务进度全部由服务器决定，Client 只是事件镜像（不能本地杀怪 +1）
+- **QuestRegistry**（`Server/WorldServer/Quest/`，硬编码 5 个固定测试任务，Definition 绝不入库）：
+  - 4001 Slime Hunter：Kill Training Slime ×5 → EXP100/Gold20（无前置）
+  - 4002 Core Collector：Collect Slime Core ×3 → EXP80/Gold10（前置 4001）
+  - 4003 Growing Warrior：Reach Level 3 → Gold50（前置 4001）
+  - 4004 Explorer：Reach Area map1 (1500,1500) r=100 → EXP50/Gold10（无前置）
+  - 4005 Slime Cleanup：多目标 Kill ×3 + Collect ×2 → EXP150/Gold30/Rusty Sword ×1（前置 4002）
+  - 启动校验：questId/objectiveId 唯一、前置存在、requiredCount>0、奖励 Item 存在 ItemRegistry
+- **QuestService 纯逻辑**（规则）+ **QuestRepository**（prepared statements，DB Worker 线程）+
+  **PlayerQuestContainer**（PlayerSession 内，不散落 WorldServer 多个 map）+ WorldServer 只编排
+- **4 种 Objective**：KillMonster（只有最终 killer 计数；AOE 多杀每只分别 +1；DOT 归 source player；
+  进度封顶 required）；CollectItem（"当前拥有数量"型——拾取增加/删除降低，进度 = min(拥有, required)，
+  背包变化即重算）；ReachLevel（升级事件与接取时校验；progress 0/1）；ReachArea（只在服务器权威
+  MoveInput 位置真正变化后检查，distanceSquared ≤ radius² 且同图；一次性，不重复写 DB）
+- **QuestState 状态机**：NotAccepted → InProgress → ReadyToTurnIn →（玩家主动 TurnIn）→ Completed；
+  Abandon 只允许 InProgress/ReadyToTurnIn（进度清零、记录保留 state=Abandoned、可重接——重接按
+  持有量重新初始校验）；Completed 永久保留，不能再接/再领/Abandon
+- **Accept 校验链**：存在 → alive → minLevel → 前置 Completed（ReadyToTurnIn/Abandoned 不算）→
+  无同任务 InProgress/Ready → 未 Completed（不可重复）→ 进行中 ≤20（QuestLogFull）；
+  接取时 ReachLevel/Collect 立即初始校验（背包已有 3 Core → 立即 3/3 Ready）
+- **TurnIn 奖励**（复用阶段17 ProgressionService/InventoryService，不写第三套经验金币）：
+  先预检背包空间（满 → InventoryFull，任务仍 Ready，不先发 EXP/Gold）→ 原子 DB 事务
+  （Quest Completed + level/exp/gold 写回 + 物品入库一次提交）→ 成功后更新内存并广播
+  QuestRewardGranted（exp/gold/item/newLevel/newExperience/newGold，只发本人）；奖励 EXP 可跨级升级
+  （LevelUpEvent 照常），升级再推进其它 ReachLevel 任务（任务 A 奖励升级 → 任务 B 更新）
+- **防重放**：最近 64 个成功 Quest requestId（Accept/TurnIn/Abandon 统一历史）；TurnIn 在 DB 提交前
+  即缓存 requestId——100 连发只奖励一次；Completed 再 TurnIn → AlreadyCompleted
+- **离线 DOT Kill 推进**（指令六十二）：killer 离线时 QuestRepository.OfflineAdvanceKill 在 DB 直接
+  推进（不加载假 PlayerSession）；离线完成第 5 只 → DB 直接 ReadyToTurnIn，重登靠 QuestSnapshot 恢复
+  （离线不发网络事件）
+- **QuestSnapshot**：进世界下发全部 InProgress/ReadyToTurnIn/Completed（questId + state + 目标进度），
+  每 10s 本人纠偏（测试可配 300ms）；快照上限 256 Quest/16 Objective，Encode 截断保护 + Decode 严格拒绝
+- **SQLite**（Migration 4：character_quests + character_quest_objectives，旧库 v3 自动升级不丢数据；
+  character_id FK → characters.id；DB 只存角色任务状态，name/description/目标定义绝不入库）
+- **客户端镜像**（`Client/WorldNetwork/ClientQuestModel`）：状态/进度只来自
+  QuestProgressUpdated/QuestStateChanged/QuestSnapshot（本地篡改被下一 Snapshot 纠正）；
+  名称用 Shared 展示元数据（SharedQuestDisplayName，规则仍在服务器）；
+  Debug：F8 任务面板 + Ctrl+1~5 接取 / Shift+1~5 提交 / Alt+1~5 放弃（4001~4005）
+
 ## Engine V0.2 操作说明
 
 | 按键 | 功能 |
@@ -398,6 +441,7 @@ SelectionTicket 一次性消费与过期、畸形包容错、并发注册/并发
 | 4 | Heavy Strike（单体近战 220% Attack，MP30，CD8s，射程90） |
 | M | Debug：Mana 恢复满（日志 `[Skill] mana restored to 100/100`） |
 | F7 | Skill Debug（蓝色 Mana 条 + 4 技能槽 CD 比例方块；标题显示 MP/各槽 CD/当前施法） |
+| F8 | Quest Debug（任务状态/目标进度面板；Ctrl+1~5 接取 4001~4005 / Shift+1~5 提交 / Alt+1~5 放弃） |
 | Z | 装备背包中第一件 Equipment（SkillCasting 中拒绝） |
 | X | 卸下 Weapon（背包满时失败、装备留槽不丢失；SkillCasting 中拒绝） |
 | ESC | 退出程序 |

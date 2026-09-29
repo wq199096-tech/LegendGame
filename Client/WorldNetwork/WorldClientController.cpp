@@ -1,4 +1,4 @@
-﻿#include "Client/WorldNetwork/WorldClientController.h"
+#include "Client/WorldNetwork/WorldClientController.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Shared/Progression/ProgressionTypes.h"
@@ -93,6 +93,7 @@ void WorldClientController::Disconnect() {
     m_worldItems.Clear();      // 阶段18：断开清空掉落/背包/装备镜像
     m_inventory.Clear();
     m_equipment.Clear();
+    m_quests.Clear();          // 阶段19：断开清空任务镜像（重进等 Snapshot）
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -102,6 +103,7 @@ void WorldClientController::OnDisconnected() {
     m_worldItems.Clear();
     m_inventory.Clear();
     m_equipment.Clear();
+    m_quests.Clear();          // 阶段19：断开清空任务镜像
     SetState(WorldFlowState::Disconnected);
 }
 
@@ -145,6 +147,7 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             m_worldItems.Clear(); // 阶段18：新会话清空掉落/背包/装备镜像（等服务器 Snapshot）
             m_inventory.Clear();
             m_equipment.Clear();
+            m_quests.Clear(); // 阶段19：新会话清空任务镜像（等服务器 Snapshot）
             // 阶段14 指令十七/六十五：本地玩家 HP 初始化（服务器权威值）。
             m_localCurrentHp = event.currentHp;
             m_localMaxHp = event.maxHp;
@@ -522,7 +525,102 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                 m_equipment.ApplySnapshot(event.equipmentSnapshot);
             }
             break;
+        // ------------------------------------------------------------------
+        // 阶段19：任务事件（Client 只是镜像，指令四十九；全部只来自本人服务器事件）
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::QuestAcceptResponseEvent:
+            LOG_INFO("[Quest] Accept " + std::to_string(event.questId) + " -> " +
+                     (event.success ? std::string("success")
+                                    : std::string("failed: ") +
+                                          legend::world::QuestResultCodeName(
+                                              event.questResultCode)));
+            break;
+        case WorldNetworkEvent::Type::QuestTurnInResponseEvent:
+            LOG_INFO("[Quest] TurnIn " + std::to_string(event.questId) + " -> " +
+                     (event.success ? std::string("success")
+                                    : std::string("failed: ") +
+                                          legend::world::QuestResultCodeName(
+                                              event.questResultCode)));
+            break;
+        case WorldNetworkEvent::Type::QuestAbandonResponseEvent:
+            LOG_INFO("[Quest] Abandon " + std::to_string(event.questId) + " -> " +
+                     (event.success ? std::string("success")
+                                    : std::string("failed: ") +
+                                          legend::world::QuestResultCodeName(
+                                              event.questResultCode)));
+            break;
+        case WorldNetworkEvent::Type::QuestProgressUpdatedEvent:
+            // 指令四十九：只应用服务器进度（不本地杀怪 +1）。
+            m_quests.ApplyProgress(event.questId, event.questObjectiveId,
+                                   event.questObjectiveCurrent, event.questObjectiveRequired);
+            LOG_INFO("[Quest] progress quest=" + std::to_string(event.questId) + " objective=" +
+                     std::to_string(event.questObjectiveId) + " " +
+                     std::to_string(event.questObjectiveCurrent) + "/" +
+                     std::to_string(event.questObjectiveRequired) + " state=" +
+                     legend::world::QuestStateName(event.questState));
+            break;
+        case WorldNetworkEvent::Type::QuestStateChangedEvent:
+            m_quests.ApplyStateChange(event.questId,
+                                      static_cast<legend::world::QuestState>(event.questState));
+            LOG_INFO("[Quest] state quest=" + std::to_string(event.questId) + " " +
+                     legend::world::QuestStateName(event.questOldState) + " -> " +
+                     legend::world::QuestStateName(event.questState));
+            break;
+        case WorldNetworkEvent::Type::QuestSnapshotEvent:
+            if (event.characterId == m_characterId) {
+                m_quests.ApplySnapshot(event.questSnapshot);
+                LOG_INFO("[Quest] snapshot received quests=" +
+                         std::to_string(event.questSnapshot.size()));
+            }
+            break;
+        case WorldNetworkEvent::Type::QuestRewardGrantedEvent:
+            // 指令四十一：奖励事件只发本人；newLevel/newExperience/newGold 由
+            // 服务器随事件下发（本地成长数据展示同步）。
+            m_localLevel = event.progression.newLevel;
+            m_localExperience = event.progression.newExperience;
+            m_localGold = event.progression.newGold;
+            m_localExpToNext = static_cast<std::int64_t>(
+                                   legend::world::ExpToNextLevel(event.progression.newLevel)) -
+                               m_localExperience;
+            if (m_localLevel >= legend::world::kProgressionMaxLevel) {
+                m_localExpToNext = 0;
+            }
+            LOG_INFO("[Quest] reward quest=" + std::to_string(event.questId) + " exp=" +
+                     std::to_string(event.questRewardExp) + " gold=" +
+                     std::to_string(event.questRewardGold) + " item=" +
+                     std::to_string(event.questRewardItemDefinitionId) + " x" +
+                     std::to_string(event.questRewardItemQuantity));
+            break;
     }
+}
+
+// ---------------------------------------------------------------------------
+// 阶段19：Debug 任务操作（Ctrl+1~5 接取 / Shift+1~5 提交 / Alt+1~5 放弃；
+// 只发 questId——指令二，状态/进度全部服务器权威）
+// ---------------------------------------------------------------------------
+
+void WorldClientController::SendQuestAccept(std::uint32_t questId) {
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_lastQuestRequestId = m_nextQuestRequestId++;
+    m_client->SendQuestAccept(m_lastQuestRequestId, questId);
+}
+
+void WorldClientController::SendQuestTurnIn(std::uint32_t questId) {
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_lastQuestRequestId = m_nextQuestRequestId++;
+    m_client->SendQuestTurnIn(m_lastQuestRequestId, questId);
+}
+
+void WorldClientController::SendQuestAbandon(std::uint32_t questId) {
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_lastQuestRequestId = m_nextQuestRequestId++;
+    m_client->SendQuestAbandon(m_lastQuestRequestId, questId);
 }
 
 // ---------------------------------------------------------------------------

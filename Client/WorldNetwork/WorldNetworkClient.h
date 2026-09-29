@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
@@ -11,6 +11,8 @@
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Network/MessageId.h"
 #include "Shared/Network/NetworkConstants.h"
+#include "Shared/Quest/QuestProtocol.h"
+#include "Shared/Quest/QuestTypes.h"
 #include "Shared/Skill/SkillProtocol.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/Status/StatusEffectProtocol.h"
@@ -111,6 +113,14 @@ struct WorldNetworkEvent {
         EquipItemResponseEvent,
         UnequipItemResponseEvent,
         EquipmentSnapshotEvent,
+        // 阶段19：服务器权威任务事件
+        QuestAcceptResponseEvent,
+        QuestTurnInResponseEvent,
+        QuestAbandonResponseEvent,
+        QuestProgressUpdatedEvent,
+        QuestStateChangedEvent,
+        QuestSnapshotEvent,
+        QuestRewardGrantedEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -209,6 +219,19 @@ struct WorldNetworkEvent {
     std::uint64_t inventoryInstanceId = 0;  // Inventory 条目 instanceId
     std::vector<world::InventoryEntryData> inventoryEntries; // InventorySnapshot
     world::EquipmentSnapshotPayload equipmentSnapshot;       // EquipmentSnapshot
+    // 阶段19：任务事件数据（复用 resultCode/requestId/serverTime 等字段）。
+    std::uint32_t questId = 0;                       // 全部 Quest 事件
+    std::uint32_t questObjectiveId = 0;              // QuestProgressUpdated
+    std::uint32_t questObjectiveCurrent = 0;         // QuestProgressUpdated
+    std::uint32_t questObjectiveRequired = 0;        // QuestProgressUpdated
+    std::uint8_t questState = 0;                     // QuestProgressUpdated/StateChanged
+    std::uint8_t questOldState = 0;                  // QuestStateChanged
+    std::uint8_t questResultCode = 0;                // Accept/TurnIn/Abandon Response
+    std::uint32_t questRewardExp = 0;                // QuestRewardGranted
+    std::uint32_t questRewardGold = 0;               // QuestRewardGranted
+    std::uint32_t questRewardItemDefinitionId = 0;   // QuestRewardGranted
+    std::uint32_t questRewardItemQuantity = 0;       // QuestRewardGranted
+    std::vector<world::QuestSnapshotEntryData> questSnapshot; // QuestSnapshot
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -258,6 +281,12 @@ public:
     void SendEquipItem(std::uint64_t requestId, std::uint32_t slotIndex);
     // 阶段18 指令三十四：卸下装备槽。
     void SendUnequipItem(std::uint64_t requestId, std::uint8_t equipmentSlot);
+
+    // 阶段19 指令二：Quest 请求——Client 只能发 Accept/TurnIn/Abandon 三个
+    // requestId + questId（绝不能上报进度/状态/奖励，指令二）。
+    void SendQuestAccept(std::uint64_t requestId, std::uint32_t questId);
+    void SendQuestTurnIn(std::uint64_t requestId, std::uint32_t questId);
+    void SendQuestAbandon(std::uint64_t requestId, std::uint32_t questId);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);

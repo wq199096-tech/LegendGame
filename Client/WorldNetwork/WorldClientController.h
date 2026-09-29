@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 
+#include "Client/WorldNetwork/ClientQuestModel.h"
 #include "Client/WorldNetwork/RemoteItemModels.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
@@ -88,6 +89,22 @@ public:
     void SendUnequip(std::uint8_t equipmentSlot);
     // 背包中查找第一件指定 definition 的槽位（无则返回 false）。
     bool FindFirstBagSlotOf(std::uint32_t definitionId, std::uint32_t& outSlotIndex) const;
+
+    // ------------------------------------------------------------------
+    // 阶段19：任务镜像与 Debug 操作（F8 面板 + Ctrl/Shift/Alt+1~5）。
+    // Client 不是任务真相（指令四十九）：只发 questId（指令二），状态/进度
+    // 全部来自服务器事件。
+    // ------------------------------------------------------------------
+    const ClientQuestModel& Quests() const { return m_quests; }
+    std::uint64_t LastQuestRequestId() const { return m_lastQuestRequestId; }
+    // Debug Ctrl+1~5：Accept / Shift+1~5：TurnIn / Alt+1~5：Abandon。
+    void SendQuestAccept(std::uint32_t questId);
+    void SendQuestTurnIn(std::uint32_t questId);
+    void SendQuestAbandon(std::uint32_t questId);
+    // 指令五十一：F8 Quest Debug 面板文本。
+    bool QuestDebugVisible() const { return m_questDebugVisible; }
+    void ToggleQuestDebug() { m_questDebugVisible = !m_questDebugVisible; }
+    std::string QuestStatusText() const { return m_quests.DebugText(); }
     // 阶段12 指令三十三/七十二：远程玩家容器与 Debug 统计。
     const RemotePlayerManager& RemotePlayers() const { return m_remotePlayers; }
     std::uint32_t LastRemoteBatchSize() const { return m_lastRemoteBatchSize; }
@@ -152,6 +169,11 @@ private:
     std::uint64_t m_nextItemRequestId = 1;
     std::uint64_t m_lastPickupRequestId = 0;
     std::uint64_t m_lastEquipRequestId = 0;
+    // 阶段19：任务镜像 + 请求 id 计数 + F8 面板开关。
+    ClientQuestModel m_quests;
+    std::uint64_t m_nextQuestRequestId = 1;
+    std::uint64_t m_lastQuestRequestId = 0;
+    bool m_questDebugVisible = false;
 };
 
 } // namespace legend::client

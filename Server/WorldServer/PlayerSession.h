@@ -1,11 +1,13 @@
 #pragma once
 
 #include "Server/WorldServer/Item/InventoryContainer.h"
+#include "Server/WorldServer/Quest/PlayerQuestContainer.h"
 #include "Server/WorldServer/Status/StatusEffectContainer.h"
 
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Progression/ProgressionTypes.h"
+#include "Shared/Quest/QuestTypes.h"
 #include "Shared/Skill/SkillDefinition.h"
 #include "Shared/Skill/SkillTypes.h"
 #include "Shared/World/WorldTypes.h"
@@ -292,6 +294,29 @@ public:
             (m_recentItemRequestCursor + 1) % m_recentItemRequestIds.size();
     }
 
+    // ------------------------------------------------------------------
+    // 阶段19 指令十四：PlayerQuestContainer —— 任务状态集中在 PlayerSession
+    //（不散落 WorldServer 多个 map）。仅 io 线程访问。
+    // ------------------------------------------------------------------
+    PlayerQuestContainer& Quests() { return m_quests; }
+    const PlayerQuestContainer& Quests() const { return m_quests; }
+
+    // 阶段19 指令五十九：最近 64 个成功 Quest requestId（Accept/TurnIn/Abandon
+    // 统一 QuestRequestHistory 防重放；TurnIn 防重放最高优先级——指令六十）。
+    bool IsRecentQuestRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentQuestRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberQuestRequest(std::uint64_t requestId) {
+        m_recentQuestRequestIds[m_recentQuestRequestCursor] = requestId;
+        m_recentQuestRequestCursor =
+            (m_recentQuestRequestCursor + 1) % m_recentQuestRequestIds.size();
+    }
+
 private:
     std::uint64_t m_connectionId = 0;
     std::uint64_t m_accountId = 0;
@@ -353,6 +378,11 @@ private:
     std::uint32_t m_equippedArmorDefense = 0; // 装备防御加成缓存
     std::array<std::uint64_t, kAttackRequestHistorySize> m_recentItemRequestIds{};
     std::size_t m_recentItemRequestCursor = 0;
+
+    // 阶段19：任务容器 + Quest 请求防重放历史（指令十四/五十九）。
+    PlayerQuestContainer m_quests;
+    std::array<std::uint64_t, kQuestRequestHistorySize> m_recentQuestRequestIds{};
+    std::size_t m_recentQuestRequestCursor = 0;
 };
 
 } // namespace legend::world
