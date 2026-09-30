@@ -124,7 +124,8 @@ void RunClientSmokeLogicChecks() {
         } else if (exitCode != 0) {
             cleanError = " exit-code-nonzero";
         }
-        Check("ClientSmoke: client exited cleanly (exit 0 within 180s)" + diag + cleanError,
+        Check(("ClientSmoke: client exited cleanly (exit 0 within 180s)" + diag + cleanError)
+                  .c_str(),
               waitResult == WAIT_OBJECT_0 && exitCode == 0);
     }
     if (log.empty()) {
