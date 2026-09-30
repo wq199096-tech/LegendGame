@@ -255,9 +255,12 @@ RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accou
     {
         Statement insert;
         const std::int64_t now = UnixNow();
+        // 阶段25 指令四：新角色写"未出生哨兵"(-1,-1) —— WorldServer EnterWorld 检测到
+        // 哨兵后按服务器权威地图出生点（Map1 300,300）落地并立即持久化。
         if (!insert.Prepare(db.Handle(),
                             "INSERT INTO characters (account_id, name, class_id, gender, "
-                            "created_at) VALUES (?, ?, ?, ?, ?);",
+                            "map_id, position_x, position_y, created_at) "
+                            "VALUES (?, ?, ?, ?, 1, -1, -1, ?);",
                             error)) {
             db.Execute("ROLLBACK;", error);
             return MapSqlError<CharacterRow>("CreateCharacter insert prepare", error);
@@ -286,6 +289,8 @@ RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accou
         result.value.level = 1;
         result.value.exp = 0;
         result.value.mapId = 1;
+        result.value.positionX = -1;
+        result.value.positionY = -1;
         result.value.createdAt = now;
         result.value.lastPlayedAt = 0;
         result.value.deleted = false;

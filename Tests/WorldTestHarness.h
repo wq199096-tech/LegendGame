@@ -490,7 +490,11 @@ inline bool SeedAccountAndCharacter(Database& db, AccountService& accounts,
     out.accountId = registered.value;
     out.characterId = created.value.characterId;
     out.name = charName;
-    return true;
+    // 阶段25 指令四：CreateCharacter 现写"未出生哨兵"(-1,-1)（服务器权威出生点检查用）。
+    // 测试需要确定性行为：显式钉在 (0,0)（历史默认位），SeedAt 随后可覆盖。
+    return account::CharacterRepository::UpdateWorldPosition(db, out.characterId, 1, 0.0f, 0.0f,
+                                                             account::UnixNow())
+        .success;
 }
 
 } // namespace worldtest

@@ -24,6 +24,31 @@
       ],
       "lootTableId": 1,
       "name": "Training Slime Loot"
+    },
+    {
+      "enabled": true,
+      "entries": [
+        {
+          "dropChance": 1.0,
+          "itemDefinitionId": 3003,
+          "maxQuantity": 3,
+          "minQuantity": 2
+        },
+        {
+          "dropChance": 0.4,
+          "itemDefinitionId": 3002,
+          "maxQuantity": 1,
+          "minQuantity": 1
+        },
+        {
+          "dropChance": 0.3,
+          "itemDefinitionId": 3010,
+          "maxQuantity": 1,
+          "minQuantity": 1
+        }
+      ],
+      "lootTableId": 2001,
+      "name": "Ancient Slime Guardian Loot"
     }
   ],
   "schemaVersion": 1

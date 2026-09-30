@@ -38,6 +38,58 @@
       "maxStack": 99,
       "name": "Slime Core",
       "type": "Material"
+    },
+    {
+      "attackBonus": 8,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 0,
+      "enabled": true,
+      "equipSlot": "Weapon",
+      "iconKey": "item_bronze_sword",
+      "itemDefinitionId": 3010,
+      "maxStack": 1,
+      "name": "Bronze Sword",
+      "type": "Weapon"
+    },
+    {
+      "attackBonus": 9,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 0,
+      "enabled": true,
+      "equipSlot": "Weapon",
+      "iconKey": "item_apprentice_staff",
+      "itemDefinitionId": 3011,
+      "maxStack": 1,
+      "name": "Apprentice Staff",
+      "type": "Weapon"
+    },
+    {
+      "attackBonus": 7,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 0,
+      "enabled": true,
+      "equipSlot": "Weapon",
+      "iconKey": "item_spirit_talisman",
+      "itemDefinitionId": 3012,
+      "maxStack": 1,
+      "name": "Spirit Talisman",
+      "type": "Weapon"
+    },
+    {
+      "attackBonus": 0,
+      "canBuy": true,
+      "canSell": true,
+      "defenseBonus": 4,
+      "enabled": true,
+      "equipSlot": "Armor",
+      "iconKey": "item_traveler_armor",
+      "itemDefinitionId": 3013,
+      "maxStack": 1,
+      "name": "Traveler Armor",
+      "type": "Armor"
     }
   ],
   "schemaVersion": 1

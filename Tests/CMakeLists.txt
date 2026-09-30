@@ -60,6 +60,7 @@ add_executable(LegendWorldTests
     AnimationChecks.cpp
     VisualDefinitionChecks.cpp
     ClientSmokeChecks.cpp
+    VerticalSliceChecks.cpp
     ../Tools/MapEditor/Source/WorldDocument.cpp
     ../Tools/MapEditor/Source/GameDataDocument.cpp
 )

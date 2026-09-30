@@ -21,6 +21,17 @@
       "radius": 350.0,
       "respawnSeconds": 8,
       "spawnId": 3001
+    },
+    {
+      "centerX": 1900.0,
+      "centerY": 1500.0,
+      "count": 1,
+      "enabled": true,
+      "mapId": 3,
+      "monsterDefinitionId": 2001,
+      "radius": 40.0,
+      "respawnSeconds": 45,
+      "spawnId": 3002
     }
   ],
   "schemaVersion": 1

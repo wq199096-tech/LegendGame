@@ -1,9 +1,9 @@
 {
   "quests": [
     {
-      "description": "Defeat 5 Training Slimes.",
+      "description": "The Training Slimes in the meadow have grown bold. Defeat 5 of them.",
       "minLevel": 1,
-      "name": "Slime Hunter",
+      "name": "First Trouble",
       "objectives": [
         {
           "objectiveId": 40011,
@@ -25,9 +25,9 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Collect 3 Slime Cores.",
+      "description": "The slimes carry strange cores. Bring me 3 Slime Cores.",
       "minLevel": 1,
-      "name": "Core Collector",
+      "name": "Strange Cores",
       "objectives": [
         {
           "objectiveId": 40021,
@@ -41,17 +41,17 @@
       "repeatable": false,
       "reward": {
         "exp": 80,
-        "gold": 10,
-        "itemDefinitionId": 0,
-        "itemQuantity": 0
+        "gold": 30,
+        "itemDefinitionId": 3002,
+        "itemQuantity": 1
       },
       "startNpcDefinitionId": 5001,
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Reach level 3.",
+      "description": "Grow stronger. Reach level 3.",
       "minLevel": 1,
-      "name": "Growing Warrior",
+      "name": "Growing Stronger",
       "objectives": [
         {
           "objectiveId": 40031,
@@ -65,7 +65,7 @@
       "repeatable": false,
       "reward": {
         "exp": 0,
-        "gold": 50,
+        "gold": 80,
         "itemDefinitionId": 0,
         "itemQuantity": 0
       },
@@ -73,26 +73,26 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Explore the far plains (1500,1500).",
+      "description": "Explore the heart of Slime Meadow (900,950).",
       "minLevel": 1,
-      "name": "Explorer",
+      "name": "Explore the Meadow",
       "objectives": [
         {
-          "areaRadius": 100.0,
-          "areaX": 1500.0,
-          "areaY": 1500.0,
-          "mapId": 1,
+          "areaRadius": 200.0,
+          "areaX": 900.0,
+          "areaY": 950.0,
+          "mapId": 2,
           "objectiveId": 40041,
           "requiredCount": 1,
           "targetId": 0,
           "type": "ReachArea"
         }
       ],
-      "prerequisiteQuestId": 0,
+      "prerequisiteQuestId": 4001,
       "questId": 4004,
       "repeatable": false,
       "reward": {
-        "exp": 50,
+        "exp": 60,
         "gold": 10,
         "itemDefinitionId": 0,
         "itemQuantity": 0
@@ -101,13 +101,13 @@
       "turnInNpcDefinitionId": 5004
     },
     {
-      "description": "Kill 3 slimes and gather 2 cores.",
-      "minLevel": 1,
-      "name": "Slime Cleanup",
+      "description": "Slay 5 slimes, gather 2 cores, and set foot in the Ancient Ruins.",
+      "minLevel": 3,
+      "name": "Deeper Threat",
       "objectives": [
         {
           "objectiveId": 40051,
-          "requiredCount": 3,
+          "requiredCount": 5,
           "targetId": 1,
           "type": "KillMonster"
         },
@@ -116,15 +116,49 @@
           "requiredCount": 2,
           "targetId": 3003,
           "type": "CollectItem"
+        },
+        {
+          "areaRadius": 200.0,
+          "areaX": 200.0,
+          "areaY": 300.0,
+          "mapId": 3,
+          "objectiveId": 40053,
+          "requiredCount": 1,
+          "targetId": 0,
+          "type": "ReachArea"
         }
       ],
       "prerequisiteQuestId": 4002,
       "questId": 4005,
       "repeatable": false,
       "reward": {
-        "exp": 150,
-        "gold": 30,
-        "itemDefinitionId": 3001,
+        "exp": 200,
+        "gold": 50,
+        "itemDefinitionId": 3013,
+        "itemQuantity": 1
+      },
+      "startNpcDefinitionId": 5001,
+      "turnInNpcDefinitionId": 5001
+    },
+    {
+      "description": "Something ancient stirs in the ruins. Defeat the Ancient Slime Guardian.",
+      "minLevel": 3,
+      "name": "Ruins Investigation",
+      "objectives": [
+        {
+          "objectiveId": 40061,
+          "requiredCount": 1,
+          "targetId": 2001,
+          "type": "KillMonster"
+        }
+      ],
+      "prerequisiteQuestId": 4005,
+      "questId": 4006,
+      "repeatable": false,
+      "reward": {
+        "exp": 500,
+        "gold": 200,
+        "itemDefinitionId": 3010,
         "itemQuantity": 1
       },
       "startNpcDefinitionId": 5001,

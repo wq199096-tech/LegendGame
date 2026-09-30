@@ -59,6 +59,18 @@
       }
     },
     {
+      "visualId": "ancient_guardian",
+      "kind": "Monster",
+      "scale": 1.6,
+      "animations": {
+        "idle": "slime_idle",
+        "walk": "slime_walk",
+        "attack": "slime_attack",
+        "hit": "slime_hit",
+        "death": "slime_death"
+      }
+    },
+    {
       "visualId": "npc_village_elder",
       "kind": "Npc",
       "scale": 1.0,

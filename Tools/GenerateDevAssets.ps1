@@ -535,4 +535,98 @@ $g.DrawArc($w2, 9, 9, 14, 14, 130, 220)
 $g.Dispose(); $bg.Dispose(); $w1.Dispose(); $w2.Dispose()
 Save-Png $bmp (Join-Path $outRoot 'UI/icon_skill_1003.png')
 
+# ---- 物品图标 32×32（阶段25 指令十三/十七：iconKey 对应）----
+function New-ItemIcon([string]$name, [scriptblock]$draw) {
+    $bmp = [System.Drawing.Bitmap]::new(32, 32)
+    $g = Get-G $bmp
+    $bg = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 38, 44, 58))
+    $g.FillRectangle($bg, 0, 0, 32, 32)
+    & $draw $g
+    $g.Dispose(); $bg.Dispose()
+    Save-Png $bmp (Join-Path $outRoot "UI/item_$name.png")
+}
+
+# 3001 Rusty Sword（锈剑）
+New-ItemIcon 'rusty_sword' {
+    param($g)
+    $blade = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 150, 140, 120))
+    $hilt = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 110, 80, 50))
+    $g.FillPolygon($blade, @(([System.Drawing.Point]::new(16, 4)), ([System.Drawing.Point]::new(19, 9)),
+        ([System.Drawing.Point]::new(19, 20)), ([System.Drawing.Point]::new(13, 20)),
+        ([System.Drawing.Point]::new(13, 9))))
+    $g.FillRectangle($hilt, 10, 20, 12, 3)
+    $g.FillRectangle($hilt, 14, 23, 4, 6)
+    $blade.Dispose(); $hilt.Dispose()
+}
+# 3002 Cloth Armor（布甲）
+New-ItemIcon 'cloth_armor' {
+    param($g)
+    $cloth = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 168, 158, 138))
+    $g.FillPolygon($cloth, @(([System.Drawing.Point]::new(8, 8)), ([System.Drawing.Point]::new(24, 8)),
+        ([System.Drawing.Point]::new(27, 14)), ([System.Drawing.Point]::new(23, 27)),
+        ([System.Drawing.Point]::new(9, 27)), ([System.Drawing.Point]::new(5, 14))))
+    $neck = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(255, 90, 84, 70), 3)
+    $g.DrawArc($neck, 12, 6, 8, 8, 0, 180)
+    $cloth.Dispose(); $neck.Dispose()
+}
+# 3003 Slime Core（史莱姆核心）
+New-ItemIcon 'slime_core' {
+    param($g)
+    $orb = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 90, 210, 110))
+    $glow = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(160, 190, 255, 190))
+    $g.FillEllipse($orb, 8, 8, 16, 16)
+    $g.FillEllipse($glow, 12, 11, 6, 6)
+    $orb.Dispose(); $glow.Dispose()
+}
+# 3010 Bronze Sword（青铜剑）
+New-ItemIcon 'bronze_sword' {
+    param($g)
+    $blade = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 205, 145, 65))
+    $edge = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 240, 200, 130))
+    $hilt = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 90, 60, 30))
+    $g.FillPolygon($blade, @(([System.Drawing.Point]::new(16, 3)), ([System.Drawing.Point]::new(20, 9)),
+        ([System.Drawing.Point]::new(20, 20)), ([System.Drawing.Point]::new(12, 20)),
+        ([System.Drawing.Point]::new(12, 9))))
+    $g.FillPolygon($edge, @(([System.Drawing.Point]::new(16, 3)), ([System.Drawing.Point]::new(18, 8)),
+        ([System.Drawing.Point]::new(14, 8))))
+    $g.FillRectangle($hilt, 9, 20, 14, 4)
+    $g.FillRectangle($hilt, 14, 24, 4, 6)
+    $blade.Dispose(); $edge.Dispose(); $hilt.Dispose()
+}
+# 3011 Apprentice Staff（学徒法杖）
+New-ItemIcon 'apprentice_staff' {
+    param($g)
+    $wood = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(255, 130, 90, 55), 3)
+    $orb = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 150, 90, 230))
+    $glow = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(150, 220, 180, 255))
+    $g.DrawLine($wood, 10, 28, 20, 10)
+    $g.FillEllipse($orb, 17, 4, 10, 10)
+    $g.FillEllipse($glow, 20, 6, 4, 4)
+    $wood.Dispose(); $orb.Dispose(); $glow.Dispose()
+}
+# 3012 Spirit Talisman（灵符）
+New-ItemIcon 'spirit_talisman' {
+    param($g)
+    $paper = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 235, 220, 160))
+    $ink = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(255, 160, 40, 40), 2)
+    $g.FillPolygon($paper, @(([System.Drawing.Point]::new(11, 4)), ([System.Drawing.Point]::new(21, 4)),
+        ([System.Drawing.Point]::new(19, 28)), ([System.Drawing.Point]::new(13, 28))))
+    $g.DrawLine($ink, 13, 9, 19, 9)
+    $g.DrawLine($ink, 16, 12, 16, 22)
+    $g.DrawLine($ink, 13, 16, 19, 16)
+    $paper.Dispose(); $ink.Dispose()
+}
+# 3013 Traveler Armor（旅人护甲）
+New-ItemIcon 'traveler_armor' {
+    param($g)
+    $leather = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 140, 100, 60))
+    $buckle = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 200, 170, 90))
+    $g.FillPolygon($leather, @(([System.Drawing.Point]::new(7, 9)), ([System.Drawing.Point]::new(25, 9)),
+        ([System.Drawing.Point]::new(28, 15)), ([System.Drawing.Point]::new(24, 28)),
+        ([System.Drawing.Point]::new(8, 28)), ([System.Drawing.Point]::new(4, 15))))
+    $g.FillRectangle($buckle, 14, 16, 4, 4)
+    $g.FillRectangle($buckle, 14, 23, 4, 2)
+    $leather.Dispose(); $buckle.Dispose()
+}
+
 Write-Host 'Dev placeholder assets generated OK.'

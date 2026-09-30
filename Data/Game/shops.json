@@ -23,6 +23,34 @@
           "canSell": true,
           "itemDefinitionId": 3002,
           "sellPrice": 40
+        },
+        {
+          "buyPrice": 150,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3010,
+          "sellPrice": 45
+        },
+        {
+          "buyPrice": 160,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3011,
+          "sellPrice": 48
+        },
+        {
+          "buyPrice": 140,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3012,
+          "sellPrice": 42
+        },
+        {
+          "buyPrice": 120,
+          "canBuy": true,
+          "canSell": true,
+          "itemDefinitionId": 3013,
+          "sellPrice": 36
         }
       ],
       "name": "General Merchant",

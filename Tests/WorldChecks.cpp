@@ -34,6 +34,7 @@ void RunAssetManifestChecks(); // 阶段24：asset_manifest 数据层
 void RunAnimationChecks(); // 阶段24：animations + 统一 AnimationPlayer
 void RunVisualDefinitionChecks(); // 阶段24：visual_entities/effects/visual_maps + Catalog
 void RunClientSmokeChecks(); // 阶段24：LegendClient.exe 真实启动冒烟（15s）
+void RunVerticalSliceChecks(); // 阶段25：Vertical Slice 检查（新角色出生/Chapter One 链路）
 }
 
 namespace {
@@ -769,12 +770,12 @@ void RunWorldFullChainCheck(WorldTestServers& servers) {
                          3000);
     Check("WorldFullChainCheck: enter world -> WorldReady", ok);
 
-    // 移动 + 快照
-    worldClient.client().SendMoveInput(1, 1.0f, 0.0f, 0.1f); // x=12
+    // 移动 + 快照（阶段25 指令四：新角色服务器权威出生 Map1 300,300 -> 移动后 x=312）
+    worldClient.client().SendMoveInput(1, 1.0f, 0.0f, 0.1f); // x=300+12
     WorldNetworkEvent snap;
     ok = ok && worldClient.WaitForSnapshotAfterSeq(1, snap);
-    ok = ok && std::fabs(snap.positionX - 12.0f) < 0.6f;
-    Check("WorldFullChainCheck: move -> snapshot x ~= 12", ok);
+    ok = ok && std::fabs(snap.positionX - 312.0f) < 0.6f;
+    Check("WorldFullChainCheck: move -> snapshot x ~= 312", ok);
 
     // 断开 -> DB 保存
     worldClient.Disconnect();
@@ -785,7 +786,7 @@ void RunWorldFullChainCheck(WorldTestServers& servers) {
                                   servers.dbPath,
                                   "SELECT position_x FROM characters WHERE id=" +
                                       std::to_string(heroId) + ";") -
-                                  12.0) < 0.01;
+                                  312.0) < 0.01;
                    },
                    3000);
     Check("WorldFullChainCheck: disconnect -> position saved", ok);
@@ -818,8 +819,8 @@ void RunWorldFullChainCheck(WorldTestServers& servers) {
     WorldTestClient worldClient2;
     ok = ok && !ticket2.empty() && worldClient2.ConnectAndEnter(ticket2, 8000);
     const WorldNetworkEvent& enter2 = worldClient2.LastEnterSuccess();
-    Check("WorldFullChainCheck: re-enter restores saved position (x ~= 12)",
-          ok && std::fabs(enter2.positionX - 12.0f) < 0.6f);
+    Check("WorldFullChainCheck: re-enter restores saved position (x ~= 312)",
+          ok && std::fabs(enter2.positionX - 312.0f) < 0.6f);
     worldClient2.Disconnect();
     loginClient2.Disconnect();
     WaitUntil([&] { return true; }, 300);
@@ -895,6 +896,9 @@ int main() {
     RunAnimationChecks();
     RunVisualDefinitionChecks();
     RunClientSmokeChecks();
+
+    // ---- 阶段25 Vertical Slice 检查（独立 servers 生命周期） ----
+    RunVerticalSliceChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

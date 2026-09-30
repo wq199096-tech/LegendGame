@@ -737,7 +737,15 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
                 LOG_WARN("[World] invalid persisted map " + std::to_string(row.mapId) +
                          " -> corrected to " + std::to_string(mapId));
             }
-            if (!map->InBounds(x, y)) {
+            // 阶段25 指令四：新角色出生检查（服务器权威）——未出生哨兵(-1,-1) ->
+            // 该地图出生点（Map1 = 300,300），落地后立即持久化；Client 不做任何修正。
+            const bool newCharacter = (row.positionX < 0.0 || row.positionY < 0.0);
+            if (newCharacter) {
+                x = map->spawnX;
+                y = map->spawnY;
+                LOG_INFO("[World] new character spawn map=" + std::to_string(mapId) + " at " +
+                         std::to_string(x) + "," + std::to_string(y));
+            } else if (!map->InBounds(x, y)) {
                 x = map->spawnX; // 指令二十九：越界 -> 该地图出生点
                 y = map->spawnY;
                 LOG_WARN("[World] out-of-bounds persisted position corrected map=" +

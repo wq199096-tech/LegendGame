@@ -55,6 +55,14 @@
     { "assetId": "ui_portrait_taoist", "type": "Sprite", "path": "Assets/UI/portrait_taoist.png", "width": 48, "height": 48, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
     { "assetId": "ui_icon_skill_1001", "type": "Sprite", "path": "Assets/UI/icon_skill_1001.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
     { "assetId": "ui_icon_skill_1002", "type": "Sprite", "path": "Assets/UI/icon_skill_1002.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
-    { "assetId": "ui_icon_skill_1003", "type": "Sprite", "path": "Assets/UI/icon_skill_1003.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true }
+    { "assetId": "ui_icon_skill_1003", "type": "Sprite", "path": "Assets/UI/icon_skill_1003.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+
+    { "assetId": "item_rusty_sword", "type": "Sprite", "path": "Assets/UI/item_rusty_sword.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "item_cloth_armor", "type": "Sprite", "path": "Assets/UI/item_cloth_armor.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "item_slime_core", "type": "Sprite", "path": "Assets/UI/item_slime_core.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "item_bronze_sword", "type": "Sprite", "path": "Assets/UI/item_bronze_sword.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "item_apprentice_staff", "type": "Sprite", "path": "Assets/UI/item_apprentice_staff.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "item_spirit_talisman", "type": "Sprite", "path": "Assets/UI/item_spirit_talisman.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "item_traveler_armor", "type": "Sprite", "path": "Assets/UI/item_traveler_armor.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true }
   ]
 }
