@@ -106,15 +106,27 @@ void RunClientSmokeLogicChecks() {
     CloseHandle(pi.hProcess);
     SetEnvironmentVariableA("LEGEND_CLIENT_VISUAL_SMOKE", nullptr);
 
-    Check("ClientSmoke: client exited cleanly (exit code 0 within 180s)",
-          waitResult == WAIT_OBJECT_0 && exitCode == 0);
-
-    // [Diag] 诊断行（CI 失败注解通道用）。
-    std::printf("[Diag] ClientSmoke waitResult=%lu exitCode=%lu\n",
-                static_cast<unsigned long>(waitResult), static_cast<unsigned long>(exitCode));
-
-    // ---- 里程碑标记（日志）----
+    // ---- 里程碑标记（日志；失败时把诊断嵌入检查名——必现于 CI 注解）----
     const std::string log = ReadFileText(logPath);
+    {
+        const std::string glMarker = Contains(log, "[VisualSmoke] gl-context-ready") ? "1" : "0";
+        const std::string sceneMarker =
+            Contains(log, "[VisualSmoke] game-scene-started") ? "1" : "0";
+        const std::string vsyncMarker =
+            Contains(log, "[VisualSmoke] vsync disabled") ? "1" : "0";
+        const std::string diag = " wait=" + std::to_string(waitedMs) + "ms" + " exit=" +
+                                 std::to_string(exitCode) + " logBytes=" +
+                                 std::to_string(log.size()) + " gl=" + glMarker + " scene=" +
+                                 sceneMarker + " novsync=" + vsyncMarker;
+        std::string cleanError;
+        if (waitResult != WAIT_OBJECT_0) {
+            cleanError = " process-still-running-after-budget";
+        } else if (exitCode != 0) {
+            cleanError = " exit-code-nonzero";
+        }
+        Check("ClientSmoke: client exited cleanly (exit 0 within 180s)" + diag + cleanError,
+              waitResult == WAIT_OBJECT_0 && exitCode == 0);
+    }
     if (log.empty()) {
         Check("ClientSmoke: smoke log readable", false);
         return;

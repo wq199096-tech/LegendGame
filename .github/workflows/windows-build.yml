@@ -93,12 +93,12 @@ jobs:
               if ($line -match 'tests (failed|passed)') { break }
             }
           }
-          $fails = $log | Select-String '^\[FAIL\]' | Select-Object -Last 6
+          $fails = $log | Select-String '^\[FAIL\]' | Select-Object -Last 10
           foreach ($f in $fails) {
             Write-Host "::error::$($f.Line.Substring(0, [Math]::Min(220, $f.Line.Length)))"
           }
           # 诊断行（测试内 [Diag] printf）：失败定位通道。
-          $diag = $log | Select-String '\[Diag\]' | Select-Object -Last 12
+          $diag = $log | Select-String '\[Diag\]' | Select-Object -Last 30
           foreach ($d in $diag) {
             Write-Host "::error::$($d.Line.Substring(0, [Math]::Min(220, $d.Line.Length)))"
           }
