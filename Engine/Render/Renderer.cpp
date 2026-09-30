@@ -114,7 +114,13 @@ bool Renderer::Initialize(SDL_Window* window) {
         return false;
     }
 
-    if (!SDL_GL_SetSwapInterval(1)) {
+    // 软件渲染冒烟模式（LEGEND_CLIENT_VISUAL_SMOKE=1）禁用 vsync：
+    // llvmpipe 上 Swap 可能长时间阻塞，导致主循环饿死（Update 无法推进）。
+    const bool visualSmoke = SDL_getenv("LEGEND_CLIENT_VISUAL_SMOKE") != nullptr;
+    if (visualSmoke) {
+        SDL_GL_SetSwapInterval(0);
+        LOG_INFO("[VisualSmoke] vsync disabled (software rendering).");
+    } else if (!SDL_GL_SetSwapInterval(1)) {
         LOG_WARN(std::string("Failed to enable vsync: ") + SDL_GetError());
     }
 

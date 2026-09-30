@@ -76,19 +76,37 @@ void RunClientSmokeLogicChecks() {
         return;
     }
 
-    // 至少 15s 存活（等退出；上限 90s 防挂死）。
-    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 90000);
+    // 轮询等待退出（至多 180s；每 10s 打心跳诊断：进程存活 + 标记出现情况）。
+    const DWORD kWaitBudgetMs = 180000;
+    const DWORD kPollIntervalMs = 10000;
+    DWORD waitedMs = 0;
+    DWORD waitResult = WAIT_TIMEOUT;
+    while (true) {
+        waitResult = WaitForSingleObject(pi.hProcess, kPollIntervalMs);
+        waitedMs += kPollIntervalMs;
+        if (waitResult == WAIT_OBJECT_0) {
+            break;
+        }
+        const std::string currentLog = ReadFileText(logPath);
+        std::printf("[Diag] ClientSmoke heartbeat %lums alive logBytes=%zu gl=%d scene=%d\n",
+                    static_cast<unsigned long>(waitedMs), currentLog.size(),
+                    Contains(currentLog, "[VisualSmoke] gl-context-ready") ? 1 : 0,
+                    Contains(currentLog, "[VisualSmoke] game-scene-started") ? 1 : 0);
+        if (waitedMs >= kWaitBudgetMs) {
+            break;
+        }
+    }
     DWORD exitCode = 0xFFFFFFFF;
     if (waitResult == WAIT_OBJECT_0) {
         GetExitCodeProcess(pi.hProcess, &exitCode);
-    } else if (waitResult == WAIT_TIMEOUT) {
+    } else {
         TerminateProcess(pi.hProcess, 1); // 挂死：强杀并判失败
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     SetEnvironmentVariableA("LEGEND_CLIENT_VISUAL_SMOKE", nullptr);
 
-    Check("ClientSmoke: client exited cleanly (exit code 0 within 90s)",
+    Check("ClientSmoke: client exited cleanly (exit code 0 within 180s)",
           waitResult == WAIT_OBJECT_0 && exitCode == 0);
 
     // [Diag] 诊断行（CI 失败注解通道用）。
