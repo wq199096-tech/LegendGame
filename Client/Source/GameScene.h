@@ -20,6 +20,7 @@
 // 管线：InputManager -> PlayerController -> CharacterController -> Character -> Map Collision -> Position
 namespace legend::client {
 class ClientNetworkController; // 阶段9：网络控制器（GameScene 只调 Update，指令六）
+class VisualRuntime;           // 阶段24：视觉运行时（真实资源渲染门面）
 }
 
 class GameScene final : public legend::scene::Scene {
@@ -198,6 +199,13 @@ private:
 
     legend::world::PlayerCombatController m_playerCombat;
     legend::math::Vector2 m_playerSpawnPosition{0.0f, 0.0f};
+
+    // ---- 阶段24：Visual Runtime（在线模式真实资源渲染；离线路径不受影响）----
+    std::unique_ptr<legend::client::VisualRuntime> m_visualRuntime;
+    bool m_visualHookWired = false;   // 事件钩子只挂一次
+    bool m_visualCameraSnapped = false; // 进入世界后首帧相机 snap
+    bool m_visualSmoke = false;       // LEGEND_CLIENT_VISUAL_SMOKE=1：15s 存活冒烟
+    double m_visualSmokeElapsed = 0.0;
     float m_playerRespawnTimer = 0.0f; // 死亡后复活倒计时
     bool m_combatDebug = false;        // F4
 

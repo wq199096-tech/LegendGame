@@ -124,6 +124,8 @@ bool Renderer::Initialize(SDL_Window* window) {
         DestroyContext();
         return false;
     }
+    // 阶段24 指令四十七：Client Smoke 里程碑标记（窗口已创建 + GL 上下文就绪）。
+    LOG_INFO("[VisualSmoke] gl-context-ready");
 
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     const char* gpuName = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
@@ -140,6 +142,8 @@ bool Renderer::Initialize(SDL_Window* window) {
         DestroyContext();
         return false;
     }
+    // 阶段24 指令四十七：Client Smoke 里程碑标记（Sprite Shader 编译成功）。
+    LOG_INFO("[VisualSmoke] shader-compiled");
 
     LOG_INFO("Renderer initialized.");
     return true;

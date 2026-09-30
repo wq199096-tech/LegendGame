@@ -189,6 +189,16 @@ bool ParseMaps(const json& root, WorldDataSet& out, std::string& error) {
             error = "maps.json: Map " + std::to_string(mapId) + ": unknown type '" + typeText + "'";
             return false;
         }
+        // 阶段24：可选 visualMapId（缺省空 = Client Fallback Grid）。
+        const auto visualIt = e.find("visualMapId");
+        if (visualIt != e.end()) {
+            if (!visualIt->is_string()) {
+                error = "maps.json: Map " + std::to_string(mapId) +
+                        ": visualMapId must be a string";
+                return false;
+            }
+            map.visualMapId = visualIt->get<std::string>();
+        }
         map.mapId = static_cast<std::uint16_t>(mapId);
         out.maps.push_back(map);
     }
@@ -382,6 +392,15 @@ bool ParsePortals(const json& root, WorldDataSet& out, std::string& error) {
         portal.minLevel = static_cast<std::uint32_t>(minLevel);
         portal.goldCost = static_cast<std::uint32_t>(goldCost);
         portal.enabled = enabled;
+        // 阶段24：可选 visualId（缺省空 = portal_default 视觉）。
+        const auto visualIt = e.find("visualId");
+        if (visualIt != e.end()) {
+            if (!visualIt->is_string()) {
+                error = ctx + ": visualId must be a string";
+                return false;
+            }
+            portal.visualId = visualIt->get<std::string>();
+        }
         out.portals.push_back(portal);
     }
     return true;
@@ -390,7 +409,7 @@ bool ParsePortals(const json& root, WorldDataSet& out, std::string& error) {
 // ---- 序列化 ----
 
 json MapToJson(const MapDefinition& map) {
-    return json{
+    json j{
         {"mapId", map.mapId},
         {"name", map.name},
         {"type", MapTypeToString(map.type)},
@@ -399,6 +418,10 @@ json MapToJson(const MapDefinition& map) {
         {"spawnX", map.spawnX}, {"spawnY", map.spawnY},
         {"respawnX", map.respawnX}, {"respawnY", map.respawnY},
     };
+    if (!map.visualMapId.empty()) {
+        j["visualMapId"] = map.visualMapId; // 阶段24
+    }
+    return j;
 }
 
 json NpcToJson(const NpcDefinition& npc, const DialogueDefinition* dialogue) {
@@ -439,7 +462,7 @@ json SpawnToJson(const MonsterSpawnDefinition& spawn) {
 }
 
 json PortalToJson(const PortalDefinition& portal) {
-    return json{
+    json j{
         {"portalId", portal.portalId},
         {"sourceMapId", portal.sourceMapId},
         {"x", portal.x},
@@ -452,10 +475,103 @@ json PortalToJson(const PortalDefinition& portal) {
         {"goldCost", portal.goldCost},
         {"enabled", portal.enabled},
     };
+    if (!portal.visualId.empty()) {
+        j["visualId"] = portal.visualId; // 阶段24
+    }
+    return j;
+}
+
+// 阶段24：visual_maps.json —— 地图视觉定义（背景/四层）。
+bool ParseVisualMaps(const json& root, WorldDataSet& out, std::string& error) {
+    const auto it = root.find("visualMaps");
+    if (it == root.end() || !it->is_array()) {
+        error = "visual_maps.json: missing/invalid array 'visualMaps'";
+        return false;
+    }
+    for (const auto& e : *it) {
+        if (!e.is_object()) {
+            error = "visual_maps.json: non-object element in 'visualMaps'";
+            return false;
+        }
+        MapVisualDefinition visual;
+        if (!ReadString(e, "visualMapId", visual.visualMapId,
+                        "visual_maps.json: VisualMap", error)) {
+            return false;
+        }
+        const std::string ctx = "visual_maps.json: VisualMap " + visual.visualMapId;
+        if (!ReadString(e, "backgroundAsset", visual.backgroundAsset, ctx, error) ||
+            !ReadFloat(e, "tileSize", visual.tileSize, ctx, error)) {
+            return false;
+        }
+        const auto layersIt = e.find("layers");
+        if (layersIt == e.end() || !layersIt->is_array()) {
+            error = ctx + ": missing/invalid array 'layers'";
+            return false;
+        }
+        for (const auto& layerJson : *layersIt) {
+            if (!layerJson.is_object()) {
+                error = ctx + ": non-object element in 'layers'";
+                return false;
+            }
+            MapVisualLayer layer;
+            if (!ReadString(layerJson, "name", layer.name, ctx, error) ||
+                !ReadString(layerJson, "assetId", layer.assetId, ctx, error)) {
+                return false;
+            }
+            const auto placesIt = layerJson.find("placements");
+            if (placesIt != layerJson.end()) {
+                if (!placesIt->is_array()) {
+                    error = ctx + ": layer '" + layer.name + "' placements must be an array";
+                    return false;
+                }
+                for (const auto& p : *placesIt) {
+                    if (!p.is_object()) {
+                        error = ctx + ": layer '" + layer.name + "' non-object placement";
+                        return false;
+                    }
+                    MapVisualPlacement placement;
+                    if (!ReadString(p, "assetId", placement.assetId, ctx, error) ||
+                        !ReadFloat(p, "x", placement.x, ctx, error) ||
+                        !ReadFloat(p, "y", placement.y, ctx, error)) {
+                        return false;
+                    }
+                    layer.placements.push_back(std::move(placement));
+                }
+            }
+            visual.layers.push_back(std::move(layer));
+        }
+        out.visualMaps.push_back(std::move(visual));
+    }
+    return true;
 }
 
 // 22.14/22.15 的原子写与轮换备份实现移至 Shared/WorldData/AtomicFile.h
 //（legend::data::WriteAtomicFile / BackupFileForRotate——阶段23 GameData 复用）。
+
+json VisualMapToJson(const MapVisualDefinition& visual) {
+    json layersJson = json::array();
+    for (const auto& layer : visual.layers) {
+        json placementsJson = json::array();
+        for (const auto& placement : layer.placements) {
+            placementsJson.push_back({
+                {"assetId", placement.assetId},
+                {"x", placement.x},
+                {"y", placement.y},
+            });
+        }
+        layersJson.push_back({
+            {"name", layer.name},
+            {"assetId", layer.assetId},
+            {"placements", placementsJson},
+        });
+    }
+    return json{
+        {"visualMapId", visual.visualMapId},
+        {"backgroundAsset", visual.backgroundAsset},
+        {"tileSize", visual.tileSize},
+        {"layers", layersJson},
+    };
+}
 
 } // namespace
 
@@ -502,6 +618,14 @@ bool LoadWorldData(const std::string& dir, WorldDataSet& out, std::string& error
     if (!ReadJsonFile(dir, "portals.json", portalsRoot, error) ||
         !ReadSchemaVersion(portalsRoot, "portals.json", error) ||
         !ParsePortals(portalsRoot, out, error)) {
+        return false;
+    }
+
+    // 阶段24：第 6 个文件 —— 地图视觉定义。
+    json visualMapsRoot;
+    if (!ReadJsonFile(dir, "visual_maps.json", visualMapsRoot, error) ||
+        !ReadSchemaVersion(visualMapsRoot, "visual_maps.json", error) ||
+        !ParseVisualMaps(visualMapsRoot, out, error)) {
         return false;
     }
 
@@ -713,6 +837,56 @@ bool ValidateWorldData(const WorldDataSet& data, std::string& error) {
             return false;
         }
     }
+
+    // ---- 阶段24：visual_maps ----
+    std::set<std::string> visualMapIds;
+    for (const auto& visual : data.visualMaps) {
+        const std::string ctx = "visual_maps.json: VisualMap " + visual.visualMapId;
+        if (visual.visualMapId.empty()) {
+            error = "visual_maps.json: VisualMap: visualMapId must not be empty";
+            return false;
+        }
+        if (!visualMapIds.insert(visual.visualMapId).second) {
+            error = ctx + ": duplicate visualMapId";
+            return false;
+        }
+        if (visual.backgroundAsset.empty()) {
+            error = ctx + ": backgroundAsset must not be empty";
+            return false;
+        }
+        if (!(visual.tileSize > 0.0f)) {
+            error = ctx + ": invalid tileSize (must be > 0)";
+            return false;
+        }
+        // 层固定四层，名称与顺序固定（渲染顺序契约）。
+        static const char* kRequiredLayers[] = {"Ground", "Decoration", "Object", "Foreground"};
+        if (visual.layers.size() != 4) {
+            error = ctx + ": must have exactly 4 layers (Ground/Decoration/Object/Foreground)";
+            return false;
+        }
+        for (std::size_t i = 0; i < visual.layers.size(); ++i) {
+            if (visual.layers[i].name != kRequiredLayers[i]) {
+                error = ctx + ": layer " + std::to_string(i) + " must be named '" +
+                        kRequiredLayers[i] + "' (got '" + visual.layers[i].name + "')";
+                return false;
+            }
+            for (const auto& placement : visual.layers[i].placements) {
+                if (placement.assetId.empty()) {
+                    error = ctx + ": layer '" + visual.layers[i].name +
+                            "' placement assetId must not be empty";
+                    return false;
+                }
+            }
+        }
+    }
+    // maps.visualMapId 引用必须存在（非空时）。
+    for (const auto& map : data.maps) {
+        if (!map.visualMapId.empty() && visualMapIds.count(map.visualMapId) == 0) {
+            error = "maps.json: Map " + std::to_string(map.mapId) + ": visualMapId '" +
+                    map.visualMapId + "' does not exist in visual_maps.json";
+            return false;
+        }
+    }
     return true;
 }
 
@@ -731,12 +905,13 @@ bool SaveWorldData(const std::string& dir, const WorldDataSet& data, std::string
     legend::data::BackupFileForRotate(dir, "npcs.json");
     legend::data::BackupFileForRotate(dir, "monster_spawns.json");
     legend::data::BackupFileForRotate(dir, "portals.json");
+    legend::data::BackupFileForRotate(dir, "visual_maps.json");
     legend::data::BackupFileForRotate(dir, "world_manifest.json");
 
     WorldDataSet normalized = data;
     normalized.manifest.schemaVersion = kWorldDataSchemaVersion;
     normalized.manifest.files = {"maps.json", "npcs.json", "monster_spawns.json",
-                                 "portals.json"};
+                                 "portals.json", "visual_maps.json"};
 
     json manifestJson{
         {"schemaVersion", normalized.manifest.schemaVersion},
@@ -777,11 +952,19 @@ bool SaveWorldData(const std::string& dir, const WorldDataSet& data, std::string
     for (const auto& portal : normalized.portals) {
         portalsJson["portals"].push_back(PortalToJson(portal));
     }
+    json visualMapsJson{
+        {"schemaVersion", kWorldDataSchemaVersion},
+        {"visualMaps", json::array()},
+    };
+    for (const auto& visual : normalized.visualMaps) {
+        visualMapsJson["visualMaps"].push_back(VisualMapToJson(visual));
+    }
 
     return legend::data::WriteAtomicFile(dir, "maps.json", mapsJson, error) &&
            legend::data::WriteAtomicFile(dir, "npcs.json", npcsJson, error) &&
            legend::data::WriteAtomicFile(dir, "monster_spawns.json", spawnsJson, error) &&
            legend::data::WriteAtomicFile(dir, "portals.json", portalsJson, error) &&
+           legend::data::WriteAtomicFile(dir, "visual_maps.json", visualMapsJson, error) &&
            legend::data::WriteAtomicFile(dir, "world_manifest.json", manifestJson, error);
 }
 
@@ -806,6 +989,7 @@ WorldDataSet MakeDefaultWorldData() {
     map1.spawnY = 300.0f;
     map1.respawnX = 300.0f;
     map1.respawnY = 300.0f;
+    map1.visualMapId = "vmap_greenfield";
     data.maps.push_back(map1);
 
     MapDefinition map2;
@@ -820,6 +1004,7 @@ WorldDataSet MakeDefaultWorldData() {
     map2.spawnY = 500.0f;
     map2.respawnX = 200.0f;
     map2.respawnY = 500.0f;
+    map2.visualMapId = "vmap_slime_meadow";
     data.maps.push_back(map2);
 
     MapDefinition map3;
@@ -834,6 +1019,7 @@ WorldDataSet MakeDefaultWorldData() {
     map3.spawnY = 300.0f;
     map3.respawnX = 200.0f;
     map3.respawnY = 300.0f;
+    map3.visualMapId = "vmap_ancient_ruins";
     data.maps.push_back(map3);
 
     // 阶段20 指令九：NPC 5001~5004（含对话文本）。
@@ -882,11 +1068,72 @@ WorldDataSet MakeDefaultWorldData() {
     map3Spawn.enabled = true;
     data.monsterSpawns.push_back(map3Spawn);
 
-    // 阶段21 指令十六：Portal 8001~8004。
-    data.portals.push_back({8001, 1, 1000.0f, 300.0f, 100.0f, 2, 200.0f, 500.0f, 1, 0, true});
-    data.portals.push_back({8002, 2, 150.0f, 500.0f, 100.0f, 1, 900.0f, 300.0f, 1, 0, true});
-    data.portals.push_back({8003, 2, 1800.0f, 1000.0f, 100.0f, 3, 200.0f, 300.0f, 2, 10, true});
-    data.portals.push_back({8004, 3, 150.0f, 300.0f, 100.0f, 2, 1700.0f, 1000.0f, 1, 0, true});
+    // 阶段21 指令十六：Portal 8001~8004（阶段24：visualId 全部 portal_default）。
+    data.portals.push_back({8001, 1, 1000.0f, 300.0f, 100.0f, 2, 200.0f, 500.0f, 1, 0, true,
+                            "portal_default"});
+    data.portals.push_back({8002, 2, 150.0f, 500.0f, 100.0f, 1, 900.0f, 300.0f, 1, 0, true,
+                            "portal_default"});
+    data.portals.push_back({8003, 2, 1800.0f, 1000.0f, 100.0f, 3, 200.0f, 300.0f, 2, 10, true,
+                            "portal_default"});
+    data.portals.push_back({8004, 3, 150.0f, 300.0f, 100.0f, 2, 1700.0f, 1000.0f, 1, 0, true,
+                            "portal_default"});
+
+    // 阶段24：默认地图视觉定义（开发占位资产；正式美术只需替换 Assets + Data/Assets）。
+    auto makeDefaultVisualLayer = [](const char* name) {
+        MapVisualLayer layer;
+        layer.name = name;
+        return layer;
+    };
+    auto appendPlacement = [](MapVisualLayer& layer, const char* assetId, float x, float y) {
+        layer.placements.push_back({assetId, x, y});
+    };
+
+    MapVisualDefinition greenfield;
+    greenfield.visualMapId = "vmap_greenfield";
+    greenfield.backgroundAsset = "tile_grass_a";
+    greenfield.tileSize = 64.0f;
+    greenfield.layers.push_back(makeDefaultVisualLayer("Ground"));
+    MapVisualLayer greenfieldDecoration = makeDefaultVisualLayer("Decoration");
+    appendPlacement(greenfieldDecoration, "prop_tree_oak", 500.0f, 520.0f);
+    appendPlacement(greenfieldDecoration, "prop_tree_oak", 820.0f, 640.0f);
+    appendPlacement(greenfieldDecoration, "prop_rock_gray", 380.0f, 700.0f);
+    appendPlacement(greenfieldDecoration, "prop_bush_green", 700.0f, 420.0f);
+    appendPlacement(greenfieldDecoration, "prop_bush_green", 950.0f, 760.0f);
+    greenfield.layers.push_back(std::move(greenfieldDecoration));
+    greenfield.layers.push_back(makeDefaultVisualLayer("Object"));
+    greenfield.layers.push_back(makeDefaultVisualLayer("Foreground"));
+    data.visualMaps.push_back(std::move(greenfield));
+
+    MapVisualDefinition slimeMeadow;
+    slimeMeadow.visualMapId = "vmap_slime_meadow";
+    slimeMeadow.backgroundAsset = "tile_grass_b";
+    slimeMeadow.tileSize = 64.0f;
+    slimeMeadow.layers.push_back(makeDefaultVisualLayer("Ground"));
+    MapVisualLayer meadowDecoration = makeDefaultVisualLayer("Decoration");
+    appendPlacement(meadowDecoration, "prop_bush_green", 600.0f, 800.0f);
+    appendPlacement(meadowDecoration, "prop_bush_green", 1200.0f, 1100.0f);
+    appendPlacement(meadowDecoration, "prop_rock_gray", 900.0f, 1250.0f);
+    appendPlacement(meadowDecoration, "prop_flower_patch", 750.0f, 950.0f);
+    appendPlacement(meadowDecoration, "prop_flower_patch", 1050.0f, 700.0f);
+    slimeMeadow.layers.push_back(std::move(meadowDecoration));
+    slimeMeadow.layers.push_back(makeDefaultVisualLayer("Object"));
+    slimeMeadow.layers.push_back(makeDefaultVisualLayer("Foreground"));
+    data.visualMaps.push_back(std::move(slimeMeadow));
+
+    MapVisualDefinition ancientRuins;
+    ancientRuins.visualMapId = "vmap_ancient_ruins";
+    ancientRuins.backgroundAsset = "tile_stone_a";
+    ancientRuins.tileSize = 64.0f;
+    ancientRuins.layers.push_back(makeDefaultVisualLayer("Ground"));
+    MapVisualLayer ruinsDecoration = makeDefaultVisualLayer("Decoration");
+    appendPlacement(ruinsDecoration, "prop_ruin_pillar", 500.0f, 600.0f);
+    appendPlacement(ruinsDecoration, "prop_ruin_pillar", 1100.0f, 900.0f);
+    appendPlacement(ruinsDecoration, "prop_rock_gray", 800.0f, 500.0f);
+    appendPlacement(ruinsDecoration, "prop_rock_gray", 1300.0f, 1200.0f);
+    ancientRuins.layers.push_back(std::move(ruinsDecoration));
+    ancientRuins.layers.push_back(makeDefaultVisualLayer("Object"));
+    ancientRuins.layers.push_back(makeDefaultVisualLayer("Foreground"));
+    data.visualMaps.push_back(std::move(ancientRuins));
 
     return data;
 }

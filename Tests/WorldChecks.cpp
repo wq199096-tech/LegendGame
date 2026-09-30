@@ -30,6 +30,10 @@ void RunWorldDataChecks(); // 阶段22：Data/World 数据层
 void RunMapEditorDataChecks(); // 阶段22：World Editor 文档模型
 void RunGameDataChecks(); // 阶段23：Data/Game 数据层 + 迁移回归
 void RunDefinitionValidationChecks(); // 阶段23：定义校验 + GameDataDocument
+void RunAssetManifestChecks(); // 阶段24：asset_manifest 数据层
+void RunAnimationChecks(); // 阶段24：animations + 统一 AnimationPlayer
+void RunVisualDefinitionChecks(); // 阶段24：visual_entities/effects/visual_maps + Catalog
+void RunClientSmokeChecks(); // 阶段24：LegendClient.exe 真实启动冒烟（15s）
 }
 
 namespace {
@@ -885,6 +889,12 @@ int main() {
     RunMapEditorDataChecks();
     RunGameDataChecks();
     RunDefinitionValidationChecks();
+
+    // ---- 阶段24 视觉资产/客户端冒烟检查 ----
+    RunAssetManifestChecks();
+    RunAnimationChecks();
+    RunVisualDefinitionChecks();
+    RunClientSmokeChecks();
 
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {

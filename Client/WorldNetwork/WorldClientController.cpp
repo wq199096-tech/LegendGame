@@ -116,6 +116,10 @@ void WorldClientController::OnDisconnected() {
 }
 
 void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
+    // 阶段24：视觉表现钩子（只读转发；钩子内禁止修改任何镜像状态）。
+    if (m_visualEventHook) {
+        m_visualEventHook(event);
+    }
     switch (event.type) {
         case WorldNetworkEvent::Type::Connected:
             LOG_INFO("[World] Connected to world server.");

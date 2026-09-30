@@ -24,11 +24,21 @@
 #include "Engine/Debug/Logger.h"
 #include "Engine/Map/MapLoader.h"
 #include "Engine/Map/MapTypes.h"
+#include "Engine/Render/GLApi.h"
 #include "Engine/Render/Texture.h"
+
+#include <filesystem>
+#include <set>
+
+// stb_image 声明（STB_IMAGE_IMPLEMENTATION 在 legend_engine ResourceManager.cpp）
+#include "ThirdParty/stb/stb_image.h"
 
 using legend::world::GameDataSet;
 using legend::world::MapDefinition;
 using legend::world::MapType;
+using legend::world::MapVisualDefinition;
+using legend::world::MapVisualLayer;
+using legend::world::MapVisualPlacement;
 using legend::world::MonsterSpawnDefinition;
 using legend::world::NpcDefinition;
 using legend::world::NpcType;
@@ -338,7 +348,225 @@ bool LegendMapEditorApp::Initialize() {
     }
 
     m_initialized = true;
+
+    // ---- 阶段24：Visual Asset 数据（Data/Assets + Data/World 视觉字段）----
+    LoadVisualCatalog();
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 阶段24：Visual Asset 绑定 / Validation / Preview
+// ---------------------------------------------------------------------------
+
+void LegendMapEditorApp::LoadVisualCatalog() {
+    std::string root = legend::visual::VisualDataCatalog::FindDataRoot();
+    if (root.empty()) {
+        LOG_WARN("[Editor] Visual catalog: Data root not found — visualId combos disabled.");
+        return;
+    }
+    std::string error;
+    if (m_visualCatalog.Load(root, error)) {
+        m_visualCatalogLoaded = true;
+        LOG_INFO("[Editor] Visual catalog loaded: assets=" +
+                 std::to_string(m_visualCatalog.Manifest().assets.size()) + " entities=" +
+                 std::to_string(m_visualCatalog.Entities().entities.size()));
+    } else {
+        LOG_WARN("[Editor] Visual catalog load failed (combos disabled): " + error);
+    }
+}
+
+// visualId ComboBox（kindFilter: Player/Monster/Npc/Portal；空 = 全部）。
+// 返回选中的新 visualId（未改变时原样返回 current）。
+std::string LegendMapEditorApp::VisualAssetCombo(const char* label, const std::string& current,
+                                                 const char* kindFilter) {
+    if (!m_visualCatalogLoaded) {
+        ImGui::TextDisabled("%s: (visual catalog unavailable)", label);
+        return current;
+    }
+    std::string result = current;
+    std::string currentLabel = "(none)";
+    for (const auto& entity : m_visualCatalog.Entities().entities) {
+        if (entity.visualId == current) {
+            currentLabel = current + (entity.kind == "Npc"
+                                          ? " [" + std::to_string(entity.serverVisualId) + "]"
+                                          : std::string());
+            break;
+        }
+    }
+    if (!ImGui::BeginCombo(label, currentLabel.c_str())) {
+        return current;
+    }
+    // (none) 项
+    if (ImGui::Selectable("(none)", current.empty())) {
+        result.clear();
+    }
+    for (const auto& entity : m_visualCatalog.Entities().entities) {
+        if (kindFilter != nullptr && entity.kind != kindFilter) {
+            continue;
+        }
+        std::string itemLabel =
+            entity.visualId + "  (" + entity.kind +
+            (entity.kind == "Npc" ? " #" + std::to_string(entity.serverVisualId) : "") + ")";
+        if (ImGui::Selectable(itemLabel.c_str(), entity.visualId == current)) {
+            result = entity.visualId;
+        }
+        if (entity.visualId == current) {
+            ImGui::SetItemDefaultFocus();
+        }
+    }
+    ImGui::EndCombo();
+    return result;
+}
+
+// visualMapId ComboBox：返回新选择（未选择返回原值）。
+std::string LegendMapEditorApp::VisualMapCombo(const std::string& currentId) {
+    if (!m_visualCatalogLoaded) {
+        ImGui::TextDisabled("visualMapId: (visual catalog unavailable)");
+        return currentId;
+    }
+    std::string result = currentId;
+    if (ImGui::BeginCombo("visualMapId", currentId.empty() ? "(none)" : currentId.c_str())) {
+        if (ImGui::Selectable("(none)", currentId.empty())) {
+            result.clear();
+        }
+        for (const auto& visual : m_visualCatalog.MapVisuals()) {
+            if (ImGui::Selectable(visual.visualMapId.c_str(), visual.visualMapId == currentId)) {
+                result = visual.visualMapId;
+            }
+            if (visual.visualMapId == currentId) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return result;
+}
+
+// Visual Preview（指令四十一：至少显示第一帧）。
+void LegendMapEditorApp::DrawVisualPreview(const char* visualId) {
+    if (!m_visualCatalogLoaded || visualId == nullptr || visualId[0] == '\0') {
+        return;
+    }
+    const legend::visual::VisualEntityDef* def = m_visualCatalog.FindEntity(visualId);
+    if (def == nullptr) {
+        return;
+    }
+    const auto idleIt = def->animations.find("idle");
+    if (idleIt == def->animations.end()) {
+        return;
+    }
+    const legend::visual::AnimationClipDef* clip = m_visualCatalog.FindClip(idleIt->second);
+    if (clip == nullptr) {
+        return;
+    }
+    const legend::visual::AssetManifestEntry* sheet =
+        m_visualCatalog.FindAsset(clip->spriteSheetAssetId);
+    if (sheet == nullptr) {
+        return;
+    }
+    // 加载/缓存整张 sheet 纹理（ImGui GL 纹理 id）。
+    unsigned int handle = 0;
+    const auto cached = m_previewTextures.find(sheet->path);
+    if (cached != m_previewTextures.end()) {
+        handle = cached->second;
+    } else {
+        int w = 0;
+        int h = 0;
+        int channels = 0;
+        unsigned char* pixels = stbi_load(sheet->path.c_str(), &w, &h, &channels, 4);
+        if (pixels == nullptr) {
+            ImGui::TextDisabled("preview: missing %s", sheet->path.c_str());
+            return;
+        }
+        glGenTextures(1, &handle);
+        glBindTexture(GL_TEXTURE_2D, handle);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        stbi_image_free(pixels);
+        m_previewTextures[sheet->path] = handle;
+    }
+    // 第一帧（行 0 列 0）。
+    const float u1 = static_cast<float>(clip->frameWidth) / static_cast<float>(clip->sheetWidth);
+    const float v1 = static_cast<float>(clip->frameHeight) /
+                     static_cast<float>(clip->sheetHeight);
+    const float previewH = 96.0f;
+    const float previewW = previewH * (static_cast<float>(clip->frameWidth) /
+                                       static_cast<float>(clip->frameHeight));
+    ImGui::Text("Visual Preview: %s", visualId);
+    ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(handle)),
+                 ImVec2(previewW, previewH), ImVec2(0.0f, 0.0f), ImVec2(u1, v1));
+}
+
+// Assets Validation（指令三十六）：结构校验 + 交叉引用 + 文件存在性。
+void LegendMapEditorApp::ValidateVisualAssets() {
+    if (!m_visualCatalogLoaded) {
+        LOG_ERROR("[AssetsValidation] visual catalog not loaded — nothing to validate.");
+        return;
+    }
+    std::string error;
+    int failures = 0;
+    const auto fail = [&](const std::string& message) {
+        LOG_ERROR("[AssetsValidation] " + message);
+        ++failures;
+    };
+
+    const auto& manifest = m_visualCatalog.Manifest();
+    const auto& animations = m_visualCatalog.Animations();
+    const auto& entities = m_visualCatalog.Entities();
+    const auto& effects = m_visualCatalog.Effects();
+    if (!legend::visual::ValidateVisualData(manifest, animations, entities, effects, error)) {
+        fail(error);
+    }
+
+    // 资源文件存在性（相对路径 → 工作目录）。
+    for (const auto& entry : manifest.assets) {
+        std::error_code ec;
+        if (!std::filesystem::exists(entry.path, ec)) {
+            fail("asset '" + entry.assetId + "': file missing: " + entry.path);
+        }
+    }
+
+    // 世界数据交叉引用（visualMapId / npc / portal visualId）。
+    if (m_world) {
+        const WorldDataSet& world = m_world->Data();
+        std::set<std::string> visualMapIds;
+        for (const auto& visual : m_visualCatalog.MapVisuals()) {
+            visualMapIds.insert(visual.visualMapId);
+        }
+        for (const auto& map : world.maps) {
+            if (!map.visualMapId.empty() && visualMapIds.count(map.visualMapId) == 0) {
+                fail("map " + std::to_string(map.mapId) + ": visualMapId '" +
+                     map.visualMapId + "' not in visual_maps.json");
+            }
+        }
+        for (const auto& portal : world.portals) {
+            if (!portal.visualId.empty() &&
+                legend::visual::FindVisualEntity(entities, portal.visualId) == nullptr) {
+                fail("portal " + std::to_string(portal.portalId) + ": visualId '" +
+                     portal.visualId + "' not in visual_entities.json");
+            }
+        }
+        for (const auto& npc : world.npcs) {
+            if (npc.visualId != 0 &&
+                m_visualCatalog.FindNpcEntityByServerVisualId(static_cast<int>(npc.visualId)) ==
+                    nullptr) {
+                fail("npc " + std::to_string(npc.npcDefinitionId) + ": visualId " +
+                     std::to_string(npc.visualId) + " has no visual entity (serverVisualId)");
+            }
+        }
+    }
+
+    if (failures == 0) {
+        LOG_INFO("[AssetsValidation] PASSED — assets=" +
+                 std::to_string(manifest.assets.size()) + " clips=" +
+                 std::to_string(animations.clips.size()) + " entities=" +
+                 std::to_string(entities.entities.size()) + " effects=" +
+                 std::to_string(effects.effects.size()));
+    } else {
+        LOG_ERROR("[AssetsValidation] FAILED with " + std::to_string(failures) + " issue(s).");
+    }
 }
 
 void LegendMapEditorApp::Shutdown() {
@@ -754,6 +982,10 @@ void LegendMapEditorApp::DrawMenuBar() {
                                      ? "Validation FAILED: " + m_world->ValidationErrors().front()
                                      : "Validation OK (no errors).";
                 m_worldMessageIsError = m_world->HasErrors();
+            }
+            // 阶段24 指令三十六：Assets Validation（manifest/animation/effect/visual 交叉 + 文件）。
+            if (ImGui::MenuItem("Validate Assets")) {
+                ValidateVisualAssets();
             }
             ImGui::EndMenu();
         }
@@ -1743,6 +1975,24 @@ void LegendMapEditorApp::DrawGameDataInspector() {
         editU("expReward", v->rewardExp, [](auto& m, std::uint32_t n) { m.rewardExp = n; });
         editU("goldReward", v->rewardGold, [](auto& m, std::uint32_t n) { m.rewardGold = n; });
         editU("lootTableId", v->lootTableId, [](auto& m, std::uint32_t n) { m.lootTableId = n; });
+        // 阶段24 指令四十：Monster visualId ComboBox。
+        {
+            const std::string current = v->visualId;
+            const std::string chosen =
+                m_visualCatalogLoaded
+                    ? VisualAssetCombo("visualId (visual entity)", current, "Monster")
+                    : current;
+            if (m_visualCatalogLoaded && chosen != current) {
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& m : d.monsters) {
+                        if (m.monsterTypeId == sel.id) {
+                            m.visualId = chosen;
+                        }
+                    }
+                });
+            }
+            DrawVisualPreview(current.c_str());
+        }
         // 23.18：Stat summary。
         ImGui::TextDisabled("Preview: %s Lv%u HP=%u ATK=%u DEF=%u EXP=%u Gold=%u",
                             v->name.c_str(), v->level, v->maxHp, v->attackPower, v->defense,
@@ -2070,6 +2320,155 @@ void LegendMapEditorApp::DrawWorldInspectorFields() {
                 }
             });
         }
+
+        // ---- 阶段24 指令四十：地图 visualMapId 绑定 + Visual Map 编辑 ----
+        const std::string chosenVisualMap = VisualMapCombo(m->visualMapId);
+        if (chosenVisualMap != m->visualMapId) {
+            m_world->Mutate([&](WorldDataSet& d) {
+                for (auto& map : d.maps) {
+                    if (map.mapId == sel.id) {
+                        map.visualMapId = chosenVisualMap;
+                    }
+                }
+            });
+        }
+        if (!chosenVisualMap.empty() && m_visualCatalogLoaded) {
+            // 找到 visual_maps 中对应定义进行编辑（Ground/Decoration/Object/Foreground）。
+            // 只读遍历 m_world->Data()；所有修改经 Mutate()（Undo/校验一致）。
+            const MapVisualDefinition* vm = nullptr;
+            for (const auto& visual : m_world->Data().visualMaps) {
+                if (visual.visualMapId == chosenVisualMap) {
+                    vm = &visual;
+                    break;
+                }
+            }
+            if (vm == nullptr) {
+                ImGui::TextDisabled("Visual Map '%s' not found in visual_maps.json.",
+                                    chosenVisualMap.c_str());
+            } else {
+                ImGui::Separator();
+                ImGui::Text("Visual Map: %s", chosenVisualMap.c_str());
+                // manifest 资产 id 下拉（typeFilter 空 = 全部）。
+                auto assetIdCombo = [&](const char* label, const std::string& current,
+                                        const char* typeFilter) -> std::string {
+                    std::string result = current;
+                    if (ImGui::BeginCombo(label, current.empty() ? "(none)" : current.c_str())) {
+                        if (ImGui::Selectable("(none)", current.empty())) {
+                            result.clear();
+                        }
+                        for (const auto& asset : m_visualCatalog.Manifest().assets) {
+                            if (typeFilter != nullptr && asset.type != typeFilter) {
+                                continue;
+                            }
+                            if (ImGui::Selectable(asset.assetId.c_str(),
+                                                  asset.assetId == current)) {
+                                result = asset.assetId;
+                            }
+                            if (asset.assetId == current) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    return result;
+                };
+
+                const std::string newBg = assetIdCombo("backgroundAsset", vm->backgroundAsset,
+                                                       "Texture");
+                if (newBg != vm->backgroundAsset) {
+                    const std::string captured = newBg;
+                    m_world->Mutate([&](WorldDataSet& d) {
+                        for (auto& visual : d.visualMaps) {
+                            if (visual.visualMapId == chosenVisualMap) {
+                                visual.backgroundAsset = captured;
+                            }
+                        }
+                    });
+                }
+                float tileSize = vm->tileSize;
+                if (ImGui::InputFloat("tileSize", &tileSize, 4.0f, 0.0f, "%.1f")) {
+                    m_world->Mutate([&](WorldDataSet& d) {
+                        for (auto& visual : d.visualMaps) {
+                            if (visual.visualMapId == chosenVisualMap) {
+                                visual.tileSize = std::max(8.0f, tileSize);
+                            }
+                        }
+                    });
+                }
+                // 四层 placements 编辑。
+                for (std::size_t layerIdx = 0;
+                     layerIdx < vm->layers.size() && layerIdx < 4; ++layerIdx) {
+                    const MapVisualLayer& layer = vm->layers[layerIdx];
+                    if (!ImGui::TreeNodeEx(layer.name.c_str(),
+                                           ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                        continue;
+                    }
+                    int removeIdx = -1;
+                    for (std::size_t p = 0; p < layer.placements.size(); ++p) {
+                        const MapVisualPlacement& placement = layer.placements[p];
+                        ImGui::PushID(static_cast<int>(p));
+                        const std::string newAsset =
+                            assetIdCombo("assetId", placement.assetId, nullptr);
+                        float px[2] = {placement.x, placement.y};
+                        const bool posChanged = ImGui::InputFloat2("x y", px, "%.1f");
+                        if (newAsset != placement.assetId || posChanged) {
+                            const std::string capturedAsset = newAsset;
+                            const float capturedX = px[0];
+                            const float capturedY = px[1];
+                            m_world->Mutate([&](WorldDataSet& d) {
+                                for (auto& visual : d.visualMaps) {
+                                    if (visual.visualMapId == chosenVisualMap &&
+                                        layerIdx < visual.layers.size() &&
+                                        p < visual.layers[layerIdx].placements.size()) {
+                                        auto& target = visual.layers[layerIdx].placements[p];
+                                        target.assetId = capturedAsset;
+                                        target.x = capturedX;
+                                        target.y = capturedY;
+                                    }
+                                }
+                            });
+                        }
+                        if (ImGui::SmallButton("X")) {
+                            removeIdx = static_cast<int>(p);
+                        }
+                        ImGui::PopID();
+                    }
+                    if (removeIdx >= 0) {
+                        m_world->Mutate([&](WorldDataSet& d) {
+                            for (auto& visual : d.visualMaps) {
+                                if (visual.visualMapId == chosenVisualMap &&
+                                    layerIdx < visual.layers.size()) {
+                                    auto& placements = visual.layers[layerIdx].placements;
+                                    if (static_cast<size_t>(removeIdx) < placements.size()) {
+                                        placements.erase(placements.begin() + removeIdx);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    if (ImGui::SmallButton("Add Placement")) {
+                        m_world->Mutate([&](WorldDataSet& d) {
+                            for (auto& visual : d.visualMaps) {
+                                if (visual.visualMapId == chosenVisualMap &&
+                                    layerIdx < visual.layers.size()) {
+                                    // 默认放地图中心（用第一个可用 Sprite 资产）。
+                                    std::string firstSprite;
+                                    for (const auto& asset : m_visualCatalog.Manifest().assets) {
+                                        if (asset.type == "Sprite") {
+                                            firstSprite = asset.assetId;
+                                            break;
+                                        }
+                                    }
+                                    visual.layers[layerIdx].placements.push_back(
+                                        {firstSprite, 400.0f, 400.0f});
+                                }
+                            }
+                        });
+                    }
+                    ImGui::TreePop();
+                }
+            }
+        }
     } else if (sel.type == OT::Npc) {
         const auto* n = m_world->FindNpc(sel.id);
         if (n == nullptr) {
@@ -2215,15 +2614,44 @@ void LegendMapEditorApp::DrawWorldInspectorFields() {
             });
         }
         int visualId = static_cast<int>(n->visualId);
-        if (ImGui::InputInt("visualId", &visualId)) {
-            const auto newId = static_cast<std::uint32_t>(std::max(0, visualId));
-            m_world->Mutate([&](WorldDataSet& d) {
-                for (auto& npc : d.npcs) {
-                    if (npc.npcDefinitionId == sel.id) {
-                        npc.visualId = newId;
+        // 阶段24 指令四十：NPC visualId ComboBox（visual_entities.json Npc 实体，
+        // 显示 serverVisualId 别名）。
+        std::string npcVisualCurrent;
+        for (const auto& entity : m_visualCatalog.Entities().entities) {
+            if (entity.kind == "Npc" && entity.serverVisualId == static_cast<int>(n->visualId)) {
+                npcVisualCurrent = entity.visualId;
+                break;
+            }
+        }
+        if (!m_visualCatalogLoaded) {
+            if (ImGui::InputInt("visualId", &visualId)) {
+                const auto newId = static_cast<std::uint32_t>(std::max(0, visualId));
+                m_world->Mutate([&](WorldDataSet& d) {
+                    for (auto& npc : d.npcs) {
+                        if (npc.npcDefinitionId == sel.id) {
+                            npc.visualId = newId;
+                        }
                     }
-                }
-            });
+                });
+            }
+        } else {
+            const std::string chosen =
+                VisualAssetCombo("visualId (visual entity)", npcVisualCurrent, "Npc");
+            if (chosen != npcVisualCurrent) {
+                m_world->Mutate([&](WorldDataSet& d) {
+                    for (auto& npc : d.npcs) {
+                        if (npc.npcDefinitionId == sel.id) {
+                            const legend::visual::VisualEntityDef* def =
+                                chosen.empty()
+                                    ? nullptr
+                                    : legend::visual::FindVisualEntity(m_visualCatalog.Entities(),
+                                                                       chosen);
+                            npc.visualId = def != nullptr ? def->serverVisualId : 0;
+                        }
+                    }
+                });
+            }
+            DrawVisualPreview(npcVisualCurrent.c_str());
         }
     } else if (sel.type == OT::Spawn) {
         const auto* s = m_world->FindSpawn(sel.id);
@@ -2314,6 +2742,25 @@ void LegendMapEditorApp::DrawWorldInspectorFields() {
             return;
         }
         ImGui::Text("portalId: %u", p->portalId);
+        // 阶段24 指令四十：Portal visualId ComboBox（默认 portal_default）。
+        {
+            const std::string current = p->visualId.empty() ? std::string("portal_default")
+                                                            : p->visualId;
+            const std::string chosen =
+                m_visualCatalogLoaded
+                    ? VisualAssetCombo("visualId (visual entity)", current, "Portal")
+                    : current;
+            if (m_visualCatalogLoaded && chosen != current) {
+                m_world->Mutate([&](WorldDataSet& d) {
+                    for (auto& portal : d.portals) {
+                        if (portal.portalId == sel.id) {
+                            portal.visualId = chosen;
+                        }
+                    }
+                });
+            }
+            DrawVisualPreview(current.c_str());
+        }
         std::uint16_t sourceMapId = p->sourceMapId;
         mapCombo("Source Map", sourceMapId);
         if (sourceMapId != p->sourceMapId) {

@@ -332,6 +332,15 @@ bool ParseMonsters(const json& root, GameDataSet& out, std::string& error) {
         monster.rewardGold = static_cast<std::uint32_t>(goldReward);
         monster.lootTableId = static_cast<std::uint32_t>(lootTableId);
         monster.enabled = enabled;
+        // 阶段24：可选 visualId（缺省空 = Client fallback 视觉）。
+        const auto visualIt = e.find("visualId");
+        if (visualIt != e.end()) {
+            if (!visualIt->is_string()) {
+                error = ctx + ": visualId must be a string";
+                return false;
+            }
+            monster.visualId = visualIt->get<std::string>();
+        }
         out.monsters.push_back(monster);
     }
     return true;
@@ -742,6 +751,7 @@ json MonsterToJson(const MonsterDefinition& monster) {
         {"expReward", monster.rewardExp},
         {"goldReward", monster.rewardGold},
         {"lootTableId", monster.lootTableId},
+        {"visualId", monster.visualId},
         {"enabled", monster.enabled},
     };
 }
@@ -1308,8 +1318,12 @@ GameDataSet MakeDefaultGameData() {
                           kSlimeCoreMaxStack, 0, 0, EquipmentSlot::None, true, true,
                           "item_slime_core", true});
 
-    // ---- Monsters（阶段13/14/17）----
-    data.monsters.push_back(kTrainingSlimeDefinition);
+    // ---- Monsters（阶段13/14/17；阶段24：visualId 视觉引用）----
+    {
+        MonsterDefinition slime = kTrainingSlimeDefinition;
+        slime.visualId = "training_slime";
+        data.monsters.push_back(std::move(slime));
+    }
 
     // ---- Skills（阶段15/16：5 个）----
     data.skills.push_back(kQuickStrikeDefinition);

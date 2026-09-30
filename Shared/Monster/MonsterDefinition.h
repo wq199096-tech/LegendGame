@@ -34,6 +34,9 @@ struct MonsterDefinition {
     // 阶段23 23.4/23.17：掉落表引用（0 = 无掉落表）+ 数据驱动开关。
     std::uint32_t lootTableId = 0;
     bool enabled = true;
+    // 阶段24：视觉实体引用（visual_entities.json 的 visualId；空 = Client 用 fallback 视觉）。
+    // 纯视觉字段——服务器逻辑不使用。
+    std::string visualId;
 };
 
 // 指令二：Training Slime 基础配置（阶段23 前为唯一硬编码；现为迁移数据源/单一事实）。

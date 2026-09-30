@@ -33,7 +33,7 @@ add_executable(LegendMapEditor
     Source/GameDataDocument.cpp
 )
 
-target_link_libraries(LegendMapEditor PRIVATE legend_engine legend_imgui LegendSharedNetwork)
+target_link_libraries(LegendMapEditor PRIVATE legend_engine legend_imgui LegendSharedNetwork LegendVisualData)
 
 if(MSVC)
     target_compile_options(LegendMapEditor PRIVATE /utf-8)

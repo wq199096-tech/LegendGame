@@ -5,6 +5,7 @@
 #include "Shared/Npc/NpcDefinition.h"
 #include "Shared/Portal/PortalDefinition.h"
 #include "Shared/WorldMap/MapDefinition.h"
+#include "Shared/WorldMap/MapVisualDefinition.h"
 
 #include <string>
 #include <vector>
@@ -18,9 +19,11 @@ namespace legend::world {
 //
 // 文件清单（每个文件 schemaVersion=1）：
 //   world_manifest.json / maps.json / npcs.json /
-//   monster_spawns.json / portals.json
+//   monster_spawns.json / portals.json / visual_maps.json【阶段24】
 //
 // NPC 对话文本内嵌在 npcs.json（dialogueId = npcDefinitionId，阶段20 语义）。
+// visual_maps.json【阶段24】：地图视觉定义（背景/四层），纯视觉数据，
+// 服务器加载仅为校验一致性；渲染消费方为 Client 与 Editor。
 // ---------------------------------------------------------------------------
 inline constexpr int kWorldDataSchemaVersion = 1;
 
@@ -36,9 +39,10 @@ struct WorldDataSet {
     std::vector<DialogueDefinition> dialogues; // dialogueId = npc.npcDefinitionId
     std::vector<MonsterSpawnDefinition> monsterSpawns;
     std::vector<PortalDefinition> portals;
+    std::vector<MapVisualDefinition> visualMaps; // 阶段24：地图视觉定义
 };
 
-// 加载目录下全部 5 个文件（任一缺失/JSON 非法/字段类型错 → false + error）。
+// 加载目录下全部 6 个文件（任一缺失/JSON 非法/字段类型错 → false + error）。
 // 不做跨文件校验——校验统一走 ValidateWorldData（22.12）。
 bool LoadWorldData(const std::string& dir, WorldDataSet& out, std::string& error);
 

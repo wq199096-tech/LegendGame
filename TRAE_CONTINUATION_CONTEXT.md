@@ -5,51 +5,48 @@
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
-- 本地: `d:\LegendGame-main`（构建目录 `d:\LegendGame-main\Build`；push 走 SOCKS5 10808）
-- 当前真实 HEAD: **d7a8e634ffc5bc27399163ea53754739a5ec2a97**
-  （`feat(editor): add game data content editor v1`）
+- 本地: 仓库根 = `d:\LegendGame-main\LegendGame`（构建目录 `Build/`；push 走 SOCKS5 10808）
+- 阶段24 起始 HEAD: **1b43b61c494346411e0943fabfd01db520a6878a**
+  （`docs: finalize stage 23 context`）
 
-## 三阶段最终状态（无人值守模式：全部完成）
-- **Stage21 completed**（Multi-Map World / Portal / Respawn Core V0.21）
-  - 最终提交 e362dfa（fix: DotKill drop 轮询化）+ 主体 3285bf4
-  - Actions: **Stage21 run #47 success**（36609036863）
-- **Stage22 completed**（World Editor V1 + Data Driven World V0.22）
-  - 最终提交 b611b53 `feat(editor): add data-driven world editor v1`
-  - Actions: **Stage22 run #48 success**（36611118905）
-- **Stage23 completed**（Game Data / Content Editor V1 + Scriptable Content Definitions V0.23）
-  - 最终提交 d7a8e63 `feat(editor): add game data content editor v1`
-  - Actions: **Stage23 run #49 success**（36630085904）——Configure / Build / Verify 8 exe /
-    CTest hard gate / Runtime gate 全部 SUCCESS
-
-## 当前无未完成编码任务
-- 阶段21~23 交付全部封板；无进行中的编码/测试工作
-- **下一步：等待用户阶段24 指令（不自动进入阶段24）**
-
-## 阶段23 交付摘要（细节见 CURRENT_STAGE.md / ARCHITECTURE.md）
-- Data/Game 9 JSON + GameDataJson（load/validate/save/交叉校验/单一事实来源）
-- 8 Game Registry 数据驱动 + LootTable V1（服务器死亡读表，Client 永不决定）
-- Editor Data 工作区（8 类型编辑 + Cross Reference 断引用禁存 + Search/Duplicate/Preview）
-- 23.24 迁移回归全部一致；GameDataChecks + DefinitionValidationChecks 并入 LegendWorldTests
+## Stage24 状态：completed
+- **Stage24 completed**（Client Visual Runtime & Asset Pipeline V0.24）
+- 交付摘要（细节见 CURRENT_STAGE.md / ARCHITECTURE.md）：
+  - Data/Assets 4 JSON（asset_manifest/animations/visual_entities/effects）+
+    Data/World 第 6 文件 visual_maps.json + maps/monsters/portals 视觉字段
+  - Client/Visuals（VisualAssetData/AnimationPlayer/VisualDataCatalog/Font/VisualRuntime）
+    + Client/Assets/AssetManager；在线模式真实资源渲染（离线路径不变）
+  - 实体视觉：玩家 8 方向 6 动作/史莱姆/NPC/Portal/名字板/HP 条/伤害飘字/技能 VFX
+  - HUD：Portrait/HP/MP/SkillBar(CD+Mana)/地图名/Quest Tracker；F9 统计/F10 热重载
+  - Editor：visualId/visualMapId ComboBox + Visual Map 编辑 + 第一帧 Preview +
+    Validate Assets
+  - 52 张开发占位 PNG（Tools/GenerateDevAssets.ps1）
+  - 测试：AssetManifest/Animation/VisualDefinition/ClientSmoke Checks 并入
+    LegendWorldTests（三套件纪律不变）；Client 15s 冒烟（LEGEND_CLIENT_VISUAL_SMOKE=1）
 
 ## 本阶段调试教训（防止重演）
-- **MSVC magic-static 重入死锁**：单例构造函数内 LoadDefaults→Mutable→Instance() 递归死锁
-  → 构造函数直接填充成员（Quest/Shop/Teleport/MonsterDefinition 四处）
-- ParseItems ReadUint 链式复用变量（maxStack 覆盖 id）→ 每字段独立读取；
-  [Diag] 打印 error 内容进测试直接定位
-- SaveGameData 内部校验 crossReference=false（默认世界无 NPC 时 quest startNpc 误拒）
-- .gitignore `/data/*` 吞 `Data/Game/` → `!/Data/Game/` + `!/Data/Game/**`
-- 负数 attackBonus：ReadInt clamp 吞非法值 → 显式 `< 0` 拒绝
-- PowerShell 管道截断/`&&` 不支持/并行 msbuild PDB 竞争等旧教训持续有效
+- Windows 宏 `DrawText` 重命名成员 → 文本 API 用 DrawString/DrawStringShadow
+- PowerShell 5.1 无 BOM 中文 .ps1 按 GBK 误读；`New-Object X(表达式, 表达式)` 参数模式
+  解析陷阱 → `[X]::new(...)`
+- MSVC /MP 并行 PDB 竞争 C1041 → 串行或清残留 cl.exe
+- 命名空间别名（using legend::world::MapVisualDefinition）只在声明所在命名空间可见，
+  跨命名空间成员函数体内仍需限定
+- stb 双头文件纪律：stb_image 实现仅在 ResourceManager.cpp；stb_truetype 实现仅在
+  Font.cpp；其它 TU 只 include 声明
 
-## 测试状态（d7a8e63 最终）
-- WorldTests **597 PASS / 0 FAIL**；NetworkTests 0 fail；AccountTests 0 fail
-- Editor smoke PASSED；Runtime smoke 通过（Data hash e35cc124ea138c24；Client 10s 存活）
-- 8 exe 全部构建 ✓；CI run #49 五步全 SUCCESS
+## 测试状态（本地最终）
+- 8 exe 全绿；NetworkTests 0 fail；AccountTests 0 fail；WorldTests 0 fail
+- Runtime smoke：三服务器真实 Data/World（含 visual_maps.json）启动校验通过；
+  Data hash e35cc124ea138c24（与阶段23 一致 = 视觉字段向后兼容）
+- Client Smoke：LEGEND_CLIENT_VISUAL_SMOKE=1 → 15s 存活干净退出，全部里程碑标记通过
 
 ## 下一步
-- 等待用户阶段24 指令。**不自动进入阶段24，不修改任何游戏业务代码。**
+- 等待用户阶段25 指令。**不自动进入阶段25，不修改任何游戏业务代码。**
+- **待用户人工视觉验收**（在线画面）：登录→进世界后确认地图/角色动画/怪物/NPC/Portal/
+  相机跟随/技能特效/伤害飘字/HUD。Client 无自动登录链路，自动化无法替代此步。
 
 ## Actions 状态
 - Stage21 run #47（36609036863 / e362dfa）= success
 - Stage22 run #48（36611118905 / b611b53）= success
 - Stage23 run #49（36630085904 / d7a8e63）= success
+- Stage24 run：见 TRAE_RUN_STATE.json（最终提交推送后更新）

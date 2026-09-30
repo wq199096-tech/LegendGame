@@ -23,6 +23,9 @@ struct PortalDefinition {
     std::uint32_t minLevel = 1;
     std::uint32_t goldCost = 0;
     bool enabled = true;
+    // 阶段24：视觉实体引用（visual_entities.json 的 visualId；空 = portal_default）。
+    // 纯视觉字段——服务器逻辑不使用。
+    std::string visualId;
 };
 
 } // namespace legend::world

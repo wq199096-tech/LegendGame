@@ -66,6 +66,11 @@
   Data/Game 9 JSON + 8 Registry 数据驱动 + Cross Reference 验证 + Loot Table V1 +
   迁移回归（d7a8e634ffc5bc27399163ea53754739a5ec2a97，Actions run #49 = 36630085904 success）
   ——无人值守模式（21→22→23）全部完成，等待阶段24 指令
+- 阶段24 Client Visual Runtime & Asset Pipeline V0.24：真实资源渲染上线
+  （Data/Assets 4 JSON + Client/Assets/AssetManager + Client/Visuals/VisualAssetData/
+  AnimationPlayer/VisualDataCatalog/Font/VisualRuntime + Data/World visual_maps.json +
+  monsters/portal visualId + Editor 视觉绑定/Preview/Assets Validation + 52 张开发占位
+  PNG + Client 15s 冒烟入 CTest；1b43b61 起步）
 
 ## 关键架构原则
 1. **100% 服务器权威**：Client 只表达意图（requestId + 最小参数），所有数值/状态/结果由服务器重新验证；
@@ -87,7 +92,12 @@
 
 ## 编码/构建纪律（本项目实测教训）
 - 中文路径 MSVC 报 MSB8084（历史教训）→ 现仓库/构建均在无中文路径 `d:\LegendGame-main`
-- `near`/`far` 是 Windows 宏，变量不能叫这些名
+- `near`/`far` 是 Windows 宏，变量不能叫这些名；`DrawText` 也是 Windows 宏（GDI）——
+  成员函数命名避开（TextRenderer 用 DrawString/DrawStringShadow）
 - PowerShell 对原生 exe 用 `Select-Object -First N` 会掐管道杀进程
+- PowerShell 5.1：`.ps1` 含中文必须 UTF-8 带 BOM（无 BOM 按 GBK 误读炸解析）；
+  `New-Object 类型(表达式, 表达式)` 参数模式解析陷阱 → 一律 `[类型]::new(...)`
+- MSVC 并行编译 PDB 竞争（C1041）→ 串行构建或清理残留 cl.exe 后重试
+- 同名成员函数与自由函数（如 FindClip）在类内调用会绑定成员 → 限定 `legend::visual::`
 - Edit 工具偶发"报成功但未落盘"→改后 shell 复读验证
 - PowerShell 大文件手术用 `[System.IO.File]::ReadAllLines/WriteAllLines` + 行号锚点

@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "entities": [
+    {
+      "visualId": "player_warrior",
+      "kind": "Player",
+      "scale": 1.0,
+      "classId": 1,
+      "animations": {
+        "idle": "warrior_idle",
+        "walk": "warrior_walk",
+        "attack": "warrior_attack",
+        "cast": "warrior_cast",
+        "hit": "warrior_hit",
+        "death": "warrior_death"
+      },
+      "portraitAsset": "ui_portrait_warrior"
+    },
+    {
+      "visualId": "player_mage",
+      "kind": "Player",
+      "scale": 1.0,
+      "classId": 2,
+      "animations": {
+        "idle": "mage_idle",
+        "walk": "mage_walk",
+        "attack": "mage_attack",
+        "cast": "mage_cast",
+        "hit": "mage_hit",
+        "death": "mage_death"
+      },
+      "portraitAsset": "ui_portrait_mage"
+    },
+    {
+      "visualId": "player_taoist",
+      "kind": "Player",
+      "scale": 1.0,
+      "classId": 3,
+      "animations": {
+        "idle": "taoist_idle",
+        "walk": "taoist_walk",
+        "attack": "taoist_attack",
+        "cast": "taoist_cast",
+        "hit": "taoist_hit",
+        "death": "taoist_death"
+      },
+      "portraitAsset": "ui_portrait_taoist"
+    },
+    {
+      "visualId": "training_slime",
+      "kind": "Monster",
+      "scale": 1.0,
+      "animations": {
+        "idle": "slime_idle",
+        "walk": "slime_walk",
+        "attack": "slime_attack",
+        "hit": "slime_hit",
+        "death": "slime_death"
+      }
+    },
+    {
+      "visualId": "npc_village_elder",
+      "kind": "Npc",
+      "scale": 1.0,
+      "serverVisualId": 5001,
+      "animations": {
+        "idle": "npc_elder_idle"
+      }
+    },
+    {
+      "visualId": "npc_merchant",
+      "kind": "Npc",
+      "scale": 1.0,
+      "serverVisualId": 5002,
+      "animations": {
+        "idle": "npc_merchant_idle"
+      }
+    },
+    {
+      "visualId": "npc_wayfarer",
+      "kind": "Npc",
+      "scale": 1.0,
+      "serverVisualId": 5003,
+      "animations": {
+        "idle": "npc_wayfarer_idle"
+      }
+    },
+    {
+      "visualId": "npc_explorer_guide",
+      "kind": "Npc",
+      "scale": 1.0,
+      "serverVisualId": 5004,
+      "animations": {
+        "idle": "npc_guide_idle"
+      }
+    },
+    {
+      "visualId": "portal_default",
+      "kind": "Portal",
+      "scale": 1.0,
+      "animations": {
+        "idle": "portal_default_idle"
+      }
+    }
+  ]
+}

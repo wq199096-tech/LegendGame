@@ -11,7 +11,8 @@
       "respawnY": 300.0,
       "spawnX": 300.0,
       "spawnY": 300.0,
-      "type": "Town"
+      "type": "Town",
+      "visualMapId": "vmap_greenfield"
     },
     {
       "mapId": 2,
@@ -24,7 +25,8 @@
       "respawnY": 500.0,
       "spawnX": 200.0,
       "spawnY": 500.0,
-      "type": "Field"
+      "type": "Field",
+      "visualMapId": "vmap_slime_meadow"
     },
     {
       "mapId": 3,
@@ -37,7 +39,8 @@
       "respawnY": 300.0,
       "spawnX": 200.0,
       "spawnY": 300.0,
-      "type": "Field"
+      "type": "Field",
+      "visualMapId": "vmap_ancient_ruins"
     }
   ],
   "schemaVersion": 1

@@ -27,9 +27,12 @@ Tools/
   MapEditor/     LegendGame World Editor（TileMap + World 双工作区；WorldDocument +
                  GameDataDocument 文档模型；Validation 禁存；Launch WorldServer）【阶段22/23】
 Data/
-  World/         world_manifest/maps/npcs/monster_spawns/portals.json（5 文件，schemaVersion=1）【阶段22】
+  World/         world_manifest/maps/npcs/monster_spawns/portals/visual_maps.json
+                 （6 文件，schemaVersion=1；visual_maps 为地图视觉定义【阶段24】）
   Game/          game_manifest/items/monsters/skills/statuses/quests/shops/teleports/
-                 loot_tables.json（9 文件，schemaVersion=1 + contentVersion）【阶段23】
+                 loot_tables.json（9 文件，schemaVersion=1 + contentVersion）
+  Assets/        asset_manifest/animations/visual_entities/effects.json
+                 （4 文件，Client 视觉资产域【阶段24】）
 Engine/          引擎（渲染/输入/网络 TcpServer/TcpClient/Logger）
 Server/
   Gateway/       GatewayServer/Session（信封转发）
@@ -49,7 +52,11 @@ Server/
     Npc/                      NpcRegistry/NpcEntity/NpcManager/NpcSpatialGrid/
                               NpcInteractionService/DialogueService/ShopService/TeleportService【阶段20】
 Client/
-  Source/        LegendApp/GameScene（主循环/渲染/Debug overlay）
+  Source/        LegendApp/GameScene（主循环/渲染/Debug overlay；在线模式渲染由 VisualRuntime 接管【阶段24】）
+  Assets/        AssetManager（manifest 驱动纹理缓存/Fallback/F10 热重载）【阶段24】
+  Visuals/       VisualAssetData（Data/Assets 4 文件解析/校验）+ AnimationPlayer（统一）+
+                 VisualDataCatalog（展示目录）+ Font（stb_truetype UTF-8 文本）+
+                 VisualRuntime（地图视觉/Y排序实体/技能 VFX/伤害飘字/名字板/HUD）【阶段24】
   Network/       GameNetworkClient/ClientNetworkController（账号链路）
   Account/       AccountClientController/CharacterSelectionController
   WorldNetwork/  WorldNetworkClient/WorldClientController/RemotePlayer*/RemoteMonster*/
@@ -59,7 +66,9 @@ Tests/           WorldTestHarness.h + WorldChecks/WorldAoiChecks/WorldMonsterChe
                  WorldCombatChecks/WorldSkillChecks/WorldStatusChecks/WorldProgressionChecks/
                  WorldInventoryChecks/WorldQuestChecks/【WorldNpcChecks 阶段20】/
                  WorldDataChecks/MapEditorDataChecks【阶段22】/
-                 GameDataChecks/DefinitionValidationChecks【阶段23】（全部并入 LegendWorldTests）
+                 GameDataChecks/DefinitionValidationChecks【阶段23】/
+                 AssetManifestChecks/AnimationChecks/VisualDefinitionChecks/ClientSmokeChecks
+                 【阶段24】（全部并入 LegendWorldTests）
 Apps/            各进程 main
 .github/workflows/windows-build.yml
 PROJECT_CONTEXT.md / CURRENT_STAGE.md / ARCHITECTURE.md / TRAE_CONTINUATION_CONTEXT.md
@@ -131,6 +140,22 @@ WorldServer 内部：io 线程（游戏逻辑/广播） + DbWorker 线程（全�
   Duplicate/Search/Game Data Registry 唯一 ID）；文档模型 Mutate() 唯一修改通道 + Undo/Redo 100 步快照；
   保存 = serialize→temp→reparse→replace 原子写 + .backup 10 份轮换；Validation Error 禁存；
   LEGEND_EDITOR_SMOKE=world 无头冒烟
+- **Visual Runtime【阶段24】**：LegendClient 在线模式默认画面走真实资源渲染（离线 Debug 路径不变）。
+  分层：Client/Visuals/VisualAssetData（Data/Assets 4 JSON 解析+校验+交叉引用）→
+  VisualDataCatalog（展示目录：技能名/CD/任务标题/monster+portal visualId/map visualMapId/
+  visual_maps；Data root 自动定位）→ AssetManager（manifest 驱动纹理缓存 + 紫棋盘 Fallback +
+  F10 热重载失败保留旧资源）→ VisualRuntime（渲染编排）。渲染顺序 = Ground→Decoration→
+  Y排序世界实体（含 Object 层，2.5D）→Foreground→Effects→名字板/血条/飘字→HUD。
+  实体视觉 = 统一 AnimationPlayer（帧网格：行=Direction8 顺序 8 方向、列=帧）；
+  玩家 8 方向 Idle/Walk/Attack/Cast/Hit/Death；Monster/NPC/Portal 由 visualId 引用；
+  NPC 数值 visualId（协议不变）经 visual_entities serverVisualId 别名映射。
+  技能 VFX：1001 刀光/1002 Projectile+Impact（视觉 only，伤害服务器权威）/1003 旋风。
+  事件入口 = WorldClientController::SetVisualEventHook（只读转发，不修改镜像）。
+  Font = stb_truetype 动态字形图集 + UTF-8（系统字体回退链：Assets/Fonts→msyh→simhei→arial）。
+  F9 = 性能统计面板（Sprites/DrawCalls/Textures/FX）；F10 = 热重载（Dev AutoLogin 迁至 Ctrl+F10）。
+  WorldServer 亦加载校验 visual_maps.json（第 6 World 文件；视觉字段不入 hash 语义）
+  Client Smoke（指令四十七）= LEGEND_CLIENT_VISUAL_SMOKE=1 → 15s 存活干净退出，
+  [VisualSmoke] 里程碑标记由 CTest ClientSmokeChecks 断言
 
 ## 关键类速查
 - PlayerSession（io 线程权威状态：位置/HP/Mana/技能/状态/成长/背包/装备/任务容器/可见集合/请求历史）
@@ -139,5 +164,13 @@ WorldServer 内部：io 线程（游戏逻辑/广播） + DbWorker 线程（全�
 - WorldTestHarness（WorldTestServers: StartLogin/StartWorld(dbPath/respawnDelay/questSnapshotIntervalMs 等可配)；WorldTestClient: recorded[64] 事件队列/ConnectAndEnter/WaitEvent）
 - WorldDocument/GameDataDocument（Editor 文档模型：Mutate/Undo/Validation/Duplicate/Search/
   Suggest*Id/Find*；GameDataDocument 持 WorldDataSet 作交叉引用源）
+- VisualRuntime（阶段24：client 视觉编排。OnWorldEvent 只读事件消费/Update 实体+特效+飘字/
+  RenderWorld+RenderOverlays+RenderHUD；EntityVisual per-id 统一 AnimationPlayer）
+- AssetManager（阶段24：manifest 纹理缓存。GetTexture 永不返回 nullptr——缺失走紫棋盘
+  Fallback + 去重日志；ReloadAll 失败保留旧纹理）
+- VisualDataCatalog（阶段24：展示目录。FindDataRoot 定位 Data/；Load = Data/Assets 4 文件
+  + skills/quests/monsters/maps/portals/visual_maps 展示字段；仅视觉/展示用途）
+- AnimationPlayer（阶段24：统一播放器。Play/Stop/SetDirection/Update/CurrentFrame UV；
+  帧 UV = 行(方向)×列(帧) 网格；同一 clip 重 Play 保持进度）
 - LoadWorldData/ValidateWorldData/MakeDefaultWorldData + LoadGameData/ValidateGameData/
   MakeDefaultGameData（Shared 数据层；SaveGameData 内部校验 crossReference=false）

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "effects": [
+    {
+      "effectId": "fx_quick_strike_slash",
+      "spriteSheetAssetId": "fx_slash_sheet",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frameCount": 4,
+      "fps": 16.0,
+      "duration": 0.25,
+      "loop": false,
+      "scale": 1.0,
+      "offsetX": 0.0,
+      "offsetY": -28.0
+    },
+    {
+      "effectId": "fx_fire_bolt",
+      "spriteSheetAssetId": "fx_fire_bolt_sheet",
+      "frameWidth": 24,
+      "frameHeight": 24,
+      "frameCount": 4,
+      "fps": 12.0,
+      "duration": 0.0,
+      "loop": true,
+      "scale": 1.0,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "effectId": "fx_fire_bolt_impact",
+      "spriteSheetAssetId": "fx_fire_bolt_impact_sheet",
+      "frameWidth": 48,
+      "frameHeight": 48,
+      "frameCount": 4,
+      "fps": 16.0,
+      "duration": 0.25,
+      "loop": false,
+      "scale": 1.0,
+      "offsetX": 0.0,
+      "offsetY": -24.0
+    },
+    {
+      "effectId": "fx_whirlwind",
+      "spriteSheetAssetId": "fx_whirlwind_sheet",
+      "frameWidth": 128,
+      "frameHeight": 128,
+      "frameCount": 4,
+      "fps": 10.0,
+      "duration": 0.4,
+      "loop": true,
+      "scale": 1.0,
+      "offsetX": 0.0,
+      "offsetY": -32.0
+    }
+  ]
+}

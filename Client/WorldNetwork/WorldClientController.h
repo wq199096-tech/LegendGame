@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -29,6 +30,11 @@ public:
 
     // 每帧由上层喂入世界网络事件（主线程消费）。
     void HandleEvent(const WorldNetworkEvent& event);
+    // 阶段24：视觉表现事件钩子（只读镜像，仅供 Client 视觉层消费；
+    // 钩子绝不修改网络/游戏状态——HandleEvent 入口处同步转发）。
+    void SetVisualEventHook(std::function<void(const WorldNetworkEvent&)> hook) {
+        m_visualEventHook = std::move(hook);
+    }
     void OnDisconnected();
     // 阶段12 指令三十七：每帧远程玩家插值（主线程）。
     void UpdateRemotePlayers(float deltaTime);
@@ -166,6 +172,8 @@ public:
 private:
     void SetState(WorldFlowState state);
     void HandleStatusEvent(const WorldNetworkEvent& event); // 阶段16：状态事件路由
+
+    std::function<void(const WorldNetworkEvent&)> m_visualEventHook; // 阶段24：视觉钩子
 
     std::shared_ptr<WorldNetworkClient> m_client = std::make_shared<WorldNetworkClient>();
     WorldFlowState m_state = WorldFlowState::Disconnected;

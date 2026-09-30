@@ -2,7 +2,9 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 
+#include "Client/Visuals/VisualDataCatalog.h"
 #include "Engine/Map/Map.h"
 #include "Engine/Map/MapRenderer.h"
 #include "Engine/Render/Camera2D.h"
@@ -80,6 +82,19 @@ private:
     void OpenWorldDir(const std::string& dir);
     void LaunchWorldServer();
     void UpdateWorldTitle();
+
+    // ---- 阶段24：Visual Asset 绑定 / Assets Validation / Visual Preview ----
+    void LoadVisualCatalog();              // Initialize 时加载 Data/Assets（失败降级）
+    void DrawVisualPreview(const char* visualId); // Inspector 第一帧预览（指令四十一）
+    void ValidateVisualAssets();           // 指令三十六：全量校验（结果进 Console）
+    std::string VisualMapCombo(const std::string& currentId); // visualMapId ComboBox
+    // visualId ComboBox（kindFilter: Player/Monster/Npc/Portal；空 = 全部）。
+    // 返回选中的新 visualId（未改变时原样返回 current）。
+    std::string VisualAssetCombo(const char* label, const std::string& current,
+                                 const char* kindFilter);
+    legend::visual::VisualDataCatalog m_visualCatalog;
+    bool m_visualCatalogLoaded = false;
+    std::unordered_map<std::string, unsigned int> m_previewTextures; // PNG path -> GL texture
 
     legend::Window m_window;
     legend::render::Renderer m_renderer;

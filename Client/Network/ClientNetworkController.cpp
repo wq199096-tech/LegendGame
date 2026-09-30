@@ -1,8 +1,10 @@
-﻿#include "Client/Network/ClientNetworkController.h"
+#include "Client/Network/ClientNetworkController.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Shared/Item/ItemTypes.h"
 #include "Shared/Progression/ProgressionTypes.h"
+
+#include <SDL3/SDL.h>
 
 #include <cmath>
 
@@ -22,7 +24,11 @@ const char* StateName(NetworkState state) {
 }
 } // namespace
 
-ClientNetworkController::ClientNetworkController() = default;
+ClientNetworkController::ClientNetworkController() {
+    // 阶段24：LEGEND_CLIENT_AUTO_ENTER=1 —— 自动进世界链路（本地视觉冒烟）。
+    const char* autoEnter = SDL_getenv("LEGEND_CLIENT_AUTO_ENTER");
+    m_autoEnter = autoEnter != nullptr && autoEnter[0] != '\0';
+}
 
 void ClientNetworkController::Update(legend::input::InputManager& input, float deltaTime) {
     // 指令八十四：F9 = Connect / Reconnect Gateway（失败不阻塞主循环，指令一百一十九）
@@ -38,20 +44,18 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
         }
     }
 
-    // 阶段9 指令八十四：F10 保留 LegacyDevLogin 测试（test/dev_token 链路验收）
-    // 改为 Shift+F10；F10 = 阶段10 开发账号自动登录（指令六十一）
+    // 阶段24 指令三十四：F10 = Reload Visual Assets（GameScene 调用）。
+    // Legacy 测试登录与开发账号自动登录改为 Ctrl+F10 / Shift+F10（原 F10 让位热重载）。
     if (input.IsKeyPressed(SDL_SCANCODE_F10)) {
-        if (input.IsKeyDown(SDL_SCANCODE_LSHIFT) || input.IsKeyDown(SDL_SCANCODE_RSHIFT)) {
+        if (input.IsKeyDown(SDL_SCANCODE_LCTRL) || input.IsKeyDown(SDL_SCANCODE_RCTRL)) {
             if (m_client->State() == NetworkState::Ready && !m_client->IsAuthenticated()) {
-                LOG_INFO("[Network] Sending test login request (Shift+F10).");
+                LOG_INFO("[Network] Sending test login request (Ctrl+F10).");
                 m_client->SendLogin("test", "dev_token");
             }
-        } else {
-            // 阶段10 指令六十一：自动登录开发账号（不存在则先注册；正式流程测试
-            // 不依赖 test/dev_token——账号链路测试全部走 Register/Login）
+        } else if (input.IsKeyDown(SDL_SCANCODE_LSHIFT) || input.IsKeyDown(SDL_SCANCODE_RSHIFT)) {
             if (m_client->State() == NetworkState::Ready &&
                 m_account.State() == AccountFlowState::Unauthenticated) {
-                LOG_INFO("[Account] Dev auto login requested (F10).");
+                LOG_INFO("[Account] Dev auto login requested (Shift+F10).");
                 m_devLoginStage = DevLoginStage::LoggingIn;
                 m_account.SendAccountLogin(kDevUsername, kDevPassword);
             }
@@ -169,9 +173,62 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
     // F10 开发自动登录重试（注册 -> 登录）
     UpdateDevAutoLogin(deltaTime);
 
+    // 阶段24：自动进世界链路（登录→建角/选角→EnterWorld 由 UpdateWorldFlow 接续）
+    UpdateAutoEnter();
+
     // 阶段11：CharacterSelected -> 自动连世界；WorldReady -> 发送移动输入
     UpdateWorldFlow();
     UpdateWorldMoveInput(input, deltaTime);
+}
+
+void ClientNetworkController::UpdateAutoEnter() {
+    if (!m_autoEnter) {
+        return;
+    }
+    if (m_autoEnterCooldown > 0.0f) {
+        m_autoEnterCooldown -= 1.0f / 60.0f; // 近似节流（仅开发链路）
+        return;
+    }
+    // 0) 尚未连接 Gateway → 先发起连接（等价 F9；失败不阻塞主循环）。
+    if (m_client->State() == NetworkState::Disconnected ||
+        m_client->State() == NetworkState::Failed) {
+        LOG_INFO("[AutoEnter] connecting to gateway " + m_client->GetConfig().gatewayHost + ":" +
+                 std::to_string(m_client->GetConfig().gatewayPort) + ".");
+        m_client->Connect(m_client->GetConfig().gatewayHost, m_client->GetConfig().gatewayPort);
+        m_autoEnterCooldown = 1.0f;
+        return;
+    }
+    // 1) Gateway 就绪且未认证 → 走 F10 同款开发账号登录。
+    if (m_client->State() == NetworkState::Ready &&
+        m_account.State() == AccountFlowState::Unauthenticated) {
+        if (!m_autoEnterLoggedIn) {
+            LOG_INFO("[AutoEnter] dev login (LEGEND_CLIENT_AUTO_ENTER).");
+            m_devLoginStage = DevLoginStage::LoggingIn;
+            m_account.SendAccountLogin(kDevUsername, kDevPassword);
+            m_autoEnterLoggedIn = true;
+            m_autoEnterCooldown = 0.5f;
+        }
+        return;
+    }
+    // 2) 角色列表就绪：无角色则创建 Warrior，有角色选第一个。
+    if (m_account.State() == AccountFlowState::CharacterListReady &&
+        !m_account.HasSelectedCharacter()) {
+        if (m_account.Characters().empty()) {
+            if (!m_autoEnterCreated) {
+                LOG_INFO("[AutoEnter] creating character 'Hero' (class 1).");
+                // gender 从 1 开始（0 = 非法，服务器拒绝）。
+                m_account.SendCreateCharacter(m_account.SessionToken(), "Hero", 1, 1);
+                m_autoEnterCreated = true;
+                m_autoEnterCooldown = 0.5f;
+            }
+        } else {
+            const auto& character = m_account.Characters().front();
+            LOG_INFO("[AutoEnter] selecting character " +
+                     std::to_string(character.characterId) + ".");
+            m_characterSelection.RequestSelect(m_account, character.characterId);
+            m_autoEnterCooldown = 0.5f;
+        }
+    }
 }
 
 void ClientNetworkController::UpdateWorldFlow() {

@@ -1,6 +1,7 @@
 #include "Client/Source/GameScene.h"
 
 #include "Client/Network/ClientNetworkController.h"
+#include "Client/Visuals/VisualRuntime.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_scancode.h>
@@ -113,6 +114,18 @@ void GameScene::OnLoad() {
     camera.SetPosition(m_player->GetPosition()); // 跟随脚底位置
 
     ApplyAutoTestHooks();
+
+    // ---- 阶段24：Visual Runtime 初始化（失败不阻塞——离线 Debug 路径保持原样）----
+    m_visualRuntime = std::make_unique<legend::client::VisualRuntime>();
+    if (!m_visualRuntime->Initialize(engine.GetResources(), renderer.GetSpriteShader(),
+                                     std::string())) {
+        m_visualRuntime.reset(); // 数据缺失：保持旧渲染路径（不崩溃）
+    }
+    m_visualSmoke = SDL_getenv("LEGEND_CLIENT_VISUAL_SMOKE") != nullptr;
+    if (m_visualSmoke) {
+        LOG_INFO("[VisualSmoke] game-scene-started");
+    }
+
     RunDirection8Check();
     RunAnimationCheck();
     RunSpriteSheetCheck();
@@ -335,11 +348,20 @@ void GameScene::UpdateCamera(float deltaTime) {
     }
 
     if (m_cameraFollow) {
-        if (m_player) {
-            const legend::math::Vector2 target = m_player->GetPosition();
-            const float smoothing = 1.0f - std::exp(-10.0f * deltaTime);
-            camera.SetPosition(camera.GetPosition() + (target - camera.GetPosition()) * smoothing);
+        // 阶段24：在线模式跟随服务器权威本地玩家视觉位置（指令九：平滑跟随无抖动）；
+        // 离线跟随本地 PlayerCharacter。
+        legend::math::Vector2 target = m_player ? m_player->GetPosition()
+                                                : camera.GetPosition();
+        if (m_visualRuntime && m_networkController != nullptr &&
+            m_networkController->World().IsWorldReady()) {
+            target = {m_visualRuntime->LocalVisualX(), m_visualRuntime->LocalVisualY()};
+            if (!m_visualCameraSnapped) {
+                camera.SetPosition(target); // 进入世界首帧直接对准（避免跨图拖影）
+                m_visualCameraSnapped = true;
+            }
         }
+        const float smoothing = 1.0f - std::exp(-10.0f * deltaTime);
+        camera.SetPosition(camera.GetPosition() + (target - camera.GetPosition()) * smoothing);
     } else {
         const float inputX = (input.IsKeyDown(SDL_SCANCODE_RIGHT) ? 1.0f : 0.0f) -
                              (input.IsKeyDown(SDL_SCANCODE_LEFT) ? 1.0f : 0.0f);
@@ -362,21 +384,51 @@ void GameScene::ClampCameraToMap() {
     int viewportH = 1;
     engine.GetRenderer().QueryViewportSize(viewportW, viewportH);
 
+    float worldW = 0.0f;
+    float worldH = 0.0f;
+    // 阶段24：在线模式以服务器地图快照边界为准；离线用 Legacy 地图尺寸。
+    bool useWorldBounds = false;
+    if (m_visualRuntime && m_networkController != nullptr &&
+        m_networkController->World().IsWorldReady() &&
+        m_networkController->World().MapModel().HasSnapshot()) {
+        const auto& mapModel = m_networkController->World().MapModel();
+        worldW = mapModel.MaxX() - mapModel.MinX();
+        worldH = mapModel.MaxY() - mapModel.MinY();
+        useWorldBounds = true;
+    } else {
+        worldW = m_map->GetWorldWidth();
+        worldH = m_map->GetWorldHeight();
+    }
+
     const float halfViewW = static_cast<float>(viewportW) * 0.5f / camera.GetZoom();
     const float halfViewH = static_cast<float>(viewportH) * 0.5f / camera.GetZoom();
-    const float worldW = m_map->GetWorldWidth();
-    const float worldH = m_map->GetWorldHeight();
 
     legend::math::Vector2 clamped = camera.GetPosition();
     if (worldW > halfViewW * 2.0f) {
-        clamped.x = std::clamp(clamped.x, halfViewW, worldW - halfViewW);
+        const float minX = useWorldBounds ? m_networkController->World().MapModel().MinX() + halfViewW
+                                          : halfViewW;
+        const float maxX = useWorldBounds
+                               ? m_networkController->World().MapModel().MaxX() - halfViewW
+                               : worldW - halfViewW;
+        clamped.x = std::clamp(clamped.x, minX, maxX);
     } else {
-        clamped.x = worldW * 0.5f;
+        clamped.x = useWorldBounds
+                        ? (m_networkController->World().MapModel().MinX() +
+                           m_networkController->World().MapModel().MaxX()) * 0.5f
+                        : worldW * 0.5f;
     }
     if (worldH > halfViewH * 2.0f) {
-        clamped.y = std::clamp(clamped.y, halfViewH, worldH - halfViewH);
+        const float minY = useWorldBounds ? m_networkController->World().MapModel().MinY() + halfViewH
+                                          : halfViewH;
+        const float maxY = useWorldBounds
+                               ? m_networkController->World().MapModel().MaxY() - halfViewH
+                               : worldH - halfViewH;
+        clamped.y = std::clamp(clamped.y, minY, maxY);
     } else {
-        clamped.y = worldH * 0.5f;
+        clamped.y = useWorldBounds
+                        ? (m_networkController->World().MapModel().MinY() +
+                           m_networkController->World().MapModel().MaxY()) * 0.5f
+                        : worldH * 0.5f;
     }
     camera.SetPosition(clamped);
 }
@@ -388,7 +440,34 @@ void GameScene::Update(float deltaTime) {
     if (!m_networkController) {
         m_networkController = std::make_unique<legend::client::ClientNetworkController>();
     }
+    // 阶段24：视觉事件钩子（只读转发；控制器创建后挂一次）
+    if (m_visualRuntime && !m_visualHookWired) {
+        m_networkController->World().SetVisualEventHook(
+            [this](const legend::client::WorldNetworkEvent& event) {
+                if (m_visualRuntime != nullptr) {
+                    m_visualRuntime->OnWorldEvent(event);
+                }
+            });
+        m_visualHookWired = true;
+    }
     m_networkController->Update(input, deltaTime);
+
+    // ---- 阶段24：F10 热重载（指令三十四；Dev AutoLogin 已改 Ctrl+F10）----
+    if (input.IsKeyPressed(SDL_SCANCODE_F10) && m_visualRuntime) {
+        m_visualRuntime->ReloadAssets();
+    }
+
+    // ---- 阶段24：Visual Runtime 每帧更新（在线时）+ Smoke 计时（指令四十七）----
+    if (m_visualRuntime && m_networkController->World().IsWorldReady()) {
+        m_visualRuntime->Update(m_networkController->World(), deltaTime);
+    }
+    if (m_visualSmoke) {
+        m_visualSmokeElapsed += deltaTime;
+        if (m_visualSmokeElapsed >= 15.0) {
+            LOG_INFO("[VisualSmoke] pass — client alive 15s, quitting cleanly.");
+            legend::Engine::Get().Quit();
+        }
+    }
 
     // F1 切换碰撞可视化 / F2 切换角色 Debug
     if (input.IsKeyPressed(SDL_SCANCODE_F1)) {
@@ -785,6 +864,31 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     int viewportW = 1;
     int viewportH = 1;
     renderer.QueryViewportSize(viewportW, viewportH);
+
+    // ---- 阶段24：在线模式 → Visual Runtime 全接管（默认画面走真实资源渲染）----
+    // 渲染顺序：Ground → Decoration → Y排序世界实体（含 Object 层）→ Foreground →
+    // World Effects → 名字板/血条/飘字 → HUD（指令十一/二十四）。
+    // Debug 覆盖层（F1~F9）仍可叠加。
+    if (m_visualRuntime && m_visualRuntime->IsReady() && m_networkController != nullptr &&
+        m_networkController->World().IsWorldReady()) {
+        const auto& world = m_networkController->World();
+        m_mapRenderer.BeginFrame(camera, static_cast<float>(viewportW),
+                                 static_cast<float>(viewportH));
+        m_visualRuntime->RenderWorld(m_mapRenderer.GetBatch(), camera,
+                                     m_mapRenderer.GetViewLeft(), m_mapRenderer.GetViewTop(),
+                                     m_mapRenderer.GetViewRight(), m_mapRenderer.GetViewBottom(),
+                                     world);
+        m_visualRuntime->RenderOverlays(m_mapRenderer.GetBatch(), world);
+        m_mapRenderer.Flush();
+        if (m_collisionDebug) {
+            m_mapRenderer.RenderCollisionOverlay(*m_map); // F1（离线地图叠加，仅 Debug）
+        }
+        m_mapRenderer.EndFrame();
+        // HUD（屏幕空间，Swap 之前）
+        m_visualRuntime->RenderHUD(world, std::string(), static_cast<float>(viewportW),
+                                   static_cast<float>(viewportH), m_mapDebug);
+        return;
+    }
 
     m_mapRenderer.BeginFrame(camera, static_cast<float>(viewportW), static_cast<float>(viewportH));
     m_mapRenderer.RenderGround(*m_map);

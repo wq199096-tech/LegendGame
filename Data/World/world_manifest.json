@@ -3,7 +3,8 @@
     "maps.json",
     "npcs.json",
     "monster_spawns.json",
-    "portals.json"
+    "portals.json",
+    "visual_maps.json"
   ],
   "schemaVersion": 1
 }

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "clips": [
+    { "animationId": "warrior_idle", "spriteSheetAssetId": "warrior_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 5.0, "loop": true, "directionCount": 8 },
+    { "animationId": "warrior_walk", "spriteSheetAssetId": "warrior_walk_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 8.0, "loop": true, "directionCount": 8 },
+    { "animationId": "warrior_attack", "spriteSheetAssetId": "warrior_attack_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 10.0, "loop": false, "directionCount": 8 },
+    { "animationId": "warrior_cast", "spriteSheetAssetId": "warrior_cast_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 8.0, "loop": true, "directionCount": 8 },
+    { "animationId": "warrior_hit", "spriteSheetAssetId": "warrior_hit_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 2, "fps": 8.0, "loop": false, "directionCount": 8 },
+    { "animationId": "warrior_death", "spriteSheetAssetId": "warrior_death_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 6.0, "loop": false, "directionCount": 8 },
+
+    { "animationId": "mage_idle", "spriteSheetAssetId": "mage_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 5.0, "loop": true, "directionCount": 8 },
+    { "animationId": "mage_walk", "spriteSheetAssetId": "mage_walk_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 8.0, "loop": true, "directionCount": 8 },
+    { "animationId": "mage_attack", "spriteSheetAssetId": "mage_attack_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 10.0, "loop": false, "directionCount": 8 },
+    { "animationId": "mage_cast", "spriteSheetAssetId": "mage_cast_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 8.0, "loop": true, "directionCount": 8 },
+    { "animationId": "mage_hit", "spriteSheetAssetId": "mage_hit_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 2, "fps": 8.0, "loop": false, "directionCount": 8 },
+    { "animationId": "mage_death", "spriteSheetAssetId": "mage_death_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 6.0, "loop": false, "directionCount": 8 },
+
+    { "animationId": "taoist_idle", "spriteSheetAssetId": "taoist_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 5.0, "loop": true, "directionCount": 8 },
+    { "animationId": "taoist_walk", "spriteSheetAssetId": "taoist_walk_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 8.0, "loop": true, "directionCount": 8 },
+    { "animationId": "taoist_attack", "spriteSheetAssetId": "taoist_attack_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 10.0, "loop": false, "directionCount": 8 },
+    { "animationId": "taoist_cast", "spriteSheetAssetId": "taoist_cast_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 8.0, "loop": true, "directionCount": 8 },
+    { "animationId": "taoist_hit", "spriteSheetAssetId": "taoist_hit_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 2, "fps": 8.0, "loop": false, "directionCount": 8 },
+    { "animationId": "taoist_death", "spriteSheetAssetId": "taoist_death_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 6.0, "loop": false, "directionCount": 8 },
+
+    { "animationId": "slime_idle", "spriteSheetAssetId": "slime_idle_sheet", "frameWidth": 48, "frameHeight": 48, "frameCount": 4, "fps": 4.0, "loop": true, "directionCount": 8 },
+    { "animationId": "slime_walk", "spriteSheetAssetId": "slime_walk_sheet", "frameWidth": 48, "frameHeight": 48, "frameCount": 4, "fps": 7.0, "loop": true, "directionCount": 8 },
+    { "animationId": "slime_attack", "spriteSheetAssetId": "slime_attack_sheet", "frameWidth": 48, "frameHeight": 48, "frameCount": 4, "fps": 9.0, "loop": false, "directionCount": 8 },
+    { "animationId": "slime_hit", "spriteSheetAssetId": "slime_hit_sheet", "frameWidth": 48, "frameHeight": 48, "frameCount": 4, "fps": 9.0, "loop": false, "directionCount": 8 },
+    { "animationId": "slime_death", "spriteSheetAssetId": "slime_death_sheet", "frameWidth": 48, "frameHeight": 48, "frameCount": 4, "fps": 6.0, "loop": false, "directionCount": 8 },
+
+    { "animationId": "npc_elder_idle", "spriteSheetAssetId": "npc_elder_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 4.0, "loop": true, "directionCount": 1 },
+    { "animationId": "npc_merchant_idle", "spriteSheetAssetId": "npc_merchant_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 4.0, "loop": true, "directionCount": 1 },
+    { "animationId": "npc_wayfarer_idle", "spriteSheetAssetId": "npc_wayfarer_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 4.0, "loop": true, "directionCount": 1 },
+    { "animationId": "npc_guide_idle", "spriteSheetAssetId": "npc_guide_idle_sheet", "frameWidth": 48, "frameHeight": 64, "frameCount": 4, "fps": 4.0, "loop": true, "directionCount": 1 },
+
+    { "animationId": "portal_default_idle", "spriteSheetAssetId": "portal_default_idle_sheet", "frameWidth": 64, "frameHeight": 96, "frameCount": 4, "fps": 6.0, "loop": true, "directionCount": 1 }
+  ]
+}

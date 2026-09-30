@@ -1,17 +1,25 @@
 {
   "project": "LegendGame",
   "branch": "main",
-  "stage": 23,
+  "stage": 24,
   "status": "completed",
   "currentTask": "",
-  "nextTask": "Wait for user Stage24 instruction",
-  "headSha": "d7a8e634ffc5bc27399163ea53754739a5ec2a97",
-  "lastCheckpointSha": "d7a8e634ffc5bc27399163ea53754739a5ec2a97",
-  "buildStatus": "local Debug build all green (8/8 executables)",
+  "nextTask": "Wait for user Stage25 instruction; online visual acceptance pending (user)",
+  "headSha": "PENDING_FINAL_COMMIT",
+  "lastCheckpointSha": "1b43b61c494346411e0943fabfd01db520a6878a",
+  "buildStatus": "local Debug build all green (8/8 executables, 0 errors)",
   "networkTests": "0 failures",
   "accountTests": "0 failures",
-  "worldTests": "597 PASS / 0 FAIL",
-  "actionsRunId": "36630085904",
-  "actionsStatus": "success",
-  "resumeRequired": false
+  "worldTests": "all PASS / 0 failures (incl. Stage24 AssetManifest/Animation/VisualDefinition/ClientSmoke checks)",
+  "actionsRunId": "PENDING",
+  "actionsStatus": "PENDING",
+  "resumeRequired": false,
+  "stage24Notes": {
+    "clientSmoke": "LEGEND_CLIENT_VISUAL_SMOKE=1 -> 15s alive clean exit, all [VisualSmoke] markers pass",
+    "onlineSmoke": "LEGEND_CLIENT_AUTO_ENTER=1 -> login/create/select/EnterWorld success, world-ready map=1 Greenfield Village, screenshots verified (map visual/NPC nameplates/HUD/skillbar)",
+    "knownIssues": [
+      "new character bootstrap position (0,0) instead of map spawn (server-side, pre-existing)",
+      "online in-game visuals need user manual acceptance (no GUI automation beyond auto-enter)"
+    ]
+  }
 }

@@ -34,6 +34,8 @@ public:
     bool DebugVisible() const { return m_debugVisible; }
     bool AccountDebugVisible() const { return m_accountDebugVisible; }
     bool WorldDebugVisible() const { return m_worldDebugVisible; }
+    // 阶段24：LEGEND_CLIENT_AUTO_ENTER=1 自动进世界链路是否启用（本地视觉冒烟用）。
+    bool AutoEnterEnabled() const { return m_autoEnter; }
     // F8 状态文本（指令八十三：State/Gateway/ConnectionId/Handshake/Auth/Account/RTT/Last Error）
     std::string StatusText() const;
     // F11 Account Debug 文本（指令六十）
@@ -46,6 +48,8 @@ private:
     void UpdateDevAutoLogin(float deltaTime);
     void UpdateWorldFlow();
     void UpdateWorldMoveInput(legend::input::InputManager& input, float deltaTime);
+    // 阶段24：LEGEND_CLIENT_AUTO_ENTER=1 自动进世界（登录→建角/选角→EnterWorld）。
+    void UpdateAutoEnter();
 
     std::shared_ptr<GameNetworkClient> m_client = std::make_shared<GameNetworkClient>();
     AccountClientController m_account{*m_client};
@@ -61,6 +65,12 @@ private:
     DevLoginStage m_devLoginStage = DevLoginStage::Idle;
     static constexpr const char* kDevUsername = "dev_user";
     static constexpr const char* kDevPassword = "DevPass123!";
+
+    // 阶段24：自动进世界（LEGEND_CLIENT_AUTO_ENTER=1；本地视觉冒烟链路）
+    bool m_autoEnter = false;
+    float m_autoEnterCooldown = 0.0f;
+    bool m_autoEnterCreated = false;   // 已尝试建角（防重复提交）
+    bool m_autoEnterLoggedIn = false;  // 已触发登录
 };
 
 } // namespace legend::client

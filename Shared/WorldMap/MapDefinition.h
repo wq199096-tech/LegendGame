@@ -23,6 +23,9 @@ struct MapDefinition {
     float spawnY = 300.0f;
     float respawnX = 300.0f; // 默认复活点（指令三十五：CurrentMap 复活用）
     float respawnY = 300.0f;
+    // 阶段24：视觉地图引用（visual_maps.json 的 visualMapId；空 = Client 用 Fallback Grid）。
+    // 纯视觉字段——服务器逻辑不使用，Client/Editor 用于地图渲染与资产绑定。
+    std::string visualMapId;
 
     // 边界内判断（含 NaN 防护：NaN 比较全 false -> 不在边界内）。
     bool InBounds(float x, float y) const {

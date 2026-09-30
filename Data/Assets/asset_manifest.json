@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    { "assetId": "warrior_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/warrior_idle.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "warrior_walk_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/warrior_walk.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "warrior_attack_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/warrior_attack.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "warrior_cast_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/warrior_cast.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "warrior_hit_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/warrior_hit.png", "width": 96, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "warrior_death_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/warrior_death.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+
+    { "assetId": "mage_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/mage_idle.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "mage_walk_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/mage_walk.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "mage_attack_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/mage_attack.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "mage_cast_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/mage_cast.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "mage_hit_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/mage_hit.png", "width": 96, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "mage_death_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/mage_death.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+
+    { "assetId": "taoist_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/taoist_idle.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "taoist_walk_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/taoist_walk.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "taoist_attack_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/taoist_attack.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "taoist_cast_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/taoist_cast.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "taoist_hit_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/taoist_hit.png", "width": 96, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "taoist_death_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Player/taoist_death.png", "width": 192, "height": 512, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+
+    { "assetId": "slime_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Monsters/slime_idle.png", "width": 192, "height": 384, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "slime_walk_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Monsters/slime_walk.png", "width": 192, "height": 384, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "slime_attack_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Monsters/slime_attack.png", "width": 192, "height": 384, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "slime_hit_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Monsters/slime_hit.png", "width": 192, "height": 384, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "slime_death_sheet", "type": "SpriteSheet", "path": "Assets/Characters/Monsters/slime_death.png", "width": 192, "height": 384, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+
+    { "assetId": "npc_elder_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/NPC/npc_elder_idle.png", "width": 192, "height": 64, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "npc_merchant_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/NPC/npc_merchant_idle.png", "width": 192, "height": 64, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "npc_wayfarer_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/NPC/npc_wayfarer_idle.png", "width": 192, "height": 64, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "npc_guide_idle_sheet", "type": "SpriteSheet", "path": "Assets/Characters/NPC/npc_guide_idle.png", "width": 192, "height": 64, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+
+    { "assetId": "portal_default_idle_sheet", "type": "EffectTexture", "path": "Assets/Effects/portal_default.png", "width": 256, "height": 96, "pivotX": 0.5, "pivotY": 0.6, "enabled": true },
+
+    { "assetId": "fx_slash_sheet", "type": "EffectTexture", "path": "Assets/Effects/fx_slash.png", "width": 192, "height": 48, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "fx_fire_bolt_sheet", "type": "EffectTexture", "path": "Assets/Effects/fx_fire_bolt.png", "width": 96, "height": 24, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "fx_fire_bolt_impact_sheet", "type": "EffectTexture", "path": "Assets/Effects/fx_fire_bolt_impact.png", "width": 192, "height": 48, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "fx_whirlwind_sheet", "type": "EffectTexture", "path": "Assets/Effects/fx_whirlwind.png", "width": 512, "height": 128, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+
+    { "assetId": "tile_grass_a", "type": "Texture", "path": "Assets/World/Tiles/tile_grass_a.png", "width": 64, "height": 64, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "tile_grass_b", "type": "Texture", "path": "Assets/World/Tiles/tile_grass_b.png", "width": 64, "height": 64, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "tile_stone_a", "type": "Texture", "path": "Assets/World/Tiles/tile_stone_a.png", "width": 64, "height": 64, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+
+    { "assetId": "prop_tree_oak", "type": "Sprite", "path": "Assets/World/Props/prop_tree_oak.png", "width": 96, "height": 128, "pivotX": 0.5, "pivotY": 0.95, "enabled": true },
+    { "assetId": "prop_rock_gray", "type": "Sprite", "path": "Assets/World/Props/prop_rock_gray.png", "width": 64, "height": 48, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "prop_bush_green", "type": "Sprite", "path": "Assets/World/Props/prop_bush_green.png", "width": 48, "height": 32, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "prop_flower_patch", "type": "Sprite", "path": "Assets/World/Props/prop_flower_patch.png", "width": 48, "height": 24, "pivotX": 0.5, "pivotY": 0.9, "enabled": true },
+    { "assetId": "prop_ruin_pillar", "type": "Sprite", "path": "Assets/World/Props/prop_ruin_pillar.png", "width": 48, "height": 96, "pivotX": 0.5, "pivotY": 0.95, "enabled": true },
+
+    { "assetId": "ui_portrait_warrior", "type": "Sprite", "path": "Assets/UI/portrait_warrior.png", "width": 48, "height": 48, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "ui_portrait_mage", "type": "Sprite", "path": "Assets/UI/portrait_mage.png", "width": 48, "height": 48, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "ui_portrait_taoist", "type": "Sprite", "path": "Assets/UI/portrait_taoist.png", "width": 48, "height": 48, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "ui_icon_skill_1001", "type": "Sprite", "path": "Assets/UI/icon_skill_1001.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "ui_icon_skill_1002", "type": "Sprite", "path": "Assets/UI/icon_skill_1002.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true },
+    { "assetId": "ui_icon_skill_1003", "type": "Sprite", "path": "Assets/UI/icon_skill_1003.png", "width": 32, "height": 32, "pivotX": 0.5, "pivotY": 0.5, "enabled": true }
+  ]
+}

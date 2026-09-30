@@ -56,12 +56,18 @@ add_executable(LegendWorldTests
     MapEditorDataChecks.cpp
     GameDataChecks.cpp
     DefinitionValidationChecks.cpp
+    AssetManifestChecks.cpp
+    AnimationChecks.cpp
+    VisualDefinitionChecks.cpp
+    ClientSmokeChecks.cpp
     ../Tools/MapEditor/Source/WorldDocument.cpp
     ../Tools/MapEditor/Source/GameDataDocument.cpp
 )
 target_include_directories(LegendWorldTests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldTests PRIVATE cxx_std_20)
-target_link_libraries(LegendWorldTests PRIVATE LegendGatewayCore LegendLoginCore LegendWorldCore LegendClientAccount LegendSharedNetwork)
+# 阶段24：LEGEND_SOURCE_DIR —— Asset/Visual Checks 与 Client Smoke 定位仓库数据/日志。
+target_compile_definitions(LegendWorldTests PRIVATE LEGEND_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(LegendWorldTests PRIVATE LegendGatewayCore LegendLoginCore LegendWorldCore LegendClientAccount LegendSharedNetwork LegendVisualData)
 
 if(MSVC)
     target_compile_options(LegendWorldTests PRIVATE /utf-8)

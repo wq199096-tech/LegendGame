@@ -10,6 +10,7 @@
       "minLevel": 1,
       "portalId": 8001,
       "sourceMapId": 1,
+      "visualId": "portal_default",
       "x": 1000.0,
       "y": 300.0
     },
@@ -23,6 +24,7 @@
       "minLevel": 1,
       "portalId": 8002,
       "sourceMapId": 2,
+      "visualId": "portal_default",
       "x": 150.0,
       "y": 500.0
     },
@@ -36,6 +38,7 @@
       "minLevel": 2,
       "portalId": 8003,
       "sourceMapId": 2,
+      "visualId": "portal_default",
       "x": 1800.0,
       "y": 1000.0
     },
@@ -49,6 +52,7 @@
       "minLevel": 1,
       "portalId": 8004,
       "sourceMapId": 3,
+      "visualId": "portal_default",
       "x": 150.0,
       "y": 300.0
     }

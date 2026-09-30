@@ -30,6 +30,23 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# LegendVisualData【阶段24】：视觉资产数据层（Data/Assets 解析/校验 + 统一
+# AnimationPlayer + 展示目录）。纯数据/逻辑层（不依赖 SDL/OpenGL），
+# LegendClient / LegendMapEditor / LegendWorldTests 三方共用。
+# ---------------------------------------------------------------------------
+add_library(LegendVisualData STATIC
+    Visuals/VisualAssetData.cpp
+    Visuals/AnimationPlayer.cpp
+    Visuals/VisualDataCatalog.cpp
+)
+target_include_directories(LegendVisualData PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendVisualData PUBLIC cxx_std_20)
+target_link_libraries(LegendVisualData PUBLIC nlohmann_json::nlohmann_json)
+if(MSVC)
+    target_compile_options(LegendVisualData PRIVATE /utf-8)
+endif()
+
+# ---------------------------------------------------------------------------
 # LegendClient：游戏客户端可执行程序
 # ---------------------------------------------------------------------------
 add_executable(LegendClient
@@ -37,6 +54,9 @@ add_executable(LegendClient
     Source/LegendApp.cpp
     Source/GameScene.cpp
     Network/ClientNetworkController.cpp
+    Assets/AssetManager.cpp
+    Visuals/Font.cpp
+    Visuals/VisualRuntime.cpp
     Source/ProgressionChecks.cpp
     Source/EquipmentChecks.cpp
     Source/SkillChecks.cpp
@@ -62,7 +82,7 @@ add_executable(LegendClient
     World/WorldActorManager.cpp
 )
 
-target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport LegendClientAccount)
+target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport LegendClientAccount LegendVisualData)
 
 if(MSVC)
     target_compile_options(LegendClient PRIVATE /utf-8)
