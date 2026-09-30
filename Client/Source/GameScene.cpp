@@ -462,8 +462,11 @@ void GameScene::Update(float deltaTime) {
         m_visualRuntime->Update(m_networkController->World(), deltaTime);
     }
     if (m_visualSmoke) {
-        m_visualSmokeElapsed += deltaTime;
-        if (m_visualSmokeElapsed >= 15.0) {
+        // 用墙钟计时（软件渲染低 FPS 时 deltaTime 被钳制，游戏时间会远慢于真实时间）。
+        if (m_visualSmokeStartMs == 0) {
+            m_visualSmokeStartMs = SDL_GetTicks();
+        }
+        if (SDL_GetTicks() - m_visualSmokeStartMs >= 15000) {
             LOG_INFO("[VisualSmoke] pass — client alive 15s, quitting cleanly.");
             legend::Engine::Get().Quit();
         }
