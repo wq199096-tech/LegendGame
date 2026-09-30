@@ -62,6 +62,8 @@ void RunClientSmokeLogicChecks() {
 
     // 子进程继承环境（LEGEND_CLIENT_VISUAL_SMOKE=1 → 15s 后干净退出）。
     SetEnvironmentVariableA("LEGEND_CLIENT_VISUAL_SMOKE", "1");
+    // Mesa 26.x 默认走 D3D12 后端（首次绘制触发 0x80070057 崩溃）——强制 llvmpipe 软件渲染。
+    SetEnvironmentVariableA("GALLIUM_DRIVER", "llvmpipe");
 
     STARTUPINFOA si{};
     si.cb = sizeof(si);
