@@ -1,60 +1,50 @@
-# CURRENT_STAGE — 阶段22 完成（待 Actions 确认）
+# CURRENT_STAGE — 阶段23 完成（Stage23 completed）
 
 ## 当前阶段
-- **阶段22 —— LegendGame World Editor V1 + Data Driven World V0.22**（无人值守模式）
-- 前置确认：阶段21 已封板（e362dfa 修复；run 36609036863 = success；3285bf4 主体提交）
-- 下一阶段：阶段23（Game Data / Content Editor V1）——阶段22 全绿后自动进入
-- 全局收尾：阶段23 全绿后输出最终汇报并停止，不进入阶段24
+- **阶段23 —— Game Data / Content Editor V1 + Scriptable Content Definitions V0.23：已完成（completed）**
+- 最终功能 HEAD：**d7a8e634ffc5bc27399163ea53754739a5ec2a97**
+  `feat(editor): add game data content editor v1`（60 文件，+4241/-347）
+- CI：**run #49（36630085904）= success**——Configure / Build / Verify 8 exe / CTest 硬门禁 / Runtime gate 全部 SUCCESS
+- 前序封板：阶段21 run #47（36609036863，e362dfa）success；阶段22 run #48（36611118905，b611b53）success
 
-## 阶段目标（摘要）
-游戏世界从 C++ 硬编码升级为「PC 可视化世界编辑器 + JSON 数据驱动」：
-地图/NPC/怪物刷怪点/Portal/出生点/复活点不再需要改 C++。
+## 无人值守模式（阶段21→22→23）最终状态：全部完成
+- 阶段21 Multi-Map World / Portal / Respawn Core V0.21：**completed**
+- 阶段22 World Editor V1 + Data Driven World V0.22：**completed**
+- 阶段23 Game Data / Content Editor V1 + Scriptable Content Definitions V0.23：**completed**
+- **下一步：等待用户阶段24 指令（不自动进入阶段24）**
 
-## Todo（阶段22）
-- [x] 阶段21 CI 收尾（DotKill drop 可见性轮询化 → run 36609036863 success）
-- [x] Shared：WorldDataJson（Load/Validate/Save/Roundtrip/MakeDefaultWorldData）+ MonsterSpawnDefinition + GenerateSpawnPoints
-- [x] Registry 数据驱动：Map/Npc/Portal + MonsterSpawnRegistry（LoadFromDefinitions/LoadDefaults；Instance() 调用面零改动）
-- [x] WorldServer：worldDataDir + Start 加载/校验/拒绝启动 + SpawnInitialMonsters 数据驱动（slotId 全局递增）
-- [x] World Editor V1：双工作区 + 三栏布局 + Canvas（Pan/Zoom/拾取/拖拽）+ Inspector + Validation + Undo 100 步 + 原子保存 + backup 轮换 + Launch WorldServer + smoke
-- [x] Data/World 5 个 JSON 入库（.gitignore 修正 `/data/* + !/Data/**`——Windows 大小写陷阱）
-- [x] Tests：WorldDataChecks + MapEditorDataChecks 并入 LegendWorldTests（WorldChecks main 调用）
-- [x] 本地全量：WorldTests 526 PASS / 0 FAIL（含新检查）；Editor smoke PASSED；8 exe 构建中
-- [ ] Actions 绿（feat(editor): add data-driven world editor v1）
+## 阶段23 交付清单
+- Shared/GameData/GameDataJson：Data/Game 9 文件 Load/Validate/Save/Roundtrip +
+  MakeDefaultGameData 单一事实来源 + contentVersion + 配置错误带文件/类型/ID/字段/原因
+- 8 Game Registry 数据驱动：Item/Skill/Status/Quest/Shop/Teleport/MonsterDefinition/LootTable
+  （LoadFromDefinitions/LoadDefaults；构造默认兜底防 MSVC magic-static 死锁）
+- Loot Table V1：loot_tables.json（dropChance 0~1）+ 服务器死亡读表生成掉落（Client 永不决定）
+- WorldServer：gameDataDir 真实 Data/Game 启动 + Cross Reference 校验（断引用拒绝启动）+ Data hash
+- Editor Data 工作区：8 类型树（搜索/排序/过滤）+ Inspector 字段编辑 + Preview + Duplicate（自动新 ID）+
+  Reload From Disk（23.15）+ 断引用 Error 禁存（23.11 Cross Reference）
+- 23.24 迁移回归：3001~3003 / Training Slime / 1001~1005 / 5 Status / 4001~4005 / Shop6001 /
+  Teleport7001~7002 逐字段断言与阶段15~20 硬编码表现一致
+- Tests：GameDataChecks + DefinitionValidationChecks 并入 LegendWorldTests（三套件纪律不变）
+
+## 最终本地验证（d7a8e63）
+- build 8 exe 全绿；WorldTests **597 PASS / 0 FAIL**；NetworkTests 0 fail；AccountTests 0 fail
+- Editor world smoke PASSED；Runtime smoke：Login/Gateway/World 真实 Data 启动
+  （Data hash e35cc124ea138c24）+ Client GameScene 10s 存活不崩
 
 ## 关键实现决策（防止后续重写）
-- 单一事实来源：MakeDefaultWorldData()（Shared/WorldData/WorldDataJson.cpp）——出厂默认数据
-  = Data/World 初始 JSON = 测试 fixture；Registry 硬编码全部移除
-- 数据注入模式：`static LoadFromDefinitions(...)` + `static LoadDefaults()` 经
-  `Mutable()`（const_cast Instance 同一实例）——Instance() 返回 const& 的 17 处调用零改动
-- 加载策略（23.23 兼容）：worldDataDir 存在 → Load+Validate（失败拒绝启动，不静默回退）；
-  不存在 → 出厂默认 + LOG_WARN（开发/测试环境；CI ctest 工作目录无 Data/World）
-- GenerateSpawnPoints：spawnId 派生种子的 xorshift64*，圆内 sqrt 均匀分布——
-  Editor/Server/Tests 三方一致；zone 参数必须保证「入口 AOI 600 内有怪 + 避开 Portal 100」
-  （Map2 zone 900,950 r400：入口最近点 489；Map3 zone 950,820 r350：入口最近点 589——
-  Exec 复现算法验证；首版 zone 1050,1150/1200,950 导致入口无怪 → MapIsolation/PortalSuccess
-  3 FAIL 教训）
-- WorldDocument（编辑器文档模型）：Mutate() 是唯一修改通道（自动压 undo 栈 + Revalidate）；
-  拖拽 release 才 Mutate（防 undo 洪泛）；Validation fail-fast（Error 禁存三处一致）
-- EditorApp `editor::` 必须写 `legend::editor::`（全局命名空间下 editor:: 不解析——
-  曾经 100+ 编译错误的根因）；NOMINMAX 必须在 windows.h 前
-
-## 本阶段调试教训（重要）
-- **Windows git 大小写陷阱**：`.gitignore` 的 `data/` 会误吞 `Data/`（core.ignorecase=true）
-  → 必须用 `/data/* + !/Data/ + !/Data/**` 组合（`!/Data/` 单独不够——check-ignore -v 验证）
-- **zone 布点必须用算法复现验证**（不能只看圆心距）：首版 Map2 zone 圆心距入口 832，
-  最近展开点 612 > AOI 600 → 切图后入口无怪 → 3 个阶段21 链路检查 FAIL
-- backup 轮换是 per-file（每文件 10 份）——断言按 `maps.*.json` 统计而非全目录
-- 并行 msbuild 竞争同一 PDB → cl 进程死锁（8 个僵尸）→ Stop-Process 后重编
-- 后台 build job 用 `> log 2>&1` 落盘 + Select-String 查错（老教训持续有效）
-
-## 本地全量测试（阶段22 当前）
-- LegendWorldTests：526 PASS / 0 FAIL（含 WorldDataChecks 45+ / MapEditorDataChecks 14 新检查）
-- Editor world smoke：PASSED（exit 0）
-- Network/Account：全量构建后重跑中
+- 单一事实来源：MakeDefaultGameData()（出厂默认 = 仓库 JSON = 测试 fixture）
+- **MSVC magic-static 重入死锁**：单例构造函数内 LoadDefaults→Mutable→Instance() 递归死锁
+  → Quest/Shop/Teleport/MonsterDefinition 构造函数必须直接填充成员
+- ValidateGameData(…, crossReference=true)：SaveGameData 内部传 false（Game 内自洽校验；
+  NPC/Map/Spawn 交叉由 WorldServer Start / Editor 全量 Validate 负责）
+- ParseItems 教训：ReadUint 链式复用变量导致 maxStack 覆盖 id → 每字段独立读取；
+  [Diag] 打印 error 内容进测试直接定位；负数 attackBonus 显式拒绝（不 clamp）
+- .gitignore 的 `/data/*` 吞 `Data/Game/` → `!/Data/Game/` + `!/Data/Game/**`（check-ignore -v 验证）
 
 ## 阻塞项
 - 无
 
-## 当前 Actions
-- 阶段21：run 36609036863（e362dfa）= **success**（封板）
-- 阶段22：待提交 feat(editor): add data-driven world editor v1
+## Actions 状态（全部封板）
+- 阶段21：run #47（36609036863 / e362dfa）= **success**
+- 阶段22：run #48（36611118905 / b611b53）= **success**
+- 阶段23：run #49（36630085904 / d7a8e63）= **success**

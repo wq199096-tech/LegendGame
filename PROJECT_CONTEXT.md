@@ -4,9 +4,9 @@
 
 ## 仓库
 - GitHub: https://github.com/wq199096-tech/LegendGame（远端 main 分支，唯一分支）
-- 本地仓库根（中文路径）: `d:\传奇1\传奇1\传奇1\传奇1\LegendGame`
-- 构建目录: `D:\LegendGame`（**独立完整副本，非联接**——源码改动后必须 robocopy 镜像同步过去再构建；
-  同步后源文件 mtime 早于旧 obj 会被 msbuild 跳过 → touch 全部源文件；Build 缓存若被旧 CMake 配置过需删 CMakeCache/CMakeFiles 重配）
+- 本地仓库根: `d:\LegendGame-main`（构建目录 `d:\LegendGame-main\Build`，Debug）
+- 历史: 项目曾以中文路径 `d:\传奇1\...\LegendGame` + 独立构建副本 `D:\LegendGame` 开发
+  （中文路径 MSVC MSB8084 教训即来自该时期；现路径无中文，直接构建）
 
 ## 技术栈
 - C++20 / CMake ≥3.24 / Visual Studio 2022 BuildTools（MSVC）/ Debug 构建
@@ -25,7 +25,9 @@
 - schema_version 单行表（id=1 主键 + UPSERT），`kCurrentSchemaVersion` 在 DatabaseSchema.h
 - Migration 1: accounts/characters/sessions；2: characters.gold；3: inventory_items/character_equipment；
   4: character_quests/character_quest_objectives（阶段19）
-- 只存玩家数据（账号/角色/成长/背包/装备/任务状态）；一切 Definition（怪物/技能/状态/物品/任务/NPC/商店/传送）代码硬编码，绝不入库
+- 只存玩家数据（账号/角色/成长/背包/装备/任务状态）；一切 Definition（地图/NPC/怪物刷怪点/
+  Portal/物品/怪物/技能/状态/任务/商店/传送/LootTable）**不入库**——阶段22/23 起改为
+  Data/World（5 JSON）+ Data/Game（9 JSON）数据驱动（JSON 入库，运行时 db 与 backup 不入库）
 
 ## 测试体系
 - 三套 CTest（禁止新增第四个）：LegendNetworkTests / LegendAccountTests / LegendWorldTests（后缀追加源文件）
@@ -52,6 +54,18 @@
 - 阶段18 Loot/Inventory/Equipment V0.18：掉落/拾取/40 格背包/装备/快照（1042124）
 - 阶段19 Quest Core V0.19：服务器权威任务/4 种 Objective/Accept-TurnIn-Abandon/离线 DOT 推进/
   Snapshot 10s 纠偏（ea97880 + 稳定化 a674786，Actions run 36527767372 = success）
+- 阶段20 NPC Interaction Core V0.20：NPC 对话/商店/传送服务器权威链路（10ef1d2/3285bf4 时期）
+- 阶段21 Multi-Map World / Portal / Respawn Core V0.21：多地图/Portal/死亡复活
+  （3285bf4 主体 + e362dfa DotKill 轮询修复，Actions run #47 = 36609036863 success）
+- 阶段22 World Editor V1 + Data Driven World V0.22：LegendGame World Editor（双工作区/
+  World Tree/Canvas/Inspector/Undo 100/原子保存/backup 10 轮换/Validation 禁存/
+  Launch WorldServer）+ Data/World 5 JSON + World/Map/Npc/Portal/MonsterSpawn Registry
+  数据驱动（b611b53，Actions run #48 = 36611118905 success）
+- 阶段23 Game Data / Content Editor V1 + Scriptable Content Definitions V0.23：
+  World Editor 内 Data 工作区（Item/Monster/Skill/Status/Quest/Shop/Teleport/LootTable）+
+  Data/Game 9 JSON + 8 Registry 数据驱动 + Cross Reference 验证 + Loot Table V1 +
+  迁移回归（d7a8e634ffc5bc27399163ea53754739a5ec2a97，Actions run #49 = 36630085904 success）
+  ——无人值守模式（21→22→23）全部完成，等待阶段24 指令
 
 ## 关键架构原则
 1. **100% 服务器权威**：Client 只表达意图（requestId + 最小参数），所有数值/状态/结果由服务器重新验证；
@@ -66,9 +80,13 @@
 7. **MessageId 分段**：1~199 基础+账号；200~219 World 基础；230~233 玩家同步；240~242 怪物；250~256 战斗；
    260~266 技能；270~273 状态；280~282 成长；290~300 物品背包装备；310~319 任务；**320+ NPC（阶段20）**
 8. **测试事件断言**：必须记录事件基线（recorded 队列基线索引）后再等待/统计，防止旧事件污染
+9. **数据驱动（阶段22/23）**：Data/World + Data/Game JSON 是 Definition 单一事实来源
+   （出厂默认 MakeXxxData() = 仓库 JSON = 测试 fixture）；Registry 经 LoadFromDefinitions 注入、
+   构造默认兜底；服务器启动加载+校验，配置错误**拒绝启动不静默修复**；
+   掉落/成长等一切数值服务器读表决定，**Client 永不使用本地 Data 决定服务器权威结果**
 
 ## 编码/构建纪律（本项目实测教训）
-- 中文路径 MSVC 报 MSB8084 → 构建/测试一律在 `D:\LegendGame`
+- 中文路径 MSVC 报 MSB8084（历史教训）→ 现仓库/构建均在无中文路径 `d:\LegendGame-main`
 - `near`/`far` 是 Windows 宏，变量不能叫这些名
 - PowerShell 对原生 exe 用 `Select-Object -First N` 会掐管道杀进程
 - Edit 工具偶发"报成功但未落盘"→改后 shell 复读验证
