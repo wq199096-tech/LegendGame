@@ -3,6 +3,15 @@
 > 新会话/续接第一步：读本文件 + PROJECT_CONTEXT.md + CURRENT_STAGE.md + ARCHITECTURE.md，
 > 然后执行 git status / git log -5 --oneline，确认一致后继续。
 
+## 当前续接状态（2026-09-30）
+- **Stage25 Chinese Studio UI Patch completed**；仍属于 Stage25，不进入 Stage26。
+- 现有 `LegendMapEditor.exe` 已升级为“传奇游戏开发工具 - LegendGame Studio”：中文主题、
+  中文系统字体+DPI、中文菜单/工具栏/内容树/Inspector/底部面板、真实地图视觉 Canvas、
+  Asset Browser/Animation Preview/Quest Flow/BOSS/Chapter/Validation/Process 中文 UI。
+- 本地完整 build、8 exe、三套 CTest、Editor world smoke 均通过；最终提交/Actions 见
+  `CURRENT_STAGE.md` 与 `TRAE_RUN_STATE.json`。
+- 下一步：停止，等待用户明确 Stage26 指令。
+
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
 - 本地: 仓库根 = `d:\LegendGame-main\LegendGame`（构建目录 `Build/`；push 走 SOCKS5 10808）

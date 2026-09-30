@@ -63,6 +63,11 @@ private:
     void HandleMapEditing();
     void DrawUI();
     void DrawMenuBar();
+    void DrawLegacyMenuBar(); // 保留阶段22/25旧菜单逻辑，便于回归比对（不再绘制）
+    void DrawMainToolbar();
+    void DrawStatusBar();
+    void DrawDeleteConfirmation();
+    void RequestDeleteSelected();
     void DrawPalettePanel();
     void DrawInfoPanel();
 
@@ -81,6 +86,7 @@ private:
     void DrawWorldInspectorFields(); // World 字段编辑主体（World/Game 两个 Inspector 共存）
     void DrawGameDataInspector();   // 右：Game 定义字段编辑（23.3~23.10/23.18）
     void DrawWorldBottomPanel();    // 下：Validation/Console/Status/Save
+    void DrawLegacyWorldBottomPanel();
     void DrawWorldObjects();        // canvas 绘制具体对象
     void WorldScreenToWorld(float sx, float sy, float& wx, float& wy) const;
     legend::editor::WorldDocument::ObjectType PickObjectAt(float wx, float wy,
@@ -190,6 +196,15 @@ private:
     std::string m_lastTitle;
     bool m_initialized = false;
     bool m_imguiInitialized = false;
+    float m_uiScale = 1.0f;
+    float m_leftPanelWidth = 286.0f;
+    float m_rightPanelWidth = 370.0f;
+    float m_bottomPanelHeight = 205.0f;
+    int m_bottomTab = 0;
+    bool m_showAbout = false;
+    enum class DeleteTarget { None, World, Game };
+    DeleteTarget m_deleteTarget = DeleteTarget::None;
+    std::string m_deleteLabel;
 
     // 自动化冒烟测试（环境变量触发）
     bool m_smokeQuitAfterSave = false;
@@ -230,6 +245,7 @@ private:
     float m_mouseWorldX = 0.0f;
     float m_mouseWorldY = 0.0f;
     bool m_showWorldGrid = true;
+    bool m_showDebugOverlay = false;
 
     // Inspector 文本编辑缓冲（owner 跟踪：选中变化时重新载入）
     char m_insName[128] = {};

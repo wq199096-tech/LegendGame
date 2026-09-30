@@ -89,6 +89,11 @@
   最终提交 e4653305f5e8c85cceec97ae546605d10a37245e
   feat(game): add first playable vertical slice，
   CI run 36714901307 = success——已完成，等待阶段26 指令
+- Stage25 Chinese Studio UI Patch：在既有 `LegendMapEditor.exe` 内完成简体中文专业 UI
+  重构（未新增 exe）：统一 EditorTheme / EditorStrings、系统中文字体回退与 DPI 缩放、
+  中文菜单和工具栏、可拖动 IDE 三栏布局与工作区 Tab、真实 visual_maps 地图画布、
+  中文 Inspector/Validation/Process Status、资源浏览器与动画预览体验升级、中文内容名与
+  搜索别名；保持阶段22~25全部编辑能力和服务器/协议/数据库逻辑不变。
 
 ## 关键架构原则
 1. **100% 服务器权威**：Client 只表达意图（requestId + 最小参数），所有数值/状态/结果由服务器重新验证；

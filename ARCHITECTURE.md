@@ -154,6 +154,13 @@ WorldServer 内部：io 线程（游戏逻辑/广播） + DbWorker 线程（全�
   Duplicate/Search/Game Data Registry 唯一 ID）；文档模型 Mutate() 唯一修改通道 + Undo/Redo 100 步快照；
   保存 = serialize→temp→reparse→replace 原子写 + .backup 10 份轮换；Validation Error 禁存；
   LEGEND_EDITOR_SMOKE=world 无头冒烟
+- **Editor Studio UI【Stage25 Patch】**：单一 `LegendMapEditor.exe` 品牌升级为 LegendGame
+  Studio。`EditorTheme` 是颜色/间距/圆角/控件状态单一入口；`EditorStrings` 管理简体中文
+  UI 常量、生产内容显示名与搜索别名（不写回 Definition）。ImGui 初始化时根据
+  `SDL_GetWindowDisplayScale` 缩放，并运行时探测 msyh/simhei/simsun + ChineseFull glyph。
+  主布局 = 中文菜单 + 快捷工具栏 + 可拖动 Content/Workspace/Inspector + 可拖动底部
+  Validation/Console/Process + 状态栏；Canvas 直接消费 WorldData visualMaps 和
+  VisualDataCatalog/纹理缓存绘制真实地图视觉，Debug Overlay 独立开关。
 - **Visual Runtime【阶段24】**：LegendClient 在线模式默认画面走真实资源渲染（离线 Debug 路径不变）。
   分层：Client/Visuals/VisualAssetData（Data/Assets 4 JSON 解析+校验+交叉引用）→
   VisualDataCatalog（展示目录：技能名/CD/任务标题/monster+portal visualId/map visualMapId/

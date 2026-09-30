@@ -29,6 +29,7 @@ endif()
 add_executable(LegendMapEditor
     Source/Main.cpp
     Source/EditorApp.cpp
+    Source/EditorTheme.cpp
     Source/WorldDocument.cpp
     Source/GameDataDocument.cpp
 )

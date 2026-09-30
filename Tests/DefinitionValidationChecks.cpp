@@ -129,6 +129,9 @@ void RunGameDataDocumentChecks() {
               doc.MatchesSearch(GameDataDocument::ObjectType::Item, 3001, "Rusty Sword", "3001"));
         Check("DefValidation: search by name matches",
               doc.MatchesSearch(GameDataDocument::ObjectType::Item, 3001, "Rusty Sword", "rusty"));
+        Check("DefValidation: Chinese Studio search alias matches",
+              doc.MatchesSearch(GameDataDocument::ObjectType::Monster, 1001,
+                                "Training Slime", "史莱姆"));
         Check("DefValidation: search miss",
               !doc.MatchesSearch(GameDataDocument::ObjectType::Item, 3002, "Cloth Armor", "sword"));
     }

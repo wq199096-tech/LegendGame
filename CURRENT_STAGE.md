@@ -1,4 +1,28 @@
-# CURRENT_STAGE — 阶段25 完成（Stage25 completed）
+# CURRENT_STAGE — Stage25 Chinese Studio UI Patch 完成
+
+## Stage25 Chinese Studio UI Patch（2026-09-30）
+- **状态：completed**；未进入 Stage26，未修改服务器业务、协议、数据库或客户端战斗逻辑。
+- `LegendMapEditor.exe` 统一品牌为“传奇游戏开发工具 - LegendGame Studio”，脏状态标题追加 `*`。
+- 新增 `EditorTheme` 统一深色高级灰主题（#17191D / #1E2126 / #24282F）、金色选择、
+  蓝色状态及成功/警告/错误语义色；新增 `EditorStrings` 集中中文菜单、面板、分类、字段与
+  生产内容显示名，不修改 Definition JSON。
+- 中文字体运行时回退链：`msyh.ttc -> simhei.ttf -> simsun.ttc`，加载 ChineseFull glyph；
+  SDL 显示器 DPI 比例驱动字体、间距和面板尺寸（100%~200%）。
+- UI：全中文九类菜单、实用快捷工具栏、可拖动三栏与底部区域、工作区 Tab、左侧统一搜索、
+  右侧中文属性编辑、底部“内容检查/控制台/运行状态”、最底状态栏、中文删除确认。
+- 地图 Canvas 直接复用 `visual_maps.json` + 纹理缓存绘制真实地面、道路、树木、花草、岩石等；
+  保留 NPC/刷新点/BOSS/传送门/任务区域/SafeZone 编辑叠加，普通刷新点蓝色、BOSS 橙金、
+  SafeZone 绿色、Portal 紫蓝、NPC 选中金色；调试叠加默认关闭。
+- 资源浏览器增加搜索、分类与小/中/大缩略图；动画预览增加中文播放/暂停/上一帧/下一帧、
+  八方向与帧/FPS；BOSS、Quest Flow、Chapter、Validation、Process Status 全部中文接线。
+- 中文搜索别名仅作用于 Studio 显示层，例如“史莱姆”可匹配 `Training Slime` 与
+  `Ancient Slime Guardian`；新增 WorldTests 回归断言。
+- 本地验证：LegendMapEditor 编译与 `LEGEND_EDITOR_SMOKE=world` 通过；日志确认中文字体、
+  Data/World、Data/Game、Data/Assets 加载成功；完整 Debug build 通过；8/8 exe；
+  NetworkTests / AccountTests / WorldTests / CTest 全绿。
+- 截图：当前 Codex 会话未暴露 Windows 原生窗口绑定，无法可靠保存 GUI 截图；已用真实 EXE
+  smoke 与运行日志验收。人工视觉仍建议在 125% DPI、1280×720、1920×1080 各复查一次。
+- Git / Actions：功能提交与 CI 结果见本文件末尾最新封板记录。
 
 ## 当前阶段
 - **阶段25 —— First Playable Vertical Slice V0.25：已完成（completed）**

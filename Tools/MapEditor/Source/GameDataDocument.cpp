@@ -1,4 +1,5 @@
 #include "Tools/MapEditor/Source/GameDataDocument.h"
+#include "Tools/MapEditor/Source/EditorStrings.h"
 
 #include <algorithm>
 
@@ -322,7 +323,10 @@ bool GameDataDocument::MatchesSearch(ObjectType type, std::uint32_t id, const st
     if (containsCI(std::to_string(id), search)) {
         return true;
     }
-    return containsCI(name, search);
+    if (containsCI(name, search)) {
+        return true;
+    }
+    return containsCI(legend::editor::strings::SearchAlias(name), search);
 }
 
 // ---------------------------------------------------------------------------
