@@ -70,7 +70,9 @@
   （Data/Assets 4 JSON + Client/Assets/AssetManager + Client/Visuals/VisualAssetData/
   AnimationPlayer/VisualDataCatalog/Font/VisualRuntime + Data/World visual_maps.json +
   monsters/portal visualId + Editor 视觉绑定/Preview/Assets Validation + 52 张开发占位
-  PNG + Client 15s 冒烟入 CTest；1b43b61 起步）
+  PNG + Client 15s 冒烟入 CTest；1b43b61 起步，c9cac3f 功能基线；
+  CI run 36673795651（9a45ddc）= success——CI 装 mesa-dist-win 26.2.3 软件 GL +
+  GALLIUM_DRIVER=llvmpipe 跑 Client Visual Smoke）
 
 ## 关键架构原则
 1. **100% 服务器权威**：Client 只表达意图（requestId + 最小参数），所有数值/状态/结果由服务器重新验证；

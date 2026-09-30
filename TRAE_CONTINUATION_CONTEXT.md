@@ -42,11 +42,12 @@
 
 ## 下一步
 - 等待用户阶段25 指令。**不自动进入阶段25，不修改任何游戏业务代码。**
-- **待用户人工视觉验收**（在线画面）：登录→进世界后确认地图/角色动画/怪物/NPC/Portal/
-  相机跟随/技能特效/伤害飘字/HUD。Client 无自动登录链路，自动化无法替代此步。
+- **建议用户人工视觉验收**（在线实际操作）：`LEGEND_CLIENT_AUTO_ENTER=1` 即可自动
+  登录进世界（TRAE 已用此链路截图验证静态画面）；移动/战斗/技能特效/伤害飘字/
+  相机跟随等动态表现建议手动游玩确认。
 
 ## Actions 状态
 - Stage21 run #47（36609036863 / e362dfa）= success
 - Stage22 run #48（36611118905 / b611b53）= success
 - Stage23 run #49（36630085904 / d7a8e63）= success
-- Stage24 run：见 TRAE_RUN_STATE.json（最终提交推送后更新）
+- **Stage24 run 36673795651（9a45ddc）= success**（含 Mesa llvmpipe Client Visual Smoke）

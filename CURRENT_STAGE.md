@@ -3,7 +3,9 @@
 ## 当前阶段
 - **阶段24 —— Client Visual Runtime & Asset Pipeline V0.24：已完成（completed）**
 - 起始 HEAD：**1b43b61c494346411e0943fabfd01db520a6878a**（`docs: finalize stage 23 context`）
-- 最终提交：`feat(client): add visual runtime and asset pipeline v1`
+- 最终功能提交：**c9cac3fe5a6e68d399c3d1b1e941bf0b368b64c2**
+  `feat(client): add visual runtime and asset pipeline v1`（100 文件，+11591/-160）
+- 后续 CI/测试基建修复：ed89d99 / c4a1f0b / 65dd21d / d36308a / 9121b52 / d9ab4ca / 9a45ddc
 - 本地验证：8 exe 全绿；NetworkTests 0 fail；AccountTests 0 fail；WorldTests
   **全部 PASS（含阶段24 新增 4 组检查与 Client 15s 冒烟）**
 
@@ -79,8 +81,15 @@
 
 ## 下一步
 - **阶段24 完成，停止。等待用户阶段25 指令（不自动进入）。**
-- 人工视觉验收清单（用户执行）：真实登录→进世界，确认地图背景/props/角色行走动画/
-  怪物/NPC 名字与任务 Marker/Portal 动画/相机平滑跟随/技能特效与飘字/HUD 各面板。
+- 视觉验收：TRAE 已通过 `LEGEND_CLIENT_AUTO_ENTER=1` 自动登录进世界并截图验证静态画面
+  （地图视觉/props/NPC 名字板/HUD/SkillBar/地图名）。动态表现（行走动画、战斗、技能
+  特效、伤害飘字、相机跟随、MapChanged 清场）建议用户手动游玩确认。
 
 ## Actions 状态
-- 待最终提交推送后记录（见 TRAE_RUN_STATE.json）
+- **Stage24：run 36673795651（9a45ddc）= success** ——Configure / Build / Mesa 软件 GL /
+  Verify 8 exe / CTest 硬门禁（含 Client Visual Smoke）/ Runtime gate 全部 SUCCESS
+- CI 修复链（3 次迭代，均为环境/测试基建，未弱化门禁）：
+  1. runner 无 GL 3.3 → 安装 mesa-dist-win 26.2.3 软件 OpenGL（opengl32.dll + lib*.dll）
+  2. 软件渲染低 FPS 钳制游戏时间 → 冒烟退出改用 SDL_GetTicks 墙钟
+  3. Mesa 26.x 默认 D3D12 后端首帧崩溃 0x80070057 → 冒烟子进程强制
+     `GALLIUM_DRIVER=llvmpipe`；同时禁用 vsync + 轮询式等待（心跳 [Diag]）

@@ -9,8 +9,11 @@
 - **Stage24 completed**（Client Visual Runtime & Asset Pipeline V0.24）
 - 阶段24 起始 HEAD = 1b43b61c494346411e0943fabfd01db520a6878a
   （`docs: finalize stage 23 context`）
-- 最终提交：`feat(client): add visual runtime and asset pipeline v1`（SHA 见 TRAE_RUN_STATE.json）
-- CI：见 TRAE_RUN_STATE.json actionsRunId/actionsStatus
+- 最终功能提交 = c9cac3fe5a6e68d399c3d1b1e941bf0b368b64c2
+  （`feat(client): add visual runtime and asset pipeline v1`）
+  （后续 CI/测试基建修复提交清单见 CURRENT_STAGE.md / TRAE_RUN_STATE.json）
+- CI：**Stage24 run 36673795651（9a45ddc）= success**（五步全绿，含 Mesa llvmpipe
+  上的 Client Visual Smoke）
 
 ## 无未完成编码任务
 - 阶段24 交付全部封板；工作区无进行中的编码/测试工作

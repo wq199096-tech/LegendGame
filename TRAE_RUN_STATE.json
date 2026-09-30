@@ -5,18 +5,24 @@
   "status": "completed",
   "currentTask": "",
   "nextTask": "Wait for user Stage25 instruction; online visual acceptance pending (user)",
-  "headSha": "c9cac3fe5a6e68d399c3d1b1e941bf0b368b64c2",
+  "headSha": "9a45ddc9b841149f090adb28f029c9b960c9e8d9",
   "lastCheckpointSha": "1b43b61c494346411e0943fabfd01db520a6878a",
   "buildStatus": "local Debug build all green (8/8 executables, 0 errors)",
   "networkTests": "0 failures",
   "accountTests": "0 failures",
   "worldTests": "all PASS / 0 failures (incl. Stage24 AssetManifest/Animation/VisualDefinition/ClientSmoke checks)",
-  "actionsRunId": "PENDING",
-  "actionsStatus": "PENDING",
+  "actionsRunId": "36673795651",
+  "actionsStatus": "success",
   "resumeRequired": false,
   "stage24Notes": {
-    "clientSmoke": "LEGEND_CLIENT_VISUAL_SMOKE=1 -> 15s alive clean exit, all [VisualSmoke] markers pass",
+    "clientSmoke": "CI runs LegendClient.exe on Mesa llvmpipe (GALLIUM_DRIVER=llvmpipe, mesa-dist-win 26.2.3) -> 15s alive clean exit, all [VisualSmoke] markers pass",
     "onlineSmoke": "LEGEND_CLIENT_AUTO_ENTER=1 -> login/create/select/EnterWorld success, world-ready map=1 Greenfield Village, screenshots verified (map visual/NPC nameplates/HUD/skillbar)",
+    "ciFixes": [
+      "mesa-dist-win software GL step (runner has no GL 3.3)",
+      "wall-clock smoke quit timer (software rendering clamps game delta)",
+      "disable vsync in smoke mode",
+      "force GALLIUM_DRIVER=llvmpipe (mesa d3d12 backend crashes 0x80070057 on first draw)"
+    ],
     "knownIssues": [
       "new character bootstrap position (0,0) instead of map spawn (server-side, pre-existing)",
       "online in-game visuals need user manual acceptance (no GUI automation beyond auto-enter)"
