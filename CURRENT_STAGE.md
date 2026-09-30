@@ -4,8 +4,8 @@
 - **阶段25 —— First Playable Vertical Slice V0.25：已完成（completed）**
 - 起始 HEAD：**dcbe5b0e3e4b623e79a28452fac0d76a24edbe6d**（`docs(stage24): record ci run success and final shas`）
 - Checkpoint：**6afa4b0**（`wip(stage25): checkpoint spawn-fix and chapter1 data`）
-- 最终功能提交：**（见 TRAE_RUN_STATE.json finalSha）**
-  `feat(game): add first playable vertical slice`
+- 最终功能提交：**e4653305f5e8c85cceec97ae546605d10a37245e**
+  `feat(game): add first playable vertical slice`（60 files, +5911/-464）
 - 本地验证：8 exe 全绿；NetworkTests 0 fail；AccountTests 0 fail；WorldTests
   **0 fail（含阶段25 新增 VerticalSlice/UiModel/ChapterOne E2E 检查）**
 
@@ -57,10 +57,22 @@
   Level/Gold/位置/装备/任务状态
 - **测试（指令六十四~六十八）**：仍 3 套 CTest；新增 VerticalSliceChecks.cpp
   （NewCharacterSpawnCheck）/ UiModelChecks.cpp（Toast/Banner/BossBar/SkillSlot/
-  HUD/Tracker/Inventory/Shop/Minimap/ItemCatalog/Theme 9 组）/ ChapterOneChecks.cpp
-  （真实生产数据 E2E 全链：出生→接 4001→Portal→杀 5→掉落拾取→升级→交任务→商店
-  买+装 Bronze Sword→4005→Boss 击杀→4006→Chapter Complete→持久化）；
-  出厂默认内容变更同步 20+ 既有断言（未删测试/未弱化规则）
+  HUD/Tracker/Inventory/Shop/Minimap/ItemCatalog/ChapterCatalog/Theme 12 组）/
+  ChapterOneChecks.cpp（真实生产数据 E2E 全链：出生→接 4001→Portal→杀 5→掉落拾取→
+  升级→交任务→商店买+装 Bronze Sword→4005→Boss 击杀→4006→Chapter Complete→
+  持久化）；出厂默认内容变更同步 20+ 既有断言（未删测试/未弱化规则）
+- **World Editor 升级（PC 端可视化要求）**：LegendMapEditor.exe 新增 Asset Browser
+  （缩略图+详情）、Animation Preview（clip 帧播放/Play-Pause/方向行）、Quest Flow
+  （章节→任务链视图）、Boss Editor（怪物+掉落表+刷新绑定+画布定位）、Chapter Editor
+  （chapters.json 数据层：Shared 加载/校验/保存 + 编辑面板 + 客户端 Chapter Complete
+  数据驱动）、Quest Area Map Picker（ReachArea 画布点选 + 圈层绘制）、Validate All、
+  Launch Full Game（四进程链）、Stop Local Game、Process Status
+- **关键修复（本轮实测发现）**：(1) MapTransitionService 发包顺序——MapChanged/
+  MapSnapshot 必须先于 AOI 初始广播（客户端收到 MapChanged 清空镜像，Spawn 先到
+  会被整批丢弃 → 切图后 NPC/Portal/怪物镜像永久为空，对话/商店/MiniMap 失效）；
+  (2) 全仓双重 BOM（5 文件）导致 MSVC 编译失败；(3) ChapterOne E2E 慢机时序加固
+  （击杀循环死亡即复活 / 拾取按成功计数 / MoveTo 多轮自校正 / UsePortal 服务器
+  权威地图双确认 / Boss 巡逻半径感知断言）
 
 ## 本地最终验证
 - build 8 exe 全绿（exit 0 / 0 error）；8/8 exe 齐全（无第 9 个）
@@ -95,6 +107,6 @@
   掉落/4006）→ Chapter Complete → 断线重登持久化。
 
 ## Actions 状态
-- **Stage25：run（见 TRAE_RUN_STATE.json actionsRunId / finalSha）= success**
+- **Stage25：run 36714901307（e465330）= success**
   ——Configure / Build / Mesa llvmpipe / Verify 8 exe / CTest 硬门禁 /
   Vertical Slice runtime smoke (4-process chain) 全部 SUCCESS

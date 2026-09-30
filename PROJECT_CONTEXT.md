@@ -79,9 +79,16 @@
   LegendClientUi 库 + VisualRuntime 全套窗口（HUD V2/SkillBar/Tracker/对话/商店/背包/
   角色面板/MiniMap/Toast/Banner/BossBar/LevelUp/Settings）；SafeZone metadata +
   EntryProtection 2s；AudioRuntime SDL3 程序化合成 BGM/SFX；Loading 覆盖层；
+  World Editor 新增 Asset Browser/Animation Preview/Quest Flow/Boss Editor/
+  Chapter Editor（Data/Game/chapters.json）/Quest Area Map Picker/Validate All/
+  Launch Full Game/Stop/Process Status；
+  修复 MapTransition 发包顺序（MapChanged 先于 AOI Spawn——切图后镜像重建）；
   测试 VerticalSliceChecks/UiModelChecks/ChapterOneChecks（真实生产数据 E2E）；
   CI 新增 Vertical Slice runtime smoke 四进程链硬步骤；
-  dcbe5b0 起步，6afa4b0 checkpoint A；最终提交见 TRAE_RUN_STATE.json）
+  dcbe5b0 起步，6afa4b0 checkpoint A；
+  最终提交 e4653305f5e8c85cceec97ae546605d10a37245e
+  feat(game): add first playable vertical slice，
+  CI run 36714901307 = success——已完成，等待阶段26 指令
 
 ## 关键架构原则
 1. **100% 服务器权威**：Client 只表达意图（requestId + 最小参数），所有数值/状态/结果由服务器重新验证；
