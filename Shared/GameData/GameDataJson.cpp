@@ -713,6 +713,42 @@ bool ParseLootTables(const json& root, GameDataSet& out, std::string& error) {
     return true;
 }
 
+// 章节解析（阶段25：可选文件；字段错误仍拒绝——与其它 Data 文件同一纪律）。
+bool ParseChapters(const json& root, GameDataSet& out, std::string& error) {
+    const auto it = root.find("chapters");
+    if (it == root.end() || !it->is_array()) {
+        error = "chapters.json: missing/invalid array 'chapters'";
+        return false;
+    }
+    for (const auto& e : *it) {
+        ChapterDefinition chapter;
+        std::uint64_t id = 0;
+        std::uint64_t finalQuestId = 0;
+        if (!ReadUint(e, "chapterId", id, "chapters.json: Chapter", error) ||
+            !ReadString(e, "title", chapter.title, "chapters.json: Chapter", error) ||
+            !ReadUint(e, "finalQuestId", finalQuestId, "chapters.json: Chapter", error)) {
+            return false;
+        }
+        const std::string ctx = "chapters.json: Chapter " + std::to_string(id);
+        const auto questsIt = e.find("questIds");
+        if (questsIt == e.end() || !questsIt->is_array() || questsIt->empty()) {
+            error = ctx + ": missing/empty questIds array";
+            return false;
+        }
+        for (const auto& q : *questsIt) {
+            if (!q.is_number_unsigned()) {
+                error = ctx + ": questIds entries must be unsigned integers";
+                return false;
+            }
+            chapter.questIds.push_back(q.get<std::uint32_t>());
+        }
+        chapter.chapterId = static_cast<std::uint32_t>(id);
+        chapter.finalQuestId = static_cast<std::uint32_t>(finalQuestId);
+        out.chapters.push_back(std::move(chapter));
+    }
+    return true;
+}
+
 // ---- 序列化 ----
 
 json ItemToJson(const ItemDefinition& item) {
@@ -879,6 +915,19 @@ json LootTableToJson(const LootTableDefinition& table) {
     };
 }
 
+json ChapterToJson(const ChapterDefinition& chapter) {
+    json questIds = json::array();
+    for (const std::uint32_t questId : chapter.questIds) {
+        questIds.push_back(questId);
+    }
+    return json{
+        {"chapterId", chapter.chapterId},
+        {"title", chapter.title},
+        {"finalQuestId", chapter.finalQuestId},
+        {"questIds", questIds},
+    };
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -919,6 +968,14 @@ bool LoadGameData(const std::string& dir, GameDataSet& out, std::string& error) 
         !load("teleports.json", ParseTeleports) ||
         !load("loot_tables.json", ParseLootTables)) {
         return false;
+    }
+
+    // 阶段25：chapters.json 可选（服务器逻辑不消费章节；缺失 → 空 chapters）。
+    // 存在但非法/字段错 → 拒绝加载（与其它 Data 文件同一纪律，不静默忽略）。
+    if (fs::exists(fs::path(dir) / "chapters.json")) {
+        if (!load("chapters.json", ParseChapters)) {
+            return false;
+        }
     }
 
     out.manifest.schemaVersion = kGameDataSchemaVersion;
@@ -1152,6 +1209,61 @@ bool ValidateGameData(const GameDataSet& game, const WorldDataSet& world, std::s
         }
     }
 
+    // ---- chapters（阶段25：chapterId 唯一/questIds 存在/任务不跨章节/finalQuest 唯一）----
+    {
+        std::set<std::uint32_t> chapterIds;
+        std::set<std::uint32_t> chapterQuests;   // 任务只能属于一个章节
+        std::set<std::uint32_t> finalQuestIds;   // finalQuestId 只能有一个章节
+        for (const auto& chapter : game.chapters) {
+            const std::string ctx = "chapters.json: Chapter " +
+                                    std::to_string(chapter.chapterId);
+            if (chapter.chapterId == 0) {
+                error = ctx + ": chapterId must be > 0";
+                return false;
+            }
+            if (!chapterIds.insert(chapter.chapterId).second) {
+                error = ctx + ": duplicate chapterId";
+                return false;
+            }
+            if (chapter.title.empty()) {
+                error = ctx + ": title must not be empty";
+                return false;
+            }
+            if (chapter.questIds.empty()) {
+                error = ctx + ": questIds must not be empty";
+                return false;
+            }
+            for (const std::uint32_t questId : chapter.questIds) {
+                if (questIds.count(questId) == 0) {
+                    error = ctx + ": quest " + std::to_string(questId) +
+                            " does not exist in quests.json";
+                    return false;
+                }
+                if (!chapterQuests.insert(questId).second) {
+                    error = ctx + ": quest " + std::to_string(questId) +
+                            " belongs to multiple chapters";
+                    return false;
+                }
+            }
+            if (chapter.finalQuestId == 0) {
+                error = ctx + ": finalQuestId must be > 0";
+                return false;
+            }
+            if (chapterQuests.count(chapter.finalQuestId) == 0) {
+                error = ctx + ": finalQuestId " +
+                        std::to_string(chapter.finalQuestId) +
+                        " not in chapter questIds";
+                return false;
+            }
+            if (!finalQuestIds.insert(chapter.finalQuestId).second) {
+                error = ctx + ": finalQuestId " +
+                        std::to_string(chapter.finalQuestId) +
+                        " used by multiple chapters";
+                return false;
+            }
+        }
+    }
+
     // ---- shops ----
     for (const auto& shop : game.shops) {
         const std::string ctx = "shops.json: Shop " + std::to_string(shop.shopId);
@@ -1240,6 +1352,7 @@ bool SaveGameData(const std::string& dir, const GameDataSet& data, std::string& 
     legend::data::BackupFileForRotate(dir, "shops.json");
     legend::data::BackupFileForRotate(dir, "teleports.json");
     legend::data::BackupFileForRotate(dir, "loot_tables.json");
+    legend::data::BackupFileForRotate(dir, "chapters.json");
     legend::data::BackupFileForRotate(dir, "game_manifest.json");
 
     GameDataSet normalized = data;
@@ -1248,7 +1361,7 @@ bool SaveGameData(const std::string& dir, const GameDataSet& data, std::string& 
         data.manifest.contentVersion == 0 ? kGameDataContentVersion : data.manifest.contentVersion;
     normalized.manifest.files = {"items.json", "monsters.json", "skills.json", "statuses.json",
                                  "quests.json", "shops.json", "teleports.json",
-                                 "loot_tables.json"};
+                                 "loot_tables.json", "chapters.json"};
 
     json manifestJson{
         {"schemaVersion", normalized.manifest.schemaVersion},
@@ -1287,6 +1400,10 @@ bool SaveGameData(const std::string& dir, const GameDataSet& data, std::string& 
     for (const auto& table : normalized.lootTables) {
         lootJson["lootTables"].push_back(LootTableToJson(table));
     }
+    json chaptersJson{{"schemaVersion", kGameDataSchemaVersion}, {"chapters", json::array()}};
+    for (const auto& chapter : normalized.chapters) {
+        chaptersJson["chapters"].push_back(ChapterToJson(chapter));
+    }
 
     return legend::data::WriteAtomicFile(dir, "items.json", itemsJson, error) &&
            legend::data::WriteAtomicFile(dir, "monsters.json", monstersJson, error) &&
@@ -1296,6 +1413,7 @@ bool SaveGameData(const std::string& dir, const GameDataSet& data, std::string& 
            legend::data::WriteAtomicFile(dir, "shops.json", shopsJson, error) &&
            legend::data::WriteAtomicFile(dir, "teleports.json", teleportsJson, error) &&
            legend::data::WriteAtomicFile(dir, "loot_tables.json", lootJson, error) &&
+           legend::data::WriteAtomicFile(dir, "chapters.json", chaptersJson, error) &&
            legend::data::WriteAtomicFile(dir, "game_manifest.json", manifestJson, error);
 }
 
@@ -1307,9 +1425,10 @@ GameDataSet MakeDefaultGameData() {
     data.manifest.schemaVersion = kGameDataSchemaVersion;
     data.manifest.contentVersion = kGameDataContentVersion;
     data.manifest.files = {"items.json", "monsters.json", "skills.json", "statuses.json",
-                           "quests.json", "shops.json", "teleports.json", "loot_tables.json"};
+                           "quests.json", "shops.json", "teleports.json", "loot_tables.json",
+                           "chapters.json"};
 
-    // ---- Items（阶段18 指令三）----
+    // ---- Items（阶段18 指令三 + 阶段25 指令十三/十四：新装备 3010+）----
     data.items.push_back({kItemRustySwordId, "Rusty Sword", ItemType::Weapon, 1, 3, 0,
                           EquipmentSlot::Weapon, true, true, "item_rusty_sword", true});
     data.items.push_back({kItemClothArmorId, "Cloth Armor", ItemType::Armor, 1, 0, 2,
@@ -1317,12 +1436,23 @@ GameDataSet MakeDefaultGameData() {
     data.items.push_back({kItemSlimeCoreId, "Slime Core", ItemType::Material,
                           kSlimeCoreMaxStack, 0, 0, EquipmentSlot::None, true, true,
                           "item_slime_core", true});
+    data.items.push_back({kItemBronzeSwordId, "Bronze Sword", ItemType::Weapon, 1, 8, 0,
+                          EquipmentSlot::Weapon, true, true, "item_bronze_sword", true});
+    data.items.push_back({kItemApprenticeStaffId, "Apprentice Staff", ItemType::Weapon, 1, 9, 0,
+                          EquipmentSlot::Weapon, true, true, "item_apprentice_staff", true});
+    data.items.push_back({kItemSpiritTalismanId, "Spirit Talisman", ItemType::Weapon, 1, 7, 0,
+                          EquipmentSlot::Weapon, true, true, "item_spirit_talisman", true});
+    data.items.push_back({kItemTravelerArmorId, "Traveler Armor", ItemType::Armor, 1, 0, 4,
+                          EquipmentSlot::Armor, true, true, "item_traveler_armor", true});
 
-    // ---- Monsters（阶段13/14/17；阶段24：visualId 视觉引用）----
+    // ---- Monsters（阶段13/14/17；阶段24：visualId；阶段25 指令十：Boss 2001）----
     {
         MonsterDefinition slime = kTrainingSlimeDefinition;
         slime.visualId = "training_slime";
         data.monsters.push_back(std::move(slime));
+        MonsterDefinition guardian = kAncientGuardianDefinition;
+        guardian.visualId = "ancient_guardian";
+        data.monsters.push_back(std::move(guardian));
     }
 
     // ---- Skills（阶段15/16：5 个）----
@@ -1339,12 +1469,13 @@ GameDataSet MakeDefaultGameData() {
     data.statuses.push_back(kPoisonDefinition);
     data.statuses.push_back(kSlowDefinition);
 
-    // ---- Quests（阶段19/20：4001~4005）----
+    // ---- Quests（阶段19/20：4001~4005；阶段25 指令八/九：Chapter 1《异动的史莱姆》
+    //      任务链重组 4001~4005 + 新增 4006）----
     {
         QuestDefinition quest;
         quest.questId = 4001;
-        quest.name = "Slime Hunter";
-        quest.description = "Defeat 5 Training Slimes.";
+        quest.name = "First Trouble";
+        quest.description = "The Training Slimes in the meadow have grown bold. Defeat 5 of them.";
         quest.minLevel = 1;
         quest.prerequisiteQuestId = 0;
         quest.repeatable = false;
@@ -1363,8 +1494,8 @@ GameDataSet MakeDefaultGameData() {
     {
         QuestDefinition quest;
         quest.questId = 4002;
-        quest.name = "Core Collector";
-        quest.description = "Collect 3 Slime Cores.";
+        quest.name = "Strange Cores";
+        quest.description = "The slimes carry strange cores. Bring me 3 Slime Cores.";
         quest.minLevel = 1;
         quest.prerequisiteQuestId = 4001;
         quest.repeatable = false;
@@ -1375,7 +1506,9 @@ GameDataSet MakeDefaultGameData() {
         collect.requiredCount = 3;
         quest.objectives.push_back(collect);
         quest.reward.exp = 80;
-        quest.reward.gold = 10;
+        quest.reward.gold = 30;
+        quest.reward.itemDefinitionId = kItemClothArmorId;
+        quest.reward.itemQuantity = 1;
         quest.startNpcDefinitionId = 5001;
         quest.turnInNpcDefinitionId = 5001;
         data.quests.push_back(std::move(quest));
@@ -1383,8 +1516,8 @@ GameDataSet MakeDefaultGameData() {
     {
         QuestDefinition quest;
         quest.questId = 4003;
-        quest.name = "Growing Warrior";
-        quest.description = "Reach level 3.";
+        quest.name = "Growing Stronger";
+        quest.description = "Grow stronger. Reach level 3.";
         quest.minLevel = 1;
         quest.prerequisiteQuestId = 4001;
         quest.repeatable = false;
@@ -1395,7 +1528,7 @@ GameDataSet MakeDefaultGameData() {
         reach.requiredCount = 1;
         quest.objectives.push_back(reach);
         quest.reward.exp = 0;
-        quest.reward.gold = 50;
+        quest.reward.gold = 80;
         quest.startNpcDefinitionId = 5001;
         quest.turnInNpcDefinitionId = 5001;
         data.quests.push_back(std::move(quest));
@@ -1403,22 +1536,22 @@ GameDataSet MakeDefaultGameData() {
     {
         QuestDefinition quest;
         quest.questId = 4004;
-        quest.name = "Explorer";
-        quest.description = "Explore the far plains (1500,1500).";
+        quest.name = "Explore the Meadow";
+        quest.description = "Explore the southern meadow (300,1500).";
         quest.minLevel = 1;
-        quest.prerequisiteQuestId = 0;
+        quest.prerequisiteQuestId = 4001;
         quest.repeatable = false;
         QuestObjectiveDefinition area;
         area.objectiveId = 40041;
         area.type = QuestObjectiveType::ReachArea;
         area.targetId = 0;
         area.requiredCount = 1;
-        area.mapId = 1;
-        area.areaX = 1500.0f;
+        area.mapId = 2;
+        area.areaX = 300.0f;
         area.areaY = 1500.0f;
-        area.areaRadius = 100.0f;
+        area.areaRadius = 200.0f;
         quest.objectives.push_back(area);
-        quest.reward.exp = 50;
+        quest.reward.exp = 60;
         quest.reward.gold = 10;
         quest.startNpcDefinitionId = 5004;
         quest.turnInNpcDefinitionId = 5004;
@@ -1427,16 +1560,17 @@ GameDataSet MakeDefaultGameData() {
     {
         QuestDefinition quest;
         quest.questId = 4005;
-        quest.name = "Slime Cleanup";
-        quest.description = "Kill 3 slimes and gather 2 cores.";
-        quest.minLevel = 1;
+        quest.name = "Deeper Threat";
+        quest.description =
+            "Slay 5 slimes, gather 2 cores, and set foot in the Ancient Ruins.";
+        quest.minLevel = 3;
         quest.prerequisiteQuestId = 4002;
         quest.repeatable = false;
         QuestObjectiveDefinition kill;
         kill.objectiveId = 40051;
         kill.type = QuestObjectiveType::KillMonster;
         kill.targetId = kTrainingSlimeTypeId;
-        kill.requiredCount = 3;
+        kill.requiredCount = 5;
         quest.objectives.push_back(kill);
         QuestObjectiveDefinition collect;
         collect.objectiveId = 40052;
@@ -1444,16 +1578,49 @@ GameDataSet MakeDefaultGameData() {
         collect.targetId = kItemSlimeCoreId;
         collect.requiredCount = 2;
         quest.objectives.push_back(collect);
-        quest.reward.exp = 150;
-        quest.reward.gold = 30;
-        quest.reward.itemDefinitionId = kItemRustySwordId;
+        QuestObjectiveDefinition area;
+        area.objectiveId = 40053;
+        area.type = QuestObjectiveType::ReachArea;
+        area.targetId = 0;
+        area.requiredCount = 1;
+        area.mapId = 3;
+        area.areaX = 200.0f;
+        area.areaY = 300.0f;
+        area.areaRadius = 200.0f;
+        quest.objectives.push_back(area);
+        quest.reward.exp = 200;
+        quest.reward.gold = 50;
+        quest.reward.itemDefinitionId = kItemTravelerArmorId;
+        quest.reward.itemQuantity = 1;
+        quest.startNpcDefinitionId = 5001;
+        quest.turnInNpcDefinitionId = 5001;
+        data.quests.push_back(std::move(quest));
+    }
+    {
+        QuestDefinition quest;
+        quest.questId = 4006;
+        quest.name = "Ruins Investigation";
+        quest.description =
+            "Something ancient stirs in the ruins. Defeat the Ancient Slime Guardian.";
+        quest.minLevel = 3;
+        quest.prerequisiteQuestId = 4005;
+        quest.repeatable = false;
+        QuestObjectiveDefinition bossKill;
+        bossKill.objectiveId = 40061;
+        bossKill.type = QuestObjectiveType::KillMonster;
+        bossKill.targetId = kAncientGuardianTypeId;
+        bossKill.requiredCount = 1;
+        quest.objectives.push_back(bossKill);
+        quest.reward.exp = 500;
+        quest.reward.gold = 200;
+        quest.reward.itemDefinitionId = kItemBronzeSwordId;
         quest.reward.itemQuantity = 1;
         quest.startNpcDefinitionId = 5001;
         quest.turnInNpcDefinitionId = 5001;
         data.quests.push_back(std::move(quest));
     }
 
-    // ---- Shops（阶段20 指令三十六：Shop 6001）----
+    // ---- Shops（阶段20 指令三十六：Shop 6001；阶段25 指令十三：新装备上架）----
     {
         ShopDefinition shop;
         shop.shopId = 6001;
@@ -1461,6 +1628,10 @@ GameDataSet MakeDefaultGameData() {
         shop.entries.push_back({kItemSlimeCoreId, 10, 3, true, true});
         shop.entries.push_back({kItemRustySwordId, 100, 30, true, true});
         shop.entries.push_back({kItemClothArmorId, 120, 40, true, true});
+        shop.entries.push_back({kItemBronzeSwordId, 150, 45, true, true});
+        shop.entries.push_back({kItemApprenticeStaffId, 160, 48, true, true});
+        shop.entries.push_back({kItemSpiritTalismanId, 140, 42, true, true});
+        shop.entries.push_back({kItemTravelerArmorId, 120, 36, true, true});
         data.shops.push_back(std::move(shop));
     }
 
@@ -1468,7 +1639,8 @@ GameDataSet MakeDefaultGameData() {
     data.teleports.push_back({7001, "Far Plains", 1, 1500.0f, 1500.0f, 20, 1, true});
     data.teleports.push_back({7002, "Village Square", 1, 300.0f, 300.0f, 0, 1, true});
 
-    // ---- Loot Tables（23.16：Training Slime 迁移——与阶段18 DropRoller::TrainingSlimeTable 一致）----
+    // ---- Loot Tables（23.16：Training Slime 迁移——与阶段18 DropRoller::TrainingSlimeTable 一致；
+    //      阶段25 指令十二：Boss 掉落表 2001）----
     {
         LootTableDefinition table;
         table.lootTableId = 1;
@@ -1478,6 +1650,26 @@ GameDataSet MakeDefaultGameData() {
         table.entries.push_back({kItemRustySwordId, 0.20, 1, 1});
         table.entries.push_back({kItemClothArmorId, 0.20, 1, 1});
         data.lootTables.push_back(std::move(table));
+    }
+    {
+        LootTableDefinition table;
+        table.lootTableId = 2001;
+        table.name = "Ancient Slime Guardian Loot";
+        table.enabled = true;
+        table.entries.push_back({kItemSlimeCoreId, 1.00, 2, 3});
+        table.entries.push_back({kItemClothArmorId, 0.40, 1, 1});
+        table.entries.push_back({kItemBronzeSwordId, 0.30, 1, 1});
+        data.lootTables.push_back(std::move(table));
+    }
+
+    // ---- Chapters（阶段25：Chapter 1《异动的史莱姆》——展示元数据，服务器不消费）----
+    {
+        ChapterDefinition chapter;
+        chapter.chapterId = 1;
+        chapter.title = "The Restless Slimes";
+        chapter.finalQuestId = 4006;
+        chapter.questIds = {4001, 4002, 4003, 4004, 4005, 4006};
+        data.chapters.push_back(std::move(chapter));
     }
     return data;
 }

@@ -109,12 +109,15 @@ void RunGameDataDocumentChecks() {
         GameDataDocument doc;
         doc.NewFromDefaults();
         doc.SetSelection(GameDataDocument::ObjectType::Item, 3001);
-        Check("DefValidation: duplicate item suggests 3004",
-              doc.DuplicateSelected() && doc.FindItem(3004) != nullptr &&
-                  doc.Data().items.size() == 4);
+        // 阶段25：默认 7 物品（3010~3013 新装备）-> duplicate 后 8；
+        // SuggestItemId = max(3013)+1 = 3014（23.13 max+1 语义）。
+        Check("DefValidation: duplicate item suggests 3014",
+              doc.DuplicateSelected() && doc.FindItem(3014) != nullptr &&
+                  doc.Data().items.size() == 8);
         doc.SetSelection(GameDataDocument::ObjectType::LootTable, 1);
-        Check("DefValidation: duplicate lootTable suggests 2",
-              doc.DuplicateSelected() && doc.FindLootTable(2) != nullptr);
+        // 阶段25：默认含 boss 掉落表 2001 -> duplicate 表 1 建议 max+1 = 2002。
+        Check("DefValidation: duplicate lootTable suggests 2002",
+              doc.DuplicateSelected() && doc.FindLootTable(2002) != nullptr);
         Check("DefValidation: duplicates keep data valid", !doc.HasErrors());
     }
 

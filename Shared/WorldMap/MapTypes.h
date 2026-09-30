@@ -37,4 +37,8 @@ inline constexpr std::uint32_t kRespawnTownGoldCost = 0;
 // 期间玩家不能受到 Monster 伤害；主动攻击/施法立即取消）。
 inline constexpr double kRespawnProtectionSeconds = 3.0;
 
+// 阶段25 指令四十三：进入野外图（Map2/Map3）2 秒 EntryProtection——复用
+// RespawnProtection 时间戳机制（不复制第三套保护系统）。
+inline constexpr double kEntryProtectionSeconds = 2.0;
+
 } // namespace legend::world

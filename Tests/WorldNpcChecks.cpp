@@ -305,7 +305,7 @@ void RunWorldNpcLogicChecks() {
              std::abs(elder->spawnX - 300.0f) < 0.01f &&
              std::abs(elder->spawnY - 300.0f) < 0.01f &&
              std::abs(elder->interactionRange - 120.0f) < 0.01f &&
-             elder->questIds == std::vector<QuestId>({4001, 4002, 4003, 4005});
+             elder->questIds == std::vector<QuestId>({4001, 4002, 4003, 4005, 4006});
         const auto* merchant = registry.FindNpc(5002);
         ok = ok && merchant != nullptr && merchant->name == "General Merchant" &&
              merchant->npcType == NpcType::Merchant && merchant->shopId == 6001 &&
@@ -333,19 +333,21 @@ void RunWorldNpcLogicChecks() {
         Check("NpcRegistryCheck: unique ids, quest/shop/teleport/dialogue references valid", ok);
     }
 
-    // ---- ShopRegistryCheck（指令三十六）：Shop 6001 价格 ----
+    // ---- ShopRegistryCheck（指令三十六 + 阶段25 指令十三）：Shop 6001 价格 ----
     {
         const auto* shop = ShopRegistry::Instance().FindShop(6001);
-        bool ok = shop != nullptr && shop->entries.size() == 3;
+        bool ok = shop != nullptr && shop->entries.size() == 7;
         const auto* core = shop ? shop->FindEntry(kItemSlimeCoreId) : nullptr;
         const auto* sword = shop ? shop->FindEntry(kItemRustySwordId) : nullptr;
         const auto* armor = shop ? shop->FindEntry(kItemClothArmorId) : nullptr;
+        const auto* bronze = shop ? shop->FindEntry(kItemBronzeSwordId) : nullptr;
         ok = ok && core && core->buyPrice == 10 && core->sellPrice == 3 && core->canBuy &&
              core->canSell;
         ok = ok && sword && sword->buyPrice == 100 && sword->sellPrice == 30;
         ok = ok && armor && armor->buyPrice == 120 && armor->sellPrice == 40;
+        ok = ok && bronze && bronze->buyPrice == 150 && bronze->sellPrice == 45;
         ok = ok && ShopRegistry::Instance().FindShop(9999) == nullptr;
-        Check("ShopRegistryCheck: shop 6001 authoritative prices (10/3, 100/30, 120/40)", ok);
+        Check("ShopRegistryCheck: shop 6001 authoritative prices (7 entries incl. 3010)", ok);
     }
 
     // ---- TeleportRegistryCheck（指令五十九/六十）：7001/7002 ----
@@ -802,7 +804,7 @@ void RunWorldNpcChainChecks() {
     // ---- Shop（指令三十九~五十六）----
     {
         servers.world->TestRevivePlayer(seedA.characterId); // 满血防级联
-        // ShopOpenCheck：Merchant 对话 → Shop Option → ShopOpenResponse 3 条目。
+        // ShopOpenCheck：Merchant 对话 → Shop Option → ShopOpenResponse 7 条目（阶段25）。
         std::uint64_t merchantSession = 0;
         bool ok = InteractAndWaitDialogue(clientA, servers, seedA.characterId, 5002,
                                           merchantSession);
@@ -823,9 +825,9 @@ void RunWorldNpcChainChecks() {
                                   baseline,
                                   [&](const WorldNetworkEvent& e) { return e.shopOpen.success; },
                                   open, 5000) &&
-                 open.shopOpen.entries.size() == 3;
+                 open.shopOpen.entries.size() == 7;
         }
-        Check("ShopOpenCheck: dialogue option opens shop 6001 with 3 entries", ok);
+        Check("ShopOpenCheck: dialogue option opens shop 6001 with 7 entries", ok);
 
         // ShopRequiresNpcSessionCheck：对话关闭后 SendShopOpenRequest 无效。
         clientA.controller.SendShopOpenRequest(); // dialogue 已被 Shop option 消耗？
@@ -1123,16 +1125,19 @@ void RunWorldNpcChainChecks() {
               "TeleportClearsOldAoiCheck",
               ok);
 
-        // TeleportCompletesReachAreaQuestCheck：传送后 Explorer(4004) Ready。
+        // TeleportReachAreaServerAuthorityCheck（阶段25：4004 区域在 Map2 南部——
+        // Map1 内传送（7001 Far Plains）不完成区域目标；服务器权威位置判定）。
         WorldNetworkEvent ready;
-        const bool reachOk = WaitRecordedFrom(
+        const bool noReadyEvent = !WaitRecordedFrom(
             clientA, WorldNetworkEvent::Type::QuestStateChangedEvent, 0,
             [&](const WorldNetworkEvent& e) {
                 return e.questId == 4004 &&
                        e.questState == static_cast<std::uint8_t>(QuestState::ReadyToTurnIn);
             },
-            ready, 5000);
-        Check("TeleportCompletesReachAreaQuestCheck: teleport completes Explorer ReachArea", reachOk);
+            ready, 1200);
+        Check("TeleportReachAreaServerAuthorityCheck: Map1 teleport does NOT complete "
+              "Map2 ReachArea",
+              noReadyEvent);
 
         // TeleportInvalidSessionCheck：伪 sessionId → SessionNotFound。
         {

@@ -14,6 +14,10 @@ namespace legend::world {
 inline constexpr std::uint32_t kTrainingSlimeTypeId = 1;
 inline constexpr const char* kTrainingSlimeName = "Training Slime";
 
+// 阶段25 指令十：第一只 Boss（Map3 只生成 1 只；respawn 45s 由 spawn 数据定义）。
+inline constexpr std::uint32_t kAncientGuardianTypeId = 2001;
+inline constexpr const char* kAncientGuardianName = "Ancient Slime Guardian";
+
 // 初始怪物数量（指令十五/十六）：map1 固定 20 只，固定位置表（测试可复现）。
 inline constexpr std::size_t kInitialMonsterCount = 20;
 

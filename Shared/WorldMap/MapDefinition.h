@@ -26,6 +26,11 @@ struct MapDefinition {
     // 阶段24：视觉地图引用（visual_maps.json 的 visualMapId；空 = Client 用 Fallback Grid）。
     // 纯视觉字段——服务器逻辑不使用，Client/Editor 用于地图渲染与资产绑定。
     std::string visualMapId;
+    // 阶段25 指令四十二：Safe Zone（仅 Map1 新手村 metadata；radius<=0 = 无）。
+    // 本阶段只作为地图元数据（未来 PvP 预留），不实现任何 PvP/怪物逻辑。
+    float safeZoneX = 0.0f;
+    float safeZoneY = 0.0f;
+    float safeZoneRadius = 0.0f;
 
     // 边界内判断（含 NaN 防护：NaN 比较全 false -> 不在边界内）。
     bool InBounds(float x, float y) const {

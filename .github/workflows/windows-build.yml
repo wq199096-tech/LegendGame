@@ -118,3 +118,52 @@ jobs:
           Write-Host 'NETWORK RUNTIME TEST PASS'
           Write-Host 'ACCOUNT RUNTIME TEST PASS'
           Write-Host 'WORLD RUNTIME TEST PASS'
+
+      # 阶段25 指令七十/六十九：Full Runtime Smoke —— 真实四进程链
+      # Login(7100)/Gateway(7300)/World(7200) + Client（AUTO_ENTER + VS_SMOKE 30s）。
+      # 验证 world-ready 与干净退出（禁止删测试/弱化门禁——独立硬步骤）。
+      - name: Vertical Slice runtime smoke (4-process chain)
+        shell: pwsh
+        run: |
+          $env:GALLIUM_DRIVER = 'llvmpipe'
+          $env:LEGEND_CLIENT_AUTO_ENTER = '1'
+          $env:LEGEND_CLIENT_VS_SMOKE = '1'
+          $bin = 'build/bin/Debug'
+          Remove-Item Logs/latest.log -ErrorAction SilentlyContinue
+          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -WorkingDirectory . -PassThru
+          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -WorkingDirectory . -PassThru
+          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -WorkingDirectory . -PassThru
+          try {
+            Start-Sleep -Seconds 8
+            $client = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
+            $deadline = (Get-Date).AddSeconds(150)
+            while ((Get-Date) -lt $deadline -and -not $client.HasExited) {
+              Start-Sleep -Seconds 5
+            }
+            if (-not $client.HasExited) {
+              Stop-Process -Id $client.Id -Force
+              Write-Error 'VsSmoke client did not exit within budget'
+              exit 1
+            }
+            if ($client.ExitCode -ne 0) {
+              Write-Error "VsSmoke client exit code $($client.ExitCode)"
+              exit 1
+            }
+            $log = Get-Content Logs/latest.log -Raw -ErrorAction SilentlyContinue
+            if (-not $log) { Write-Error 'VsSmoke: log missing'; exit 1 }
+            if ($log -notmatch '\[VsSmoke\] entered-world') {
+              Write-Error 'VsSmoke entered-world marker missing (auto login -> world ready failed)'
+              exit 1
+            }
+            if ($log -notmatch '\[VsSmoke\] pass') {
+              Write-Error 'VsSmoke pass marker missing (30s alive clean quit)'
+              exit 1
+            }
+            Write-Host 'VERTICAL SLICE RUNTIME SMOKE PASS (login/gateway/world/client)'
+          } finally {
+            foreach ($proc in @($world, $gateway, $login)) {
+              if ($proc -and -not $proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }

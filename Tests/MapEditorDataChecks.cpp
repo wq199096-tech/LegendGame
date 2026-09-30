@@ -25,9 +25,9 @@ void RunMapEditorDataLogicChecks() {
     {
         WorldDocument doc;
         doc.NewFromDefaults();
-        Check("MapEditorData: default world has 3 maps / 4 npcs / 2 spawns / 4 portals",
+        Check("MapEditorData: default world has 3 maps / 4 npcs / 3 spawns / 4 portals",
               doc.Data().maps.size() == 3 && doc.Data().npcs.size() == 4 &&
-                  doc.Data().monsterSpawns.size() == 2 && doc.Data().portals.size() == 4);
+                  doc.Data().monsterSpawns.size() == 3 && doc.Data().portals.size() == 4);
         Check("MapEditorData: default world validates clean", !doc.HasErrors());
         Check("MapEditorData: NewFromDefaults marks dirty", doc.IsDirty());
     }
@@ -73,8 +73,9 @@ void RunMapEditorDataLogicChecks() {
         const bool npcDup = doc.DuplicateSelected() && doc.FindNpc(5005) != nullptr &&
                             doc.Data().npcs.size() == 5;
         doc.SetSelection(WorldDocument::ObjectType::Spawn, 2001);
-        const bool spawnDup = doc.DuplicateSelected() && doc.FindSpawn(3002) != nullptr &&
-                              doc.Data().monsterSpawns.size() == 3;
+        // 阶段25：默认新增 boss spawn 3002 -> duplicate 自动分配 3003。
+        const bool spawnDup = doc.DuplicateSelected() && doc.FindSpawn(3003) != nullptr &&
+                              doc.Data().monsterSpawns.size() == 4;
         doc.SetSelection(WorldDocument::ObjectType::Portal, 8001);
         const bool portalDup =
             doc.DuplicateSelected() && doc.FindPortal(8005) != nullptr;
@@ -126,7 +127,7 @@ void RunMapEditorDataLogicChecks() {
         WorldDocument reloaded;
         const bool roundtrip =
             reloaded.Load(dir.string(), error) && reloaded.Data().maps.size() == 3 &&
-            reloaded.Data().monsterSpawns.size() == 2 &&
+            reloaded.Data().monsterSpawns.size() == 3 &&
             reloaded.Data().monsterSpawns[0].centerX < 2000.0f;
         Check("MapEditorData: reload roundtrip keeps data", roundtrip);
 

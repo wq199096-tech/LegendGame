@@ -9,6 +9,11 @@
       "name": "Greenfield Village",
       "respawnX": 300.0,
       "respawnY": 300.0,
+      "safeZone": {
+        "radius": 500.0,
+        "x": 450.0,
+        "y": 300.0
+      },
       "spawnX": 300.0,
       "spawnY": 300.0,
       "type": "Town",

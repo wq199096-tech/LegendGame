@@ -162,4 +162,99 @@ void RunClientSmokeChecks() {
     std::printf("[ClientSmoke] checks complete (failures so far = %d)\n", g_failures);
 }
 
+namespace {
+
+// 阶段25 指令六十九：Vertical Slice Client Smoke —— LEGEND_CLIENT_AUTO_ENTER=1 +
+// LEGEND_CLIENT_VS_SMOKE=1：自动登录→建角/选角→进世界，30s 存活干净退出，
+// 日志必须包含 [VsSmoke] entered-world + pass 标记（三服务器需在 CI Runtime gate 启动）。
+void RunVerticalSliceSmokeChecks() {
+    char testExePath[MAX_PATH] = {0};
+    GetModuleFileNameA(nullptr, testExePath, MAX_PATH);
+    const fs::path clientExe = fs::path(testExePath).parent_path() / "LegendClient.exe";
+    std::error_code ec;
+    if (!fs::exists(clientExe, ec)) {
+        Check("VsSmoke: LegendClient.exe present", false);
+        return;
+    }
+    const std::string sourceDir = LEGEND_SOURCE_DIR;
+    const fs::path logPath = fs::path(sourceDir) / "Logs" / "latest.log";
+    std::error_code removeEc;
+    fs::remove(logPath, removeEc);
+
+    SetEnvironmentVariableA("LEGEND_CLIENT_AUTO_ENTER", "1");
+    SetEnvironmentVariableA("LEGEND_CLIENT_VS_SMOKE", "1");
+    SetEnvironmentVariableA("GALLIUM_DRIVER", "llvmpipe");
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::string cmd = "\"" + clientExe.string() + "\"";
+    const BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr,
+                                   sourceDir.c_str(), &si, &pi);
+    Check("VsSmoke: client process started", ok);
+    if (!ok) {
+        SetEnvironmentVariableA("LEGEND_CLIENT_AUTO_ENTER", nullptr);
+        SetEnvironmentVariableA("LEGEND_CLIENT_VS_SMOKE", nullptr);
+        return;
+    }
+    const DWORD kWaitBudgetMs = 180000;
+    const DWORD kPollIntervalMs = 10000;
+    DWORD waitedMs = 0;
+    DWORD waitResult = WAIT_TIMEOUT;
+    while (true) {
+        waitResult = WaitForSingleObject(pi.hProcess, kPollIntervalMs);
+        waitedMs += kPollIntervalMs;
+        if (waitResult == WAIT_OBJECT_0) {
+            break;
+        }
+        const std::string currentLog = ReadFileText(logPath);
+        std::printf("[Diag] VsSmoke heartbeat %lums alive logBytes=%zu world=%d\n",
+                    static_cast<unsigned long>(waitedMs), currentLog.size(),
+                    Contains(currentLog, "[VsSmoke] entered-world") ? 1 : 0);
+        if (waitedMs >= kWaitBudgetMs) {
+            break;
+        }
+    }
+    DWORD exitCode = 0xFFFFFFFF;
+    if (waitResult == WAIT_OBJECT_0) {
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    } else {
+        TerminateProcess(pi.hProcess, 1);
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    SetEnvironmentVariableA("LEGEND_CLIENT_AUTO_ENTER", nullptr);
+    SetEnvironmentVariableA("LEGEND_CLIENT_VS_SMOKE", nullptr);
+
+    const std::string log = ReadFileText(logPath);
+    {
+        const std::string worldMarker =
+            Contains(log, "[VsSmoke] entered-world") ? "1" : "0";
+        const std::string passMarker = Contains(log, "[VsSmoke] pass") ? "1" : "0";
+        const std::string diag = " wait=" + std::to_string(waitedMs) + "ms exit=" +
+                                 std::to_string(exitCode) + " world=" + worldMarker +
+                                 " pass=" + passMarker;
+        std::string cleanError;
+        if (waitResult != WAIT_OBJECT_0) {
+            cleanError = " process-still-running-after-budget";
+        } else if (exitCode != 0) {
+            cleanError = " exit-code-nonzero";
+        }
+        Check(("VsSmoke: client exited cleanly (exit 0 within 180s)" + diag + cleanError).c_str(),
+              waitResult == WAIT_OBJECT_0 && exitCode == 0);
+    }
+    Check("VsSmoke: entered-world marker (auto login -> world ready)",
+          Contains(log, "[VsSmoke] entered-world"));
+    Check("VsSmoke: pass marker (30s alive, clean quit)", Contains(log, "[VsSmoke] pass"));
+}
+
+} // namespace
+
+// 由 WorldChecks.cpp 调用（阶段25）。
+void RunVerticalSliceSmokeChecksEntry() {
+    std::printf("[VsSmoke] checks begin\n");
+    RunVerticalSliceSmokeChecks();
+    std::printf("[VsSmoke] checks complete (failures so far = %d)\n", g_failures);
+}
+
 } // namespace worldtest

@@ -31,7 +31,8 @@ void MonsterDefinitionRegistry::LoadFromDefinitions(std::vector<MonsterDefinitio
 }
 
 void MonsterDefinitionRegistry::LoadDefaults() {
-    LoadFromDefinitions({kTrainingSlimeDefinition});
+    // 阶段25 指令十：默认数据与 MakeDefaultGameData 保持一致（Training Slime + Boss）。
+    LoadFromDefinitions({kTrainingSlimeDefinition, kAncientGuardianDefinition});
 }
 
 } // namespace legend::world

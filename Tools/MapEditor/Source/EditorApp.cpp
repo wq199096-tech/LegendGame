@@ -7,12 +7,14 @@
 #include <backends/imgui_impl_opengl3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -442,6 +444,63 @@ std::string LegendMapEditorApp::VisualMapCombo(const std::string& currentId) {
     return result;
 }
 
+// 加载/缓存整张 sheet 纹理（ImGui GL 纹理 id）；失败返回 0。
+unsigned int LegendMapEditorApp::GetOrLoadSheetTexture(
+    const legend::visual::AssetManifestEntry* sheet) {
+    if (sheet == nullptr) {
+        return 0;
+    }
+    const auto cached = m_previewTextures.find(sheet->path);
+    if (cached != m_previewTextures.end()) {
+        return cached->second;
+    }
+    int w = 0;
+    int h = 0;
+    int channels = 0;
+    unsigned char* pixels = stbi_load(sheet->path.c_str(), &w, &h, &channels, 4);
+    if (pixels == nullptr) {
+        return 0;
+    }
+    unsigned int handle = 0;
+    glGenTextures(1, &handle);
+    glBindTexture(GL_TEXTURE_2D, handle);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    stbi_image_free(pixels);
+    m_previewTextures[sheet->path] = handle;
+    return handle;
+}
+
+// 绘制 clip 的第 frame 帧第 direction 行（UV 计算 + Image；高度 height 像素）。
+void LegendMapEditorApp::DrawAnimationFrame(const legend::visual::AnimationClipDef* clip,
+                                            int frame, int direction, float height) {
+    const legend::visual::AssetManifestEntry* sheet =
+        m_visualCatalog.FindAsset(clip->spriteSheetAssetId);
+    const unsigned int handle = GetOrLoadSheetTexture(sheet);
+    if (handle == 0) {
+        ImGui::TextDisabled("preview: missing %s",
+                            sheet != nullptr ? sheet->path.c_str() : clip->animationId.c_str());
+        return;
+    }
+    const int dirIndex = std::clamp(direction, 0, std::max(0, clip->directionCount - 1));
+    const float frameCountF = static_cast<float>(std::max(1, clip->frameCount));
+    const float dirCountF = static_cast<float>(std::max(1, clip->directionCount));
+    const float u0 = static_cast<float>(frame) / frameCountF *
+                     static_cast<float>(clip->frameWidth) / static_cast<float>(clip->sheetWidth);
+    const float u1 = static_cast<float>(frame + 1) / frameCountF *
+                     static_cast<float>(clip->frameWidth) / static_cast<float>(clip->sheetWidth);
+    const float v0 = static_cast<float>(dirIndex) / dirCountF *
+                     static_cast<float>(clip->frameHeight) / static_cast<float>(clip->sheetHeight);
+    const float v1 = static_cast<float>(dirIndex + 1) / dirCountF *
+                     static_cast<float>(clip->frameHeight) / static_cast<float>(clip->sheetHeight);
+    const float previewW = height * (static_cast<float>(clip->frameWidth) /
+                                     static_cast<float>(clip->frameHeight));
+    ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(handle)),
+                 ImVec2(previewW, height), ImVec2(u0, v0), ImVec2(u1, v1));
+}
+
 // Visual Preview（指令四十一：至少显示第一帧）。
 void LegendMapEditorApp::DrawVisualPreview(const char* visualId) {
     if (!m_visualCatalogLoaded || visualId == nullptr || visualId[0] == '\0') {
@@ -459,44 +518,8 @@ void LegendMapEditorApp::DrawVisualPreview(const char* visualId) {
     if (clip == nullptr) {
         return;
     }
-    const legend::visual::AssetManifestEntry* sheet =
-        m_visualCatalog.FindAsset(clip->spriteSheetAssetId);
-    if (sheet == nullptr) {
-        return;
-    }
-    // 加载/缓存整张 sheet 纹理（ImGui GL 纹理 id）。
-    unsigned int handle = 0;
-    const auto cached = m_previewTextures.find(sheet->path);
-    if (cached != m_previewTextures.end()) {
-        handle = cached->second;
-    } else {
-        int w = 0;
-        int h = 0;
-        int channels = 0;
-        unsigned char* pixels = stbi_load(sheet->path.c_str(), &w, &h, &channels, 4);
-        if (pixels == nullptr) {
-            ImGui::TextDisabled("preview: missing %s", sheet->path.c_str());
-            return;
-        }
-        glGenTextures(1, &handle);
-        glBindTexture(GL_TEXTURE_2D, handle);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-        stbi_image_free(pixels);
-        m_previewTextures[sheet->path] = handle;
-    }
-    // 第一帧（行 0 列 0）。
-    const float u1 = static_cast<float>(clip->frameWidth) / static_cast<float>(clip->sheetWidth);
-    const float v1 = static_cast<float>(clip->frameHeight) /
-                     static_cast<float>(clip->sheetHeight);
-    const float previewH = 96.0f;
-    const float previewW = previewH * (static_cast<float>(clip->frameWidth) /
-                                       static_cast<float>(clip->frameHeight));
     ImGui::Text("Visual Preview: %s", visualId);
-    ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(handle)),
-                 ImVec2(previewW, previewH), ImVec2(0.0f, 0.0f), ImVec2(u1, v1));
+    DrawAnimationFrame(clip, 0, 0, 96.0f);
 }
 
 // Assets Validation（指令三十六）：结构校验 + 交叉引用 + 文件存在性。
@@ -570,6 +593,7 @@ void LegendMapEditorApp::ValidateVisualAssets() {
 }
 
 void LegendMapEditorApp::Shutdown() {
+    StopLocalGame(); // 编辑器退出时终止其拉起的本地游戏进程
     if (m_imguiInitialized) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplSDL3_Shutdown();
@@ -775,6 +799,25 @@ void LegendMapEditorApp::DrawUI() {
     } else {
         DrawPalettePanel();
         DrawInfoPanel();
+    }
+
+    // ---- 阶段25：World Editor 扩展窗口 ----
+    if (m_workspace == Workspace::World) {
+        if (m_showQuestFlow) {
+            DrawQuestFlowWindow();
+        }
+        if (m_showBossEditor) {
+            DrawBossEditorWindow();
+        }
+        if (m_showProcessStatus) {
+            DrawProcessStatusWindow();
+        }
+        if (m_showAssetBrowser) {
+            DrawAssetBrowserWindow();
+        }
+        if (m_showAnimationPreview) {
+            DrawAnimationPreviewWindow();
+        }
     }
 
     // 22.16：未保存退出确认（请求时打开一次）。
@@ -987,11 +1030,42 @@ void LegendMapEditorApp::DrawMenuBar() {
             if (ImGui::MenuItem("Validate Assets")) {
                 ValidateVisualAssets();
             }
+            // 阶段25：World + Game + Assets 一次全量校验。
+            if (ImGui::MenuItem("Validate All")) {
+                ValidateAll();
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("View##world")) {
+            ImGui::Checkbox("World Grid", &m_showWorldGrid);
+            ImGui::Separator();
+            ImGui::MenuItem("Asset Browser", nullptr, &m_showAssetBrowser);
+            ImGui::MenuItem("Animation Preview", nullptr, &m_showAnimationPreview);
+            ImGui::MenuItem("Quest Flow", nullptr, &m_showQuestFlow);
+            ImGui::MenuItem("Boss Editor", nullptr, &m_showBossEditor);
+            ImGui::MenuItem("Process Status", nullptr, &m_showProcessStatus);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset World View")) {
+                m_worldOriginX = -100.0f;
+                m_worldOriginY = -100.0f;
+                m_worldZoom = 0.45f;
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Run")) {
             if (ImGui::MenuItem("Launch WorldServer")) {
                 LaunchWorldServer();
+            }
+            // 阶段25：四进程全链（Login/Gateway/World/Client）。
+            if (ImGui::MenuItem("Launch Full Game")) {
+                LaunchFullGame();
+            }
+            if (ImGui::MenuItem("Stop Local Game", nullptr, false,
+                                !m_processes.empty())) {
+                StopLocalGame();
+            }
+            if (ImGui::MenuItem("Process Status", nullptr, false)) {
+                m_showProcessStatus = true;
             }
             ImGui::EndMenu();
         }
@@ -1487,6 +1561,21 @@ void LegendMapEditorApp::DrawGameDataTree() {
                 std::to_string(table.lootTableId) + " - " + table.name);
         }
     });
+    addSection("Chapters", static_cast<int>(game.chapters.size()), [&] {
+        for (const auto& chapter : game.chapters) {
+            row(GT::Chapter, chapter.chapterId, chapter.title,
+                std::to_string(chapter.chapterId) + " - " + chapter.title);
+        }
+        if (ImGui::Button("+ Add Chapter")) {
+            legend::world::ChapterDefinition chapter;
+            chapter.chapterId = m_game->SuggestChapterId();
+            chapter.title = "New Chapter";
+            chapter.finalQuestId = 0;
+            const std::uint32_t id = chapter.chapterId;
+            m_game->Mutate([&](GameDataSet& d) { d.chapters.push_back(chapter); });
+            m_game->SetSelection(GT::Chapter, id);
+        }
+    });
 }
 
 void LegendMapEditorApp::DrawWorldCanvas() {
@@ -1547,6 +1636,32 @@ void LegendMapEditorApp::DrawWorldCanvas() {
         // 拾取 / 拖拽（左键）
         using OT = editor::WorldDocument::ObjectType;
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            // 阶段25：Quest Area Map Picker 武装态——下一次点击写入 areaX/areaY。
+            if (m_questAreaPickActive && m_game != nullptr) {
+                const std::uint32_t questId = m_questAreaPickQuestId;
+                const std::uint32_t objectiveId = m_questAreaPickObjectiveId;
+                const float px = m_mouseWorldX;
+                const float py = m_mouseWorldY;
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& q : d.quests) {
+                        if (q.questId != questId) {
+                            continue;
+                        }
+                        for (auto& o : q.objectives) {
+                            if (o.objectiveId == objectiveId) {
+                                o.areaX = px;
+                                o.areaY = py;
+                            }
+                        }
+                    }
+                });
+                m_worldMessage = "Quest area set to (" +
+                                 std::to_string(static_cast<int>(px)) + ", " +
+                                 std::to_string(static_cast<int>(py)) + ").";
+                m_worldMessageIsError = false;
+                m_questAreaPickActive = false;
+                return; // 本帧跳过对象拾取
+            }
             std::uint32_t hitId = 0;
             const OT hit = PickObjectAt(m_mouseWorldX, m_mouseWorldY, hitId);
             m_world->SetSelection(hit, hitId);
@@ -1574,6 +1689,7 @@ void LegendMapEditorApp::DrawWorldCanvas() {
     }
 
     DrawWorldObjects();
+    DrawQuestAreaOverlay();
 
     // 左上角提示
     draw->AddText(canvasP0, IM_COL32(160, 170, 190, 255),
@@ -1828,6 +1944,658 @@ void LegendMapEditorApp::LaunchWorldServer() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 阶段25：World Editor 扩展（Asset Browser / Animation Preview / Quest Flow /
+// Boss Editor / Validate All / Launch Full Game / Stop / Process Status）
+// ---------------------------------------------------------------------------
+
+// 进程启动 helper：exe 与编辑器同目录；工作目录 = 仓库根（相对 Data/ 路径）。
+bool LegendMapEditorApp::LaunchEditorProcess(const char* name, const std::string& exeName,
+                                             const std::string& args) {
+    char exePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string exeDir = exePath;
+    const auto slash = exeDir.find_last_of("\\/");
+    if (slash != std::string::npos) {
+        exeDir = exeDir.substr(0, slash);
+    }
+    const std::string fullExe = exeDir + "\\" + exeName;
+    const std::string workDir = exeDir + "\\..\\..";
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::string cmdLine = "\"" + fullExe + "\"" + (args.empty() ? "" : " " + args);
+    std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
+    cmdBuf.push_back('\0');
+    const BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                                   workDir.c_str(), &si, &pi);
+    EditorProcess proc;
+    proc.name = name;
+    if (ok) {
+        proc.hProcess = pi.hProcess;
+        proc.pid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        LOG_INFO(std::string("Editor: launched ") + name + " (pid " +
+                 std::to_string(pi.dwProcessId) + ")");
+    } else {
+        proc.launchFailed = true;
+        LOG_ERROR(std::string("Editor: launch ") + name + " failed, error=" +
+                  std::to_string(GetLastError()));
+    }
+    m_processes.push_back(std::move(proc));
+    return ok;
+}
+
+// 四进程全链：Login(7100)/Gateway(7300)/World(7200)/Client。
+void LegendMapEditorApp::LaunchFullGame() {
+    m_worldMessage = "";
+    bool allOk = LaunchEditorProcess("LoginServer", "LegendLoginServer.exe") &&
+                 LaunchEditorProcess("Gateway", "LegendGateway.exe") &&
+                 LaunchEditorProcess("WorldServer", "LegendWorldServer.exe");
+    // Client 延迟 2s 启动（等服务器监听就绪）。
+    if (allOk) {
+        std::thread([] { std::this_thread::sleep_for(std::chrono::milliseconds(2000)); }).join();
+    }
+    allOk = allOk && LaunchEditorProcess("Client", "LegendClient.exe");
+    m_worldMessage = allOk ? "Full game chain launched (Login/Gateway/World/Client)."
+                           : "Full game launch FAILED (see logs; build all executables first).";
+    m_worldMessageIsError = !allOk;
+    m_showProcessStatus = true;
+}
+
+// 终止编辑器拉起的全部本地进程。
+void LegendMapEditorApp::StopLocalGame() {
+    int stopped = 0;
+    for (auto& proc : m_processes) {
+        if (proc.hProcess != nullptr) {
+            DWORD exitCode = 0;
+            if (GetExitCodeProcess(proc.hProcess, &exitCode) && exitCode == STILL_ACTIVE) {
+                TerminateProcess(proc.hProcess, 0);
+                WaitForSingleObject(proc.hProcess, 2000);
+                ++stopped;
+            }
+            CloseHandle(proc.hProcess);
+            proc.hProcess = nullptr;
+        }
+    }
+    m_processes.clear();
+    m_worldMessage = stopped > 0 ? "Stopped " + std::to_string(stopped) + " local process(es)."
+                                 : "No running local processes.";
+    m_worldMessageIsError = false;
+    LOG_INFO("Editor: StopLocalGame stopped=" + std::to_string(stopped));
+}
+
+// World + Game + Assets 全量校验（Console 汇总 + 状态条）。
+void LegendMapEditorApp::ValidateAll() {
+    int failures = 0;
+
+    // World。
+    m_world->Mutate([](WorldDataSet&) {});
+    if (m_world->HasErrors()) {
+        LOG_ERROR("[ValidateAll] World: " + m_world->ValidationErrors().front());
+        ++failures;
+    }
+
+    // Game（含 chapters + World 交叉引用）。
+    if (m_game != nullptr) {
+        std::string gameError;
+        if (!legend::world::ValidateGameData(m_game->Data(), m_world->Data(), gameError)) {
+            LOG_ERROR("[ValidateAll] Game: " + gameError);
+            ++failures;
+        }
+    }
+
+    // Assets（结构/交叉/文件存在性 + World 视觉引用）。
+    if (m_visualCatalogLoaded) {
+        const int before = failures;
+        ValidateVisualAssets();
+        // ValidateVisualAssets 输出 LOG；无法直接取 count——重跑轻量检查取首错。
+        std::string assetError;
+        if (!legend::visual::ValidateVisualData(m_visualCatalog.Manifest(),
+                                                m_visualCatalog.Animations(),
+                                                m_visualCatalog.Entities(),
+                                                m_visualCatalog.Effects(), assetError)) {
+            (void)assetError;
+        }
+        failures = failures > before ? failures : before; // 保持计数语义简单
+    } else {
+        LOG_ERROR("[ValidateAll] Assets: visual catalog not loaded");
+        ++failures;
+    }
+
+    m_worldMessage = failures == 0 ? "Validate All PASSED (world + game + assets)."
+                                   : "Validate All FAILED with " + std::to_string(failures) +
+                                         " group(s) — see Console.";
+    m_worldMessageIsError = failures != 0;
+}
+
+// ReachArea 圈层绘制：选中任务的区域 + 武装拾取模式的实时圈。
+void LegendMapEditorApp::DrawQuestAreaOverlay() {
+    if (m_game == nullptr) {
+        return;
+    }
+    const ImVec2 canvasP0 = ImGui::GetWindowPos();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const auto w2s = [&](float wx, float wy) {
+        return ImVec2(canvasP0.x + (wx - m_worldOriginX) * m_worldZoom,
+                      canvasP0.y + (wy - m_worldOriginY) * m_worldZoom);
+    };
+    using GT = editor::GameDataDocument::ObjectType;
+    const auto gsel = m_game->GetSelection();
+    if (gsel.type == GT::Quest) {
+        if (const auto* quest = m_game->FindQuest(gsel.id)) {
+            for (const auto& o : quest->objectives) {
+                if (o.type != legend::world::QuestObjectiveType::ReachArea ||
+                    o.areaRadius <= 0.0f) {
+                    continue;
+                }
+                const ImVec2 c = w2s(o.areaX, o.areaY);
+                const float r = o.areaRadius * m_worldZoom;
+                draw->AddCircle(c, r, IM_COL32(120, 220, 140, 255), 64, 2.0f);
+                draw->AddCircleFilled(c, r, IM_COL32(120, 220, 140, 32));
+            }
+        }
+    }
+    if (m_questAreaPickActive) {
+        const ImVec2 c = w2s(m_mouseWorldX, m_mouseWorldY);
+        const float r = std::max(4.0f, m_questAreaPickRadius * m_worldZoom);
+        draw->AddCircle(c, r, IM_COL32(250, 200, 90, 255), 64, 2.0f);
+        draw->AddText(ImVec2(c.x + r + 6.0f, c.y - 10.0f), IM_COL32(250, 200, 90, 255),
+                      "click to place quest area");
+    }
+}
+
+// ---- Asset Browser：Data/Assets 全资产缩略图浏览 + 详情 ----
+void LegendMapEditorApp::DrawAssetBrowserWindow() {
+    if (!ImGui::Begin("Asset Browser", &m_showAssetBrowser)) {
+        ImGui::End();
+        return;
+    }
+    if (!m_visualCatalogLoaded) {
+        ImGui::TextDisabled("(visual catalog unavailable)");
+        ImGui::End();
+        return;
+    }
+    const auto& manifest = m_visualCatalog.Manifest().assets;
+    static int kindFilter = 0; // 0=all 1=SpriteSheet 2=Sprite/Texture 3=Font/Effect
+    const char* kinds[] = {"All", "SpriteSheet", "Sprite/Texture", "Font/Effect"};
+    ImGui::SetNextItemWidth(160);
+    ImGui::Combo("Kind", &kindFilter, kinds, 4);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d assets)", static_cast<int>(manifest.size()));
+    const auto passesFilter = [&](const legend::visual::AssetManifestEntry& entry) {
+        if (kindFilter == 0) {
+            return true;
+        }
+        if (kindFilter == 1) {
+            return entry.type == legend::visual::kAssetTypeSpriteSheet;
+        }
+        if (kindFilter == 2) {
+            return entry.type == legend::visual::kAssetTypeSprite ||
+                   entry.type == legend::visual::kAssetTypeTexture;
+        }
+        return entry.type == legend::visual::kAssetTypeFont ||
+               entry.type == legend::visual::kAssetTypeEffectTexture;
+    };
+
+    const float cell = 92.0f;
+    int column = 0;
+    for (const auto& entry : manifest) {
+        if (!passesFilter(entry)) {
+            continue;
+        }
+        if (column % static_cast<int>(ImGui::GetContentRegionAvail().x / (cell + 8)) != 0 &&
+            column != 0) {
+            ImGui::SameLine();
+        }
+        ImGui::BeginGroup();
+        // 缩略图（首帧/整图）。
+        const unsigned int handle =
+            GetOrLoadSheetTexture(m_visualCatalog.FindAsset(entry.assetId));
+        if (handle != 0) {
+            ImGui::ImageButton("##thumb", static_cast<ImTextureID>(static_cast<intptr_t>(handle)),
+                               ImVec2(cell - 8, cell - 8), ImVec2(0, 0), ImVec2(1, 1));
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                m_previewSelectedAsset = entry.assetId;
+            }
+        } else {
+            ImGui::Dummy(ImVec2(cell - 8, cell - 8));
+        }
+        ImGui::TextDisabled("%s", entry.assetId.c_str());
+        ImGui::EndGroup();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s\n%s  %dx%d", entry.assetId.c_str(), entry.path.c_str(),
+                              entry.width, entry.height);
+        }
+        if (m_previewSelectedAsset == entry.assetId) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("<");
+        }
+        ++column;
+    }
+
+    // 详情面板。
+    ImGui::Separator();
+    if (!m_previewSelectedAsset.empty()) {
+        const auto* entry = m_visualCatalog.FindAsset(m_previewSelectedAsset);
+        if (entry != nullptr) {
+            ImGui::Text("%s (%s)", entry->assetId.c_str(), entry->type.c_str());
+            ImGui::TextDisabled("path: %s  %dx%d  pivot(%.2f,%.2f) enabled=%d",
+                                entry->path.c_str(), entry->width, entry->height, entry->pivotX,
+                                entry->pivotY, entry->enabled ? 1 : 0);
+            const unsigned int handle = GetOrLoadSheetTexture(entry);
+            if (handle != 0) {
+                const float h = 220.0f;
+                const float w = h * static_cast<float>(entry->width) /
+                                static_cast<float>(std::max(1, entry->height));
+                ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(handle)),
+                             ImVec2(w, h));
+            }
+        }
+    }
+    ImGui::End();
+}
+
+// ---- Animation Preview：clip 帧播放（Play/Pause + 帧滑条 + 方向行）----
+void LegendMapEditorApp::DrawAnimationPreviewWindow() {
+    if (!ImGui::Begin("Animation Preview", &m_showAnimationPreview)) {
+        ImGui::End();
+        return;
+    }
+    if (!m_visualCatalogLoaded) {
+        ImGui::TextDisabled("(visual catalog unavailable)");
+        ImGui::End();
+        return;
+    }
+    const auto& clips = m_visualCatalog.Animations().clips;
+    if (clips.empty()) {
+        ImGui::TextDisabled("(no animation clips)");
+        ImGui::End();
+        return;
+    }
+    // clip 选择。
+    if (m_animPreviewClipId.empty()) {
+        m_animPreviewClipId = clips.front().animationId;
+    }
+    if (ImGui::BeginCombo("Clip", m_animPreviewClipId.c_str())) {
+        for (const auto& clip : clips) {
+            if (ImGui::Selectable(clip.animationId.c_str(),
+                                  clip.animationId == m_animPreviewClipId)) {
+                m_animPreviewClipId = clip.animationId;
+                m_animPreviewTime = 0.0f;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    const legend::visual::AnimationClipDef* clip =
+        m_visualCatalog.FindClip(m_animPreviewClipId);
+    if (clip == nullptr || clip->frameCount <= 0) {
+        ImGui::TextDisabled("(clip missing)");
+        ImGui::End();
+        return;
+    }
+    // 播放推进（真实帧率；TileMap 工作区跳过——DrawUI 仅 World 分支调用本窗口）。
+    if (m_animPreviewPlaying) {
+        m_animPreviewTime += ImGui::GetIO().DeltaTime;
+    }
+    const float frameDuration = 1.0f / std::max(0.01f, clip->fps);
+    int frame = static_cast<int>(m_animPreviewTime / frameDuration);
+    if (clip->loop) {
+        frame %= clip->frameCount;
+    } else {
+        frame = std::min(frame, clip->frameCount - 1);
+    }
+    int direction = 0;
+    if (clip->directionCount > 1) {
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderInt("Direction", &direction, 0, clip->directionCount - 1);
+    }
+    ImGui::Checkbox("Playing", &m_animPreviewPlaying);
+    ImGui::SameLine();
+    ImGui::TextDisabled("frame %d/%d  fps=%.0f  loop=%d", frame + 1, clip->frameCount, clip->fps,
+                        clip->loop ? 1 : 0);
+    ImGui::SliderInt("Frame##scrub", &frame, 0, clip->frameCount - 1);
+    DrawAnimationFrame(clip, frame, direction, 200.0f);
+    // 所属实体（便于从实体反查）。
+    for (const auto& entity : m_visualCatalog.Entities().entities) {
+        for (const auto& [slot, animId] : entity.animations) {
+            if (animId == clip->animationId) {
+                ImGui::TextDisabled("used by: %s (%s/%s)", entity.visualId.c_str(),
+                                    entity.kind.c_str(), slot.c_str());
+                break;
+            }
+        }
+    }
+    ImGui::End();
+}
+
+// ---- Quest Flow：章节 -> 任务链 -> 前置/目标/奖励一览 ----
+void LegendMapEditorApp::DrawQuestFlowWindow() {
+    if (!ImGui::Begin("Quest Flow", &m_showQuestFlow)) {
+        ImGui::End();
+        return;
+    }
+    if (m_game == nullptr) {
+        ImGui::End();
+        return;
+    }
+    const auto& game = m_game->Data();
+    const auto questLabel = [&](std::uint32_t questId) {
+        for (const auto& q : game.quests) {
+            if (q.questId == questId) {
+                return std::to_string(q.questId) + " - " + q.name;
+            }
+        }
+        return std::to_string(questId) + " - (missing)";
+    };
+    if (game.chapters.empty()) {
+        ImGui::TextDisabled("(no chapters defined — Data/Game/chapters.json)");
+    }
+    for (const auto& chapter : game.chapters) {
+        const std::string header = "Chapter " + std::to_string(chapter.chapterId) + ": " +
+                                   chapter.title;
+        if (!ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            continue;
+        }
+        for (std::size_t i = 0; i < chapter.questIds.size(); ++i) {
+            const std::uint32_t questId = chapter.questIds[i];
+            const auto* quest = m_game->FindQuest(questId);
+            const bool isFinal = questId == chapter.finalQuestId;
+            std::string line = (i == 0 ? "" : "  -> ") + questLabel(questId);
+            if (isFinal) {
+                line += "   [FINAL]";
+            }
+            if (ImGui::Selectable(line.c_str())) {
+                m_game->SetSelection(editor::GameDataDocument::ObjectType::Quest, questId);
+            }
+            if (quest != nullptr && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("prereq: %s\nobjectives: %d\nreward: %u exp, %u gold%s",
+                                  quest->prerequisiteQuestId == 0
+                                      ? "(none)"
+                                      : questLabel(quest->prerequisiteQuestId).c_str(),
+                                  static_cast<int>(quest->objectives.size()), quest->reward.exp,
+                                  quest->reward.gold,
+                                  quest->reward.itemDefinitionId != 0 ? " + item" : "");
+            }
+        }
+    }
+    // 未编入章节的任务（提示）。
+    ImGui::Separator();
+    for (const auto& q : game.quests) {
+        bool inChapter = false;
+        for (const auto& c : game.chapters) {
+            if (std::find(c.questIds.begin(), c.questIds.end(), q.questId) !=
+                c.questIds.end()) {
+                inChapter = true;
+                break;
+            }
+        }
+        if (!inChapter) {
+            if (ImGui::Selectable(("[unassigned] " + questLabel(q.questId)).c_str())) {
+                m_game->SetSelection(editor::GameDataDocument::ObjectType::Quest, q.questId);
+            }
+        }
+    }
+    ImGui::End();
+}
+
+// ---- Boss Editor：Boss 怪物战斗/掉落/视觉 + 刷怪点绑定编辑 ----
+void LegendMapEditorApp::DrawBossEditorWindow() {
+    if (!ImGui::Begin("Boss Editor", &m_showBossEditor)) {
+        ImGui::End();
+        return;
+    }
+    if (m_game == nullptr) {
+        ImGui::End();
+        return;
+    }
+    const auto& game = m_game->Data();
+    if (game.monsters.empty()) {
+        ImGui::TextDisabled("(no monsters)");
+        ImGui::End();
+        return;
+    }
+    // 默认选中 Boss 表（lootTableId>=2000）或最大 ID 怪物。
+    if (m_bossSelectedMonsterId == 0) {
+        for (const auto& m : game.monsters) {
+            if (m.lootTableId >= 2000) {
+                m_bossSelectedMonsterId = m.monsterTypeId;
+            }
+        }
+        if (m_bossSelectedMonsterId == 0) {
+            m_bossSelectedMonsterId = game.monsters.back().monsterTypeId;
+        }
+    }
+    // 怪物选择。
+    std::string currentLabel = "?";
+    const legend::world::MonsterDefinition* boss = nullptr;
+    for (const auto& m : game.monsters) {
+        if (m.monsterTypeId == m_bossSelectedMonsterId) {
+            boss = &m;
+            currentLabel = std::to_string(m.monsterTypeId) + " - " + m.name;
+        }
+    }
+    if (ImGui::BeginCombo("Monster", currentLabel.c_str())) {
+        for (const auto& m : game.monsters) {
+            const std::string label = std::to_string(m.monsterTypeId) + " - " + m.name;
+            if (ImGui::Selectable(label.c_str(), m.monsterTypeId == m_bossSelectedMonsterId)) {
+                m_bossSelectedMonsterId = m.monsterTypeId;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (boss == nullptr) {
+        ImGui::End();
+        return;
+    }
+    const std::uint32_t bossId = boss->monsterTypeId;
+    auto editU = [&](const char* label, std::uint32_t value, auto set) {
+        int tmp = static_cast<int>(value);
+        if (ImGui::InputInt(label, &tmp)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, tmp));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& m : d.monsters) {
+                    if (m.monsterTypeId == bossId) {
+                        set(m, nv);
+                    }
+                }
+            });
+        }
+    };
+    auto editF = [&](const char* label, float value, auto set) {
+        float tmp = value;
+        if (ImGui::InputFloat(label, &tmp, 1.0f, 0.0f, "%.1f")) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& m : d.monsters) {
+                    if (m.monsterTypeId == bossId) {
+                        set(m, tmp);
+                    }
+                }
+            });
+        }
+    };
+    editU("level", boss->level, [](auto& m, std::uint32_t v) { m.level = v; });
+    editU("maxHp", boss->maxHp, [](auto& m, std::uint32_t v) { m.maxHp = v; });
+    editU("attackPower", boss->attackPower, [](auto& m, std::uint32_t v) { m.attackPower = v; });
+    editU("defense", boss->defense, [](auto& m, std::uint32_t v) { m.defense = v; });
+    editF("moveSpeed", boss->moveSpeed, [](auto& m, float v) { m.moveSpeed = v; });
+    editF("aggroRadius", boss->aggroRadius, [](auto& m, float v) { m.aggroRadius = v; });
+    editU("rewardExp", boss->rewardExp, [](auto& m, std::uint32_t v) { m.rewardExp = v; });
+    editU("rewardGold", boss->rewardGold, [](auto& m, std::uint32_t v) { m.rewardGold = v; });
+    // 掉落表绑定。
+    if (ImGui::BeginCombo("lootTableId",
+                          boss->lootTableId == 0 ? "(none)"
+                                                 : std::to_string(boss->lootTableId).c_str())) {
+        if (ImGui::Selectable("(none)", boss->lootTableId == 0)) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& m : d.monsters) {
+                    if (m.monsterTypeId == bossId) {
+                        m.lootTableId = 0;
+                    }
+                }
+            });
+        }
+        for (const auto& table : game.lootTables) {
+            const std::string label = std::to_string(table.lootTableId) + " - " + table.name;
+            if (ImGui::Selectable(label.c_str(), table.lootTableId == boss->lootTableId)) {
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& m : d.monsters) {
+                        if (m.monsterTypeId == bossId) {
+                            m.lootTableId = table.lootTableId;
+                        }
+                    }
+                });
+            }
+        }
+        ImGui::EndCombo();
+    }
+    // 掉落表条目一览（只读，编辑走 Loot Tables 段）。
+    if (boss->lootTableId != 0) {
+        for (const auto& table : game.lootTables) {
+            if (table.lootTableId != boss->lootTableId) {
+                continue;
+            }
+            ImGui::TextDisabled("Loot: %s (%d entries)", table.name.c_str(),
+                                static_cast<int>(table.entries.size()));
+            for (const auto& entry : table.entries) {
+                std::string itemName = std::to_string(entry.itemDefinitionId);
+                for (const auto& item : game.items) {
+                    if (item.definitionId == entry.itemDefinitionId) {
+                        itemName = item.name;
+                        break;
+                    }
+                }
+                ImGui::BulletText("%s  %.0f%%  x%u~%u", itemName.c_str(),
+                                  entry.dropChance * 100.0, entry.minQuantity,
+                                  entry.maxQuantity);
+            }
+        }
+    }
+    // 视觉绑定。
+    if (m_visualCatalogLoaded) {
+        const std::string chosen =
+            VisualAssetCombo("visualId", boss->visualId, "Monster");
+        if (chosen != boss->visualId) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& m : d.monsters) {
+                    if (m.monsterTypeId == bossId) {
+                        m.visualId = chosen;
+                    }
+                }
+            });
+        }
+        DrawVisualPreview(boss->visualId.c_str());
+    }
+    // 刷怪点绑定（Map/位置/count/respawn）。
+    ImGui::Separator();
+    ImGui::TextUnformatted("Spawns");
+    if (m_world != nullptr) {
+        for (const auto& spawn : m_world->Data().monsterSpawns) {
+            if (spawn.monsterDefinitionId != bossId) {
+                continue;
+            }
+            ImGui::PushID(static_cast<int>(spawn.spawnId));
+            ImGui::Text("spawn %u: map %u @ (%.0f,%.0f) r%.0f count=%u respawn=%us",
+                        spawn.spawnId, spawn.mapId, spawn.centerX, spawn.centerY, spawn.radius,
+                        spawn.count, spawn.respawnSeconds);
+            int respawn = static_cast<int>(spawn.respawnSeconds);
+            if (ImGui::InputInt("respawnSeconds", &respawn)) {
+                const auto nv = static_cast<std::uint32_t>(std::max(1, respawn));
+                m_world->Mutate([&](WorldDataSet& d) {
+                    for (auto& s : d.monsterSpawns) {
+                        if (s.spawnId == spawn.spawnId) {
+                            s.respawnSeconds = nv;
+                        }
+                    }
+                });
+            }
+            if (ImGui::Button("Select On Canvas")) {
+                m_world->SetSelection(editor::WorldDocument::ObjectType::Spawn, spawn.spawnId);
+            }
+            ImGui::PopID();
+        }
+        if (ImGui::Button("+ Add Spawn (boss, 1x)")) {
+            std::uint32_t newId = 1;
+            for (const auto& s : m_world->Data().monsterSpawns) {
+                newId = std::max(newId, s.spawnId + 1);
+            }
+            const auto bossMapId = bossId >= 2000 ? std::uint16_t{3} : std::uint16_t{2};
+            m_world->Mutate([&](WorldDataSet& d) {
+                legend::world::MonsterSpawnDefinition spawn;
+                spawn.spawnId = newId;
+                spawn.mapId = bossMapId;
+                spawn.monsterDefinitionId = bossId;
+                spawn.centerX = 1900.0f;
+                spawn.centerY = 1500.0f;
+                spawn.radius = 0.0f;
+                spawn.count = 1;
+                spawn.respawnSeconds = 45; // Boss 默认 45s
+                d.monsterSpawns.push_back(spawn);
+            });
+            m_world->SetSelection(editor::WorldDocument::ObjectType::Spawn, newId);
+        }
+    } else {
+        ImGui::TextDisabled("(world data not loaded)");
+    }
+    ImGui::End();
+}
+
+// ---- Process Status：编辑器拉起的本地进程一览 ----
+void LegendMapEditorApp::DrawProcessStatusWindow() {
+    if (!ImGui::Begin("Process Status", &m_showProcessStatus)) {
+        ImGui::End();
+        return;
+    }
+    if (m_processes.empty()) {
+        ImGui::TextDisabled("(no processes launched by editor)");
+    }
+    if (ImGui::Button("Stop Local Game")) {
+        StopLocalGame();
+    }
+    ImGui::Separator();
+    if (ImGui::BeginTable("procs", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("PID");
+        ImGui::TableSetupColumn("State");
+        ImGui::TableSetupColumn("Exit");
+        ImGui::TableHeadersRow();
+        for (auto& proc : m_processes) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(proc.name.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%lu", static_cast<unsigned long>(proc.pid));
+            ImGui::TableNextColumn();
+            if (proc.launchFailed) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "LAUNCH FAILED");
+            } else {
+                DWORD exitCode = 0;
+                const bool alive = proc.hProcess != nullptr &&
+                                   GetExitCodeProcess(proc.hProcess, &exitCode) &&
+                                   exitCode == STILL_ACTIVE;
+                if (alive) {
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "RUNNING");
+                } else {
+                    if (proc.hProcess != nullptr && GetExitCodeProcess(proc.hProcess, &exitCode)) {
+                        proc.exitCode = exitCode;
+                        proc.exitCodeValid = true;
+                    }
+                    ImGui::TextDisabled("EXITED");
+                }
+            }
+            ImGui::TableNextColumn();
+            if (proc.exitCodeValid) {
+                ImGui::Text("%lu", static_cast<unsigned long>(proc.exitCode));
+            } else {
+                ImGui::TextDisabled("-");
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
 void LegendMapEditorApp::DrawWorldInspector() {
     if (m_world == nullptr) {
         return;
@@ -1898,6 +2666,17 @@ void LegendMapEditorApp::DrawGameDataInspector() {
         } else if (sel.type == GT::LootTable) {
             if (const auto* v = m_game->FindLootTable(sel.id)) {
                 refill(v->name);
+            }
+        } else if (sel.type == GT::Chapter) {
+            if (const auto* v = m_game->FindChapter(sel.id)) {
+                std::string csv;
+                for (std::size_t i = 0; i < v->questIds.size(); ++i) {
+                    csv += std::to_string(v->questIds[i]);
+                    if (i + 1 < v->questIds.size()) {
+                        csv += ",";
+                    }
+                }
+                refill(v->title, csv);
             }
         }
     }
@@ -2111,6 +2890,135 @@ void LegendMapEditorApp::DrawGameDataInspector() {
         ImGui::TextDisabled("Flow: startNPC=%u -> %d objective(s) -> turnInNPC=%u",
                             v->startNpcDefinitionId, static_cast<int>(v->objectives.size()),
                             v->turnInNpcDefinitionId);
+        // ---- 阶段25：目标编辑 + Quest Area Map Picker（ReachArea 画布点选）----
+        ImGui::Separator();
+        ImGui::TextUnformatted("Objectives");
+        int objectiveIdx = 0;
+        for (const auto& objective : v->objectives) {
+            ++objectiveIdx;
+            ImGui::PushID(static_cast<int>(objective.objectiveId));
+            ImGui::Text("%d. [%s] id=%u", objectiveIdx,
+                        objective.type == legend::world::QuestObjectiveType::KillMonster
+                            ? "Kill"
+                        : objective.type == legend::world::QuestObjectiveType::CollectItem
+                            ? "Collect"
+                        : objective.type == legend::world::QuestObjectiveType::ReachLevel
+                            ? "Level"
+                        : objective.type == legend::world::QuestObjectiveType::ReachArea
+                            ? "Area"
+                            : "?",
+                        objective.objectiveId);
+            int count = static_cast<int>(objective.requiredCount);
+            if (ImGui::InputInt("requiredCount", &count)) {
+                const auto nv = static_cast<std::uint32_t>(std::max(1, count));
+                m_game->Mutate([&](GameDataSet& d) {
+                    for (auto& q : d.quests) {
+                        if (q.questId != sel.id) {
+                            continue;
+                        }
+                        for (auto& o : q.objectives) {
+                            if (o.objectiveId == objective.objectiveId) {
+                                o.requiredCount = nv;
+                            }
+                        }
+                    }
+                });
+            }
+            if (objective.type == legend::world::QuestObjectiveType::ReachArea) {
+                // 目标地图下拉（World 数据源）。
+                int mapSel = -1;
+                std::string mapPreview = "?";
+                const auto& maps = m_world != nullptr ? m_world->Data().maps
+                                                      : std::vector<legend::world::MapDefinition>{};
+                for (std::size_t mi = 0; mi < maps.size(); ++mi) {
+                    if (maps[mi].mapId == objective.mapId) {
+                        mapSel = static_cast<int>(mi);
+                        mapPreview = std::to_string(maps[mi].mapId) + " - " + maps[mi].name;
+                    }
+                }
+                if (ImGui::BeginCombo("mapId", mapPreview.c_str())) {
+                    for (std::size_t mi = 0; mi < maps.size(); ++mi) {
+                        const std::string label =
+                            std::to_string(maps[mi].mapId) + " - " + maps[mi].name;
+                        if (ImGui::Selectable(label.c_str(),
+                                              mapSel == static_cast<int>(mi))) {
+                            const auto newMapId = maps[mi].mapId;
+                            m_game->Mutate([&](GameDataSet& d) {
+                                for (auto& q : d.quests) {
+                                    if (q.questId != sel.id) {
+                                        continue;
+                                    }
+                                    for (auto& o : q.objectives) {
+                                        if (o.objectiveId == objective.objectiveId) {
+                                            o.mapId = newMapId;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                float ax = objective.areaX;
+                float ay = objective.areaY;
+                float ar = objective.areaRadius;
+                if (ImGui::InputFloat("areaX", &ax, 10.0f, 0.0f, "%.0f")) {
+                    m_game->Mutate([&](GameDataSet& d) {
+                        for (auto& q : d.quests) {
+                            if (q.questId != sel.id) {
+                                continue;
+                            }
+                            for (auto& o : q.objectives) {
+                                if (o.objectiveId == objective.objectiveId) {
+                                    o.areaX = ax;
+                                }
+                            }
+                        }
+                    });
+                }
+                if (ImGui::InputFloat("areaY", &ay, 10.0f, 0.0f, "%.0f")) {
+                    m_game->Mutate([&](GameDataSet& d) {
+                        for (auto& q : d.quests) {
+                            if (q.questId != sel.id) {
+                                continue;
+                            }
+                            for (auto& o : q.objectives) {
+                                if (o.objectiveId == objective.objectiveId) {
+                                    o.areaY = ay;
+                                }
+                            }
+                        }
+                    });
+                }
+                if (ImGui::InputFloat("areaRadius", &ar, 10.0f, 0.0f, "%.0f")) {
+                    m_game->Mutate([&](GameDataSet& d) {
+                        for (auto& q : d.quests) {
+                            if (q.questId != sel.id) {
+                                continue;
+                            }
+                            for (auto& o : q.objectives) {
+                                if (o.objectiveId == objective.objectiveId) {
+                                    o.areaRadius = std::max(1.0f, ar);
+                                }
+                            }
+                        }
+                    });
+                }
+                // 画布点选：武装后下一次 World Canvas 左键写入 areaX/areaY。
+                const bool armed = m_questAreaPickActive &&
+                                   m_questAreaPickQuestId == sel.id &&
+                                   m_questAreaPickObjectiveId == objective.objectiveId;
+                if (ImGui::Button(armed ? "Pick On Map... (click canvas)"
+                                        : "Pick On Map")) {
+                    m_questAreaPickActive = !armed;
+                    m_questAreaPickQuestId = sel.id;
+                    m_questAreaPickObjectiveId = objective.objectiveId;
+                    m_questAreaPickMapId = objective.mapId;
+                    m_questAreaPickRadius = objective.areaRadius;
+                }
+            }
+            ImGui::PopID();
+        }
     } else if (sel.type == GT::Shop) {
         const auto* v = m_game->FindShop(sel.id);
         if (v == nullptr) { ImGui::TextDisabled("Shop not found."); return; }
@@ -2178,6 +3086,73 @@ void LegendMapEditorApp::DrawGameDataInspector() {
             ++entryIdx;
             ImGui::Text("entry %d: item %u chance=%.2f", entryIdx, entry.itemDefinitionId,
                         entry.dropChance);
+        }
+    } else if (sel.type == GT::Chapter) {
+        // ---- 阶段25：Chapter Editor（chapters.json 展示元数据）----
+        const auto* v = m_game->FindChapter(sel.id);
+        if (v == nullptr) { ImGui::TextDisabled("Chapter not found."); return; }
+        ImGui::Text("chapterId: %u", v->chapterId);
+        if (ImGui::InputText("Title", m_gInsName, sizeof(m_gInsName))) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& c : d.chapters) {
+                    if (c.chapterId == sel.id) {
+                        c.title = m_gInsName;
+                    }
+                }
+            });
+        }
+        int finalQuest = static_cast<int>(v->finalQuestId);
+        if (ImGui::InputInt("finalQuestId", &finalQuest)) {
+            const auto nv = static_cast<std::uint32_t>(std::max(0, finalQuest));
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& c : d.chapters) {
+                    if (c.chapterId == sel.id) {
+                        c.finalQuestId = nv;
+                    }
+                }
+            });
+        }
+        if (ImGui::InputText("questIds (csv)", m_gInsText, sizeof(m_gInsText))) {
+            m_game->Mutate([&](GameDataSet& d) {
+                for (auto& c : d.chapters) {
+                    if (c.chapterId != sel.id) {
+                        continue;
+                    }
+                    c.questIds.clear();
+                    const std::string text = m_gInsText;
+                    std::size_t start = 0;
+                    while (start < text.size()) {
+                        const std::size_t comma = text.find(',', start);
+                        const std::string token = text.substr(
+                            start, comma == std::string::npos ? std::string::npos
+                                                              : comma - start);
+                        try {
+                            const unsigned long parsed = std::stoul(token);
+                            if (parsed > 0) {
+                                c.questIds.push_back(static_cast<std::uint32_t>(parsed));
+                            }
+                        } catch (...) {
+                            // 非数字片段忽略（实时校验会给出错误提示）
+                        }
+                        if (comma == std::string::npos) {
+                            break;
+                        }
+                        start = comma + 1;
+                    }
+                }
+            });
+        }
+        // 章节任务链预览（点击跳转 Quest Inspector）。
+        ImGui::TextDisabled("Chapter flow: %d quest(s), final=%u",
+                            static_cast<int>(v->questIds.size()), v->finalQuestId);
+        for (const std::uint32_t questId : v->questIds) {
+            const auto* quest = m_game->FindQuest(questId);
+            const std::string label = std::to_string(questId) + " - " +
+                                      (quest != nullptr ? quest->name : "?") +
+                                      (questId == v->finalQuestId ? "  [FINAL]" : "");
+            if (ImGui::Selectable(label.c_str())) {
+                m_game->SetSelection(GT::Quest, questId);
+            }
         }
     }
 

@@ -8,7 +8,8 @@
     "quests.json",
     "shops.json",
     "teleports.json",
-    "loot_tables.json"
+    "loot_tables.json",
+    "chapters.json"
   ],
   "schemaVersion": 1
 }

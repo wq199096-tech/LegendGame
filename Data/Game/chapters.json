@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "chapters": [
+    {
+      "chapterId": 1,
+      "title": "The Restless Slimes",
+      "finalQuestId": 4006,
+      "questIds": [4001, 4002, 4003, 4004, 4005, 4006]
+    }
+  ]
+}

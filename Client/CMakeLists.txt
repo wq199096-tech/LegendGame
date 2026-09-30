@@ -47,6 +47,24 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# LegendClientUi【阶段25】：正式 UI 数据模型层（UiTheme/UiModels/物品展示目录）。
+# 纯数据/逻辑层（不依赖 SDL/OpenGL）——LegendClient 与 LegendWorldTests（UiModel
+# 检查，指令六十七）共用。
+# ---------------------------------------------------------------------------
+add_library(LegendClientUi STATIC
+    Ui/UiTheme.cpp
+    Ui/UiModels.cpp
+    Ui/ItemDisplayCatalog.cpp
+    Ui/ChapterDisplayCatalog.cpp
+)
+target_include_directories(LegendClientUi PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendClientUi PUBLIC cxx_std_20)
+target_link_libraries(LegendClientUi PUBLIC nlohmann_json::nlohmann_json)
+if(MSVC)
+    target_compile_options(LegendClientUi PRIVATE /utf-8)
+endif()
+
+# ---------------------------------------------------------------------------
 # LegendClient：游戏客户端可执行程序
 # ---------------------------------------------------------------------------
 add_executable(LegendClient
@@ -55,6 +73,7 @@ add_executable(LegendClient
     Source/GameScene.cpp
     Network/ClientNetworkController.cpp
     Assets/AssetManager.cpp
+    Audio/AudioRuntime.cpp
     Visuals/Font.cpp
     Visuals/VisualRuntime.cpp
     Source/ProgressionChecks.cpp
@@ -82,7 +101,7 @@ add_executable(LegendClient
     World/WorldActorManager.cpp
 )
 
-target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport LegendClientAccount LegendVisualData)
+target_link_libraries(LegendClient PRIVATE legend_engine LegendNetworkTransport LegendClientAccount LegendVisualData LegendClientUi)
 
 if(MSVC)
     target_compile_options(LegendClient PRIVATE /utf-8)

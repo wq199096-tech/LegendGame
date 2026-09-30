@@ -2,66 +2,418 @@
   "schemaVersion": 1,
   "visualMaps": [
     {
-      "visualMapId": "vmap_greenfield",
       "backgroundAsset": "tile_grass_a",
-      "tileSize": 64.0,
       "layers": [
-        { "name": "Ground", "assetId": "", "placements": [] },
         {
-          "name": "Decoration",
           "assetId": "",
+          "name": "Ground",
+          "placements": []
+        },
+        {
+          "assetId": "",
+          "name": "Decoration",
           "placements": [
-            { "assetId": "prop_tree_oak", "x": 500.0, "y": 520.0 },
-            { "assetId": "prop_tree_oak", "x": 820.0, "y": 640.0 },
-            { "assetId": "prop_rock_gray", "x": 380.0, "y": 700.0 },
-            { "assetId": "prop_bush_green", "x": 700.0, "y": 420.0 },
-            { "assetId": "prop_bush_green", "x": 950.0, "y": 760.0 }
+            {
+              "assetId": "tile_stone_a",
+              "x": 300.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 368.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 436.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 504.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 572.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 640.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 708.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 776.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 844.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 912.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "tile_stone_a",
+              "x": 980.0,
+              "y": 300.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 450.0,
+              "y": 250.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 600.0,
+              "y": 350.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 750.0,
+              "y": 250.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 380.0,
+              "y": 380.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 240.0,
+              "y": 180.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 480.0,
+              "y": 150.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 760.0,
+              "y": 170.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 1060.0,
+              "y": 200.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 220.0,
+              "y": 560.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 520.0,
+              "y": 590.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 840.0,
+              "y": 620.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 1120.0,
+              "y": 560.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 340.0,
+              "y": 460.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 660.0,
+              "y": 430.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 920.0,
+              "y": 470.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 420.0,
+              "y": 660.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 980.0,
+              "y": 700.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1160.0,
+              "y": 380.0
+            }
           ]
         },
-        { "name": "Object", "assetId": "", "placements": [] },
-        { "name": "Foreground", "assetId": "", "placements": [] }
-      ]
+        {
+          "assetId": "",
+          "name": "Object",
+          "placements": []
+        },
+        {
+          "assetId": "",
+          "name": "Foreground",
+          "placements": []
+        }
+      ],
+      "tileSize": 64.0,
+      "visualMapId": "vmap_greenfield"
     },
     {
-      "visualMapId": "vmap_slime_meadow",
       "backgroundAsset": "tile_grass_b",
-      "tileSize": 64.0,
       "layers": [
-        { "name": "Ground", "assetId": "", "placements": [] },
         {
-          "name": "Decoration",
           "assetId": "",
+          "name": "Ground",
+          "placements": []
+        },
+        {
+          "assetId": "",
+          "name": "Decoration",
           "placements": [
-            { "assetId": "prop_bush_green", "x": 600.0, "y": 800.0 },
-            { "assetId": "prop_bush_green", "x": 1200.0, "y": 1100.0 },
-            { "assetId": "prop_rock_gray", "x": 900.0, "y": 1250.0 },
-            { "assetId": "prop_flower_patch", "x": 750.0, "y": 950.0 },
-            { "assetId": "prop_flower_patch", "x": 1050.0, "y": 700.0 }
+            {
+              "assetId": "prop_flower_patch",
+              "x": 200.0,
+              "y": 430.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 260.0,
+              "y": 560.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 140.0,
+              "y": 500.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 320.0,
+              "y": 620.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 560.0,
+              "y": 760.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 1240.0,
+              "y": 1120.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 1320.0,
+              "y": 820.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 760.0,
+              "y": 900.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 1050.0,
+              "y": 1000.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 900.0,
+              "y": 1250.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1100.0,
+              "y": 700.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 640.0,
+              "y": 1100.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 480.0,
+              "y": 380.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 1440.0,
+              "y": 560.0
+            },
+            {
+              "assetId": "prop_tree_oak",
+              "x": 1560.0,
+              "y": 1300.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1740.0,
+              "y": 940.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1860.0,
+              "y": 1060.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 260.0,
+              "y": 1420.0
+            },
+            {
+              "assetId": "prop_flower_patch",
+              "x": 360.0,
+              "y": 1560.0
+            },
+            {
+              "assetId": "prop_bush_green",
+              "x": 180.0,
+              "y": 1560.0
+            }
           ]
         },
-        { "name": "Object", "assetId": "", "placements": [] },
-        { "name": "Foreground", "assetId": "", "placements": [] }
-      ]
+        {
+          "assetId": "",
+          "name": "Object",
+          "placements": []
+        },
+        {
+          "assetId": "",
+          "name": "Foreground",
+          "placements": []
+        }
+      ],
+      "tileSize": 64.0,
+      "visualMapId": "vmap_slime_meadow"
     },
     {
-      "visualMapId": "vmap_ancient_ruins",
       "backgroundAsset": "tile_stone_a",
-      "tileSize": 64.0,
       "layers": [
-        { "name": "Ground", "assetId": "", "placements": [] },
         {
-          "name": "Decoration",
           "assetId": "",
+          "name": "Ground",
+          "placements": []
+        },
+        {
+          "assetId": "",
+          "name": "Decoration",
           "placements": [
-            { "assetId": "prop_ruin_pillar", "x": 500.0, "y": 600.0 },
-            { "assetId": "prop_ruin_pillar", "x": 1100.0, "y": 900.0 },
-            { "assetId": "prop_rock_gray", "x": 800.0, "y": 500.0 },
-            { "assetId": "prop_rock_gray", "x": 1300.0, "y": 1200.0 }
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 140.0,
+              "y": 240.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 260.0,
+              "y": 380.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 420.0,
+              "y": 520.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 580.0,
+              "y": 660.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 760.0,
+              "y": 800.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 500.0,
+              "y": 640.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 1100.0,
+              "y": 900.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 800.0,
+              "y": 500.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1300.0,
+              "y": 1200.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 960.0,
+              "y": 700.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1180.0,
+              "y": 1000.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 1720.0,
+              "y": 1320.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 2080.0,
+              "y": 1320.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 1720.0,
+              "y": 1680.0
+            },
+            {
+              "assetId": "prop_ruin_pillar",
+              "x": 2080.0,
+              "y": 1680.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1820.0,
+              "y": 1420.0
+            },
+            {
+              "assetId": "prop_rock_gray",
+              "x": 1980.0,
+              "y": 1580.0
+            }
           ]
         },
-        { "name": "Object", "assetId": "", "placements": [] },
-        { "name": "Foreground", "assetId": "", "placements": [] }
-      ]
+        {
+          "assetId": "",
+          "name": "Object",
+          "placements": []
+        },
+        {
+          "assetId": "",
+          "name": "Foreground",
+          "placements": []
+        }
+      ],
+      "tileSize": 64.0,
+      "visualMapId": "vmap_ancient_ruins"
     }
   ]
 }

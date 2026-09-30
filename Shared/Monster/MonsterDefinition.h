@@ -50,6 +50,16 @@ inline const MonsterDefinition kTrainingSlimeDefinition{
     1u, true, // lootTableId=1（阶段23 Loot Table V1：Training Slime 表）
 };
 
+// 阶段25 指令十：Ancient Slime Guardian（第一只 Boss）。
+// HP/攻击显著高于 Training Slime，但 Level 3~5 玩家可单人击杀；移动慢、体型大。
+// 复用 Idle/Chase/Attack/Return/Death AI 状态机（不做复杂 Boss AI）。
+inline const MonsterDefinition kAncientGuardianDefinition{
+    kAncientGuardianTypeId, kAncientGuardianName, 4, 45.0f, 320.0f, 700.0f, 120.0f, 48.0f, 1,
+    600u, 22u, 6u, 70.0f, 1.8f,
+    300u, 120u,
+    2001u, true, // lootTableId=2001（阶段25 指令十二：Boss 掉落表）
+};
+
 // 按 typeId 查找定义（阶段13 全局查找签名保留；阶段23 内部走 MonsterDefinitionRegistry）。
 const MonsterDefinition* FindMonsterDefinition(std::uint32_t monsterTypeId);
 

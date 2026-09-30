@@ -16,6 +16,11 @@
 // ---------------------------------------------------------------------------
 
 #include "Client/Assets/AssetManager.h"
+#include "Client/Audio/AudioRuntime.h"
+#include "Client/Ui/ChapterDisplayCatalog.h"
+#include "Client/Ui/ItemDisplayCatalog.h"
+#include "Client/Ui/UiModels.h"
+#include "Client/Ui/UiTheme.h"
 #include "Client/Visuals/AnimationPlayer.h"
 #include "Client/Visuals/Font.h"
 #include "Client/Visuals/VisualAssetData.h"
@@ -62,7 +67,7 @@ public:
     bool IsReady() const { return m_ready; }
 
     // ---- 事件钩子（GameScene 经 WorldClientController::SetVisualEventHook 转发）----
-    void OnWorldEvent(const WorldNetworkEvent& event);
+    void OnWorldEvent(const WorldNetworkEvent& event, const WorldClientController& world);
 
     // ---- 每帧更新（动画推进/特效/飘字/CD/本地平滑）----
     void Update(const WorldClientController& world, float deltaTime);
@@ -81,12 +86,55 @@ public:
     void RenderHUD(const WorldClientController& world, const std::string& playerName,
                    float viewportWidth, float viewportHeight, bool mapDebug);
 
+    // ---- 阶段25 指令五十三/五十四：World 连接期间 Loading 覆盖层（不黑屏，轻提示）----
+    void RenderLoading(float viewportWidth, float viewportHeight);
+
     // 本地玩家视觉位置（相机跟随；服务器位置 1-exp(-12dt) 平滑，>300 snap）。
     float LocalVisualX() const { return m_localVisualX; }
     float LocalVisualY() const { return m_localVisualY; }
 
     // F10：热重载（manifest/animation/effect 重新加载 + 纹理重载；失败保留旧资源）。
     void ReloadAssets();
+
+    // ---- 阶段25：正式 UI（指令十六~六十三）----
+    // 窗口开关（按键在 GameScene 处理，状态在这里）。
+    void ToggleInventory() { m_inventoryVisible = !m_inventoryVisible; }
+    void ToggleCharacterPanel() { m_characterVisible = !m_characterVisible; }
+    void ToggleSettings() { m_settingsVisible = !m_settingsVisible; }
+    bool InventoryVisible() const { return m_inventoryVisible; }
+    bool CharacterPanelVisible() const { return m_characterVisible; }
+    bool SettingsVisible() const { return m_settingsVisible; }
+    // Settings 值（Audio 模块每帧读取；G 任务）。
+    float MasterVolume() const { return m_masterVolume; }
+    float MusicVolume() const { return m_musicVolume; }
+    float SfxVolume() const { return m_sfxVolume; }
+    // UI 渲染产生的请求（GameScene 每帧 Drain 后转发给 WorldClientController——
+    // 服务器依旧权威，UI 只发意图）。
+    struct UiRequest {
+        enum class Kind {
+            DialogueOption,   // index = 1-based option
+            ShopBuy,          // index = shop entry 0-based
+            ShopSell,         // instanceId + quantity 1
+            EquipDefinition,  // definitionId（SendEquipFirstOf）
+            UnequipSlot,      // equipmentSlot (1=Weapon 2=Armor)
+            WindowFullscreen, // 切换全屏（GameScene 执行）
+            WindowResolution, // index = 分辨率档位
+        };
+        Kind kind = Kind::DialogueOption;
+        int index = 0;
+        std::uint32_t definitionId = 0;
+        std::uint64_t instanceId = 0;
+        std::uint8_t equipmentSlot = 0;
+    };
+    std::vector<UiRequest> DrainUiRequests();
+    // 鼠标状态（GameScene 每帧喂入；窗口点击交互用）。
+    void SetMouseState(float x, float y, bool clicked) {
+        m_lastMouseX = x;
+        m_lastMouseY = y;
+        if (clicked) {
+            m_lastMouseClicked = true;
+        }
+    }
 
     // ---- 统计（F9 面板；指令四十二）----
     struct Stats {
@@ -167,10 +215,63 @@ private:
     void DrawPanel(legend::render::SpriteBatch& batch, const math::Vector2& topLeft, float width,
                    float height, float alpha = 0.55f);
 
+    // ---- 阶段25：正式 UI 状态 ----
+    ui::ToastManager m_toasts;
+    ui::MapBanner m_mapBanner;
+    ui::BossBar m_bossBar;
+    ui::LevelUpFx m_levelUpFx;
+    ui::ItemDisplayCatalog m_itemDisplay;
+    ui::ChapterDisplayCatalog m_chapterDisplay;
+    ui::SkillSlotState m_skillSlots[3];
+    std::uint16_t m_lastErrorToastCode = 0;
+    std::uint32_t m_prevLevelForUi = 0;
+    bool m_inventoryVisible = false;
+    bool m_characterVisible = false;
+    bool m_settingsVisible = false;
+    int m_selectedInventorySlot = -1;
+    int m_selectedShopIndex = -1;
+    int m_lastClickedInventorySlot = -1;
+    float m_inventoryClickTimer = 10.0f;
+    // Settings 值（本地持久化 savedata/client_settings.json；指令五十一/六）。
+    float m_masterVolume = 0.8f;
+    float m_musicVolume = 0.6f;
+    float m_sfxVolume = 0.8f;
+    bool m_fullscreen = false;
+    int m_resolutionIndex = 1; // 0=1280x720 1=1600x900 2=1920x1080
+    bool m_tutorialShown = false;
+    bool m_settingsDirty = false;
+    float m_worldTimeSeconds = 0.0f;
+    float m_lastMouseX = 0.0f;
+    float m_lastMouseY = 0.0f;
+    bool m_lastMouseClicked = false;
+    std::vector<UiRequest> m_uiRequests;
+
+    void LoadClientSettings();
+    void SaveClientSettings();
+    void UpdateUiState(const WorldClientController& world, float deltaTime);
+    void PushErrorToast(std::uint16_t errorCode);
+    ui::MinimapModel BuildMinimapModel(const WorldClientController& world) const;
+    void HandleUiMouse(const WorldClientController& world, const math::Vector2& refMouse,
+                       bool clicked, float scale);
+    void RenderHudV2(const WorldClientController& world, const std::string& playerName,
+                     float viewportWidth, float viewportHeight, float scale, bool haveText);
+    void RenderSkillBar(const WorldClientController& world, float viewportWidth,
+                        float viewportHeight, float scale, bool haveText);
+    void RenderTracker(const WorldClientController& world, float viewportWidth, float scale,
+                       bool haveText);
+    void RenderMinimap(const WorldClientController& world, float viewportWidth,
+                       float viewportHeight, float scale, bool haveText);
+    void RenderGlobalOverlays(const WorldClientController& world, float viewportWidth,
+                              float viewportHeight, float scale, bool haveText);
+    void RenderWindows(const WorldClientController& world, float viewportWidth,
+                       float viewportHeight, float scale, bool haveText,
+                       const math::Vector2& refMouse, bool mouseClicked);
+
     void ClearTransientVisuals(); // MapChanged/断线：特效/飘字/实体视觉清场
 
     legend::resource::ResourceManager* m_resources = nullptr;
     legend::render::Shader* m_spriteShader = nullptr;
+    AudioRuntime m_audio; // 阶段25 指令四十八：Audio Runtime V1
     std::unique_ptr<legend::visual::VisualDataCatalog> m_catalog;
     AssetManager m_assets;
     TextRenderer m_text;

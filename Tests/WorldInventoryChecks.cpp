@@ -159,14 +159,15 @@ PlayerStats ReadPlayerStats(WorldTestServers& servers, std::uint64_t characterId
 // ===========================================================================
 
 void RunInventoryLogicChecks() {
-    // ---- ItemDefinitionCheck（指令二/三）：3 个定义字段正确 ----
+    // ---- ItemDefinitionCheck（指令二/三 + 阶段25 指令十三）：7 个定义字段正确 ----
     {
         ItemRegistry registry;
-        bool ok = registry.Count() == 3;
+        bool ok = registry.Count() == 7;
         const auto* sword = registry.Find(kItemRustySwordId);
         const auto* armor = registry.Find(kItemClothArmorId);
         const auto* core = registry.Find(kItemSlimeCoreId);
-        ok = ok && sword && armor && core;
+        const auto* bronze = registry.Find(kItemBronzeSwordId);
+        ok = ok && sword && armor && core && bronze;
         ok = ok && sword->type == ItemType::Weapon && sword->maxStack == 1 &&
              sword->attackBonus == 3 && sword->defenseBonus == 0 &&
              std::string(sword->name) == "Rusty Sword";
@@ -175,8 +176,10 @@ void RunInventoryLogicChecks() {
         ok = ok && core->type == ItemType::Material && core->maxStack == kSlimeCoreMaxStack &&
              core->attackBonus == 0 && core->defenseBonus == 0 &&
              std::string(core->name) == "Slime Core";
+        ok = ok && bronze->type == ItemType::Weapon && bronze->attackBonus == 8 &&
+             std::string(bronze->name) == "Bronze Sword";
         ok = ok && registry.Find(9999) == nullptr;
-        Check("ItemDefinitionCheck: 3 hardcoded definitions with correct fields", ok);
+        Check("ItemDefinitionCheck: 7 definitions with correct fields (3010+ stage25)", ok);
     }
 
     // ---- Inventory40SlotCheck（指令六）：40 格容量 ----

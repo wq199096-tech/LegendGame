@@ -465,13 +465,14 @@ void RunWorldMonsterChecks() {
     const auto stateReturning = static_cast<std::uint8_t>(MonsterState::Returning);
 
     // ---- MonsterSpawnCountCheck（七十四）/ MonsterEntityIdUniqueCheck（七十五）----
-    // 阶段21 指令十一：多地图布局 50 只（Map1 legacy 20 + Map2 20 + Map3 10）。
+    // 阶段21 指令十一：多地图布局（Map1 legacy 20 + Map2 20 + Map3 10）；
+    // 阶段25 指令十：+ Map3 boss 1 = 51。
     {
         const auto ids = servers.world->MonsterEntityIds();
         std::unordered_set<std::uint64_t> unique(ids.begin(), ids.end());
-        Check("MonsterSpawnCountCheck: 50 slimes spawned on start (3-map layout)",
-              servers.world->MonsterCount() == 50 && ids.size() == 50);
-        Check("MonsterEntityIdUniqueCheck: all entityIds unique", unique.size() == 50);
+        Check("MonsterSpawnCountCheck: 51 monsters spawned on start (3-map layout + boss)",
+              servers.world->MonsterCount() == 51 && ids.size() == 51);
+        Check("MonsterEntityIdUniqueCheck: all entityIds unique", unique.size() == 51);
     }
 
     // ---- NoMonsterSpawnFarCheck（七十八）+ MonsterNoGlobalBroadcastCheck（一百零五）----
@@ -1011,8 +1012,8 @@ void RunWorldMonsterChecks() {
         WaitUntil([&] { return true; }, 500);
         servers.StopWorld();
         Check("MonsterRestartCheck: world restarts", servers.StartWorld());
-        Check("MonsterRestartCheck: 50 monsters regenerated after restart",
-              servers.world->MonsterCount() == 50);
+        Check("MonsterRestartCheck: 51 monsters regenerated after restart",
+              servers.world->MonsterCount() == 51);
     }
 
     db.Close();

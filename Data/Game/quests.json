@@ -73,14 +73,14 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Explore the heart of Slime Meadow (900,950).",
+      "description": "Explore the southern meadow (300,1500).",
       "minLevel": 1,
       "name": "Explore the Meadow",
       "objectives": [
         {
           "areaRadius": 200.0,
-          "areaX": 900.0,
-          "areaY": 950.0,
+          "areaX": 300.0,
+          "areaY": 1500.0,
           "mapId": 2,
           "objectiveId": 40041,
           "requiredCount": 1,

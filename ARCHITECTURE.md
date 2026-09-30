@@ -21,16 +21,21 @@ Shared/          协议与定义层（Server/Client 共用，仅依赖标准库�
   Teleport/      传送协议【阶段20】
   WorldData/     WorldDataJson（Data/World 5 文件 Load/Validate/Save/默认）+ AtomicFile
                  （原子写/backup 轮换）+ MonsterSpawnDefinition（GenerateSpawnPoints）【阶段22】
-  GameData/      GameDataJson（Data/Game 9 文件 Load/Validate/Save/交叉校验/默认）【阶段23】
+  GameData/      GameDataJson（Data/Game 10 文件 Load/Validate/Save/交叉校验/默认；
+                 chapters.json 为可选展示文件【阶段23/25】）
   Monster/       MonsterDefinition/LootTableDefinition/MonsterSpawnDefinition 定义【阶段23】
 Tools/
   MapEditor/     LegendGame World Editor（TileMap + World 双工作区；WorldDocument +
-                 GameDataDocument 文档模型；Validation 禁存；Launch WorldServer）【阶段22/23】
+                 GameDataDocument 文档模型；Validation 禁存；Asset Browser /
+                 Animation Preview / Quest Flow / Boss Editor / Chapter Editor /
+                 Quest Area Map Picker / Validate All / Launch Full Game /
+                 Stop Local Game / Process Status）【阶段22/23/25】
 Data/
   World/         world_manifest/maps/npcs/monster_spawns/portals/visual_maps.json
                  （6 文件，schemaVersion=1；visual_maps 为地图视觉定义【阶段24】）
   Game/          game_manifest/items/monsters/skills/statuses/quests/shops/teleports/
-                 loot_tables.json（9 文件，schemaVersion=1 + contentVersion）
+                 loot_tables/chapters.json（10 文件，schemaVersion=1 + contentVersion；
+                 chapters.json 为章节展示元数据，加载可选【阶段25】）
   Assets/        asset_manifest/animations/visual_entities/effects.json
                  （4 文件，Client 视觉资产域【阶段24】）
 Engine/          引擎（渲染/输入/网络 TcpServer/TcpClient/Logger）
@@ -52,23 +57,32 @@ Server/
     Npc/                      NpcRegistry/NpcEntity/NpcManager/NpcSpatialGrid/
                               NpcInteractionService/DialogueService/ShopService/TeleportService【阶段20】
 Client/
-  Source/        LegendApp/GameScene（主循环/渲染/Debug overlay；在线模式渲染由 VisualRuntime 接管【阶段24】）
+  Source/        LegendApp/GameScene（主循环/渲染/Debug overlay；在线模式渲染由 VisualRuntime 接管【阶段24】；
+                 阶段25 UI 键位 I/C/Esc + UiRequest 分发 + VS Smoke）
   Assets/        AssetManager（manifest 驱动纹理缓存/Fallback/F10 热重载）【阶段24】
+  Audio/         AudioRuntime（SDL3 程序化合成 BGM/SFX；Settings 音量实时生效）【阶段25】
+  Ui/            LegendClientUi 静态库：UiTheme（1920×1080 参考分辨率缩放）+ UiModels
+                 （Toast/MapBanner/BossBar/SkillSlot/HUD/Tracker/Inventory/Shop/Dialogue/
+                 CharacterPanel/Minimap/LevelUpFx）+ ItemDisplayCatalog（items.json 展示字段）
+                 【阶段25；WorldTests UiModelChecks 共用】
   Visuals/       VisualAssetData（Data/Assets 4 文件解析/校验）+ AnimationPlayer（统一）+
-                 VisualDataCatalog（展示目录）+ Font（stb_truetype UTF-8 文本）+
-                 VisualRuntime（地图视觉/Y排序实体/技能 VFX/伤害飘字/名字板/HUD）【阶段24】
+                 VisualDataCatalog（展示目录；阶段25 增加 Quest 目标展示字段）+ Font（stb_truetype UTF-8 文本）+
+                 VisualRuntime（地图视觉/Y排序实体/技能 VFX/伤害飘字/名字板/HUD；
+                 阶段25 扩展：正式 UI 全套窗口/Toast/Banner/BossBar/MiniMap/Loading/客户端设置持久化）【阶段24/25】
   Network/       GameNetworkClient/ClientNetworkController（账号链路）
   Account/       AccountClientController/CharacterSelectionController
   WorldNetwork/  WorldNetworkClient/WorldClientController/RemotePlayer*/RemoteMonster*/
                  RemoteItemModels/RemoteStatusEffect*/ClientQuestModel/RemoteNpc*/【阶段20】
+                 （阶段25：LocalAttackPower/LocalDefensePower 展示镜像 + SendBuyByIndex）
   Character|Combat|Skill|World|Loot|Progression/   本地单机框架（阶段1~8 遗产，联机路径旁路）
 Tests/           WorldTestHarness.h + WorldChecks/WorldAoiChecks/WorldMonsterChecks/
                  WorldCombatChecks/WorldSkillChecks/WorldStatusChecks/WorldProgressionChecks/
-                 WorldInventoryChecks/WorldQuestChecks/【WorldNpcChecks 阶段20】/
-                 WorldDataChecks/MapEditorDataChecks【阶段22】/
-                 GameDataChecks/DefinitionValidationChecks【阶段23】/
+                 WorldInventoryChecks/WorldQuestChecks/WorldNpcChecks/
+                 WorldDataChecks/MapEditorDataChecks/
+                 GameDataChecks/DefinitionValidationChecks/
                  AssetManifestChecks/AnimationChecks/VisualDefinitionChecks/ClientSmokeChecks
-                 【阶段24】（全部并入 LegendWorldTests）
+                 【阶段24】/ VerticalSliceChecks（新角色出生）+ UiModelChecks + ChapterOneChecks
+                 （Chapter One 端到端：真实生产数据全链路）【阶段25】（全部并入 LegendWorldTests）
 Apps/            各进程 main
 .github/workflows/windows-build.yml
 PROJECT_CONTEXT.md / CURRENT_STAGE.md / ARCHITECTURE.md / TRAE_CONTINUATION_CONTEXT.md

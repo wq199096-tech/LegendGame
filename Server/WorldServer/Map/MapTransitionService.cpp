@@ -82,13 +82,19 @@ bool MapTransitionService::TransitionPlayer(const std::shared_ptr<PlayerSession>
     player->SetMapId(destination->mapId);
     player->SetPosition(destX, destY);
     player->SetPositionDirty(true);
+    // 阶段25 指令四十三：进入野外图（非 Town）2 秒 EntryProtection——复用复活保护
+    // 时间戳机制，防止刚加载的玩家被近身怪秒杀（主动攻击/施法立即取消）。
+    if (destination->type != MapType::Town) {
+        player->SetRespawnProtection(kEntryProtectionSeconds);
+    }
     // 7) UpdateSpatialGrid。
     s.m_spatialGrid.UpdatePlayerCell(player);
     // 8) EnterNewMap。
     s.m_mapManager.AddPlayer(player);
-    // 9) RebuildAOI（Player/Monster/NPC/Drop/Portal 初始可见性）。
-    s.InitializePlayerVisibility(player);
     // 10) SendMapChanged + MapSnapshot（只发本人，指令二十六/二十七）。
+    // 阶段25 修复：必须先发 MapChanged 再做 AOI 初始广播——Client 收到 MapChanged
+    // 会清空全部旧图镜像（指令五十五），若 Spawn 先于 MapChanged 到达会被整批丢弃，
+    // 导致切图后 NPC/Portal/怪物镜像永久为空（对话/商店/MiniMap 全部失效）。
     {
         MapChangedPayload changed;
         changed.mapId = destination->mapId;
@@ -119,6 +125,8 @@ bool MapTransitionService::TransitionPlayer(const std::shared_ptr<PlayerSession>
             s.SendPacketToPlayer(player, snapPacket);
         }
     }
+    // 9) RebuildAOI（Player/Monster/NPC/Drop/Portal 初始可见性）——MapChanged 之后。
+    s.InitializePlayerVisibility(player);
     // 11) SendImmediatePositionSnapshot（不等 100ms 周期快照）。
     {
         PlayerPositionSnapshotPayload pos;

@@ -5,8 +5,8 @@ Build/
 Logs/
 
 # 阶段10：运行时数据与测试产物（不得入库）。
-# 阶段22/23：Data/World（5 文件）与 Data/Game（9 文件）配置 JSON 入库
-# （runtime db 与编辑器 backup 排除）。
+# 阶段22/23/25：Data/World（6 文件）与 Data/Game（10 文件）配置 JSON 入库
+# （runtime db / 客户端本地设置 savedata / 编辑器 backup 排除）。
 # Windows git 大小写不敏感：data/ 会误吞 Data/*，必须 /* + 否定组合；
 # 否定必须下探到 !/Data/<dir>/**（!/Data/ 单独不够——目录排除继承）。
 /data/*
@@ -20,6 +20,7 @@ Logs/
 /Data/Game/.backup/
 testdata/
 testlogs/
+savedata/
 imgui.ini
 *.log
 

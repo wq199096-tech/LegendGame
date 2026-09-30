@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace legend::visual {
 
@@ -38,9 +39,16 @@ struct SkillDisplay {
     std::string iconAsset; // HUD SkillBar 图标（visualRuntime 内置映射；此处预留）
 };
 
+struct QuestObjectiveDisplay {
+    std::string type; // KillMonster / CollectItem / ReachLevel / ReachArea（展示用）
+    std::uint32_t requiredCount = 0;
+};
+
 struct QuestDisplay {
     std::uint32_t questId = 0;
     std::string name;
+    // 阶段25 指令二十一：Tracker 目标文案（展示字段；进度仍全部来自服务器事件）。
+    std::vector<QuestObjectiveDisplay> objectives;
 };
 
 struct MapDisplay {

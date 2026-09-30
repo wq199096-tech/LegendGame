@@ -39,18 +39,74 @@ void RunGameDataLogicChecks() {
     // ---- 默认 Game 数据 + manifest contentVersion（23.20）----
     {
         GameDataSet data = MakeDefaultGameData();
-        Check("GameData: default has 3 items / 1 monster / 5 skills / 5 statuses / "
-              "5 quests / 1 shop / 2 teleports / 1 lootTable",
-              data.items.size() == 3 && data.monsters.size() == 1 &&
+        Check("GameData: default has 7 items / 2 monsters / 5 skills / 5 statuses / "
+              "6 quests / 1 shop / 2 teleports / 2 lootTables / 1 chapter",
+              data.items.size() == 7 && data.monsters.size() == 2 &&
                   data.skills.size() == 5 && data.statuses.size() == 5 &&
-                  data.quests.size() == 5 && data.shops.size() == 1 &&
-                  data.teleports.size() == 2 && data.lootTables.size() == 1);
+                  data.quests.size() == 6 && data.shops.size() == 1 &&
+                  data.teleports.size() == 2 && data.lootTables.size() == 2 &&
+                  data.chapters.size() == 1);
         Check("GameData: manifest has contentVersion=1",
               data.manifest.schemaVersion == 1 && data.manifest.contentVersion == 1);
+        // 阶段25：Chapter 1《异动的史莱姆》出厂内容。
+        Check("GameData: default chapter 1 = The Restless Slimes (final 4006, quests 4001~4006)",
+              data.chapters[0].chapterId == 1 &&
+                  data.chapters[0].title == "The Restless Slimes" &&
+                  data.chapters[0].finalQuestId == 4006 &&
+                  data.chapters[0].questIds.size() == 6 &&
+                  data.chapters[0].questIds.front() == 4001 &&
+                  data.chapters[0].questIds.back() == 4006);
         std::string error;
-        const WorldDataSet emptyWorld;
+        const WorldDataSet defaultWorld = MakeDefaultWorldData();
+        const auto mutateDefault = [](const std::function<void(GameDataSet&)>& op) {
+            GameDataSet d = MakeDefaultGameData();
+            op(d);
+            return d;
+        };
         Check("GameData: default data validates (with default world refs)",
-              ValidateGameData(data, MakeDefaultWorldData(), error));
+              ValidateGameData(data, defaultWorld, error));
+        // 阶段25：chapter 引用缺失任务 / 任务跨章节 / finalQuest 非链内 拒绝。
+        Check("GameData: chapter quest missing rejected",
+              !ValidateGameData(mutateDefault([](GameDataSet& d) {
+                  d.chapters[0].questIds.push_back(4999);
+              }), defaultWorld, error));
+        Check("GameData: quest in two chapters rejected",
+              !ValidateGameData(mutateDefault([](GameDataSet& d) {
+                  ChapterDefinition copy = d.chapters[0];
+                  copy.chapterId = 2;
+                  d.chapters.push_back(copy);
+              }), defaultWorld, error));
+        Check("GameData: finalQuest not in chain rejected",
+              !ValidateGameData(mutateDefault([](GameDataSet& d) {
+                  d.chapters[0].questIds.pop_back(); // 移除 4006
+                  // finalQuestId 仍为 4006 → 不在链内 → 拒绝
+              }), defaultWorld, error));
+        // 阶段25：chapters.json 缺失可加载（可选文件），存在但字段错拒绝。
+        {
+            const fs::path dir = fs::temp_directory_path() / "legend_gamedata_chapters";
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+            std::string saveError;
+            GameDataSet data = MakeDefaultGameData();
+            data.chapters.clear(); // 无章节 → 保存的 chapters.json 为空数组
+            const bool saved = SaveGameData(dir.string(), data, saveError);
+            Check("GameData: save game data without chapters", saved);
+            GameDataSet loaded;
+            Check("GameData: chapters.json missing/empty loads (optional file)",
+                  LoadGameData(dir.string(), loaded, saveError) && loaded.chapters.empty());
+            // 存在但字段错（chapterId=0）→ 结构可解析，语义校验拒绝
+            //（分层纪律：Load 管结构，ValidateGameData 管语义；WorldServer/编辑器
+            // 均为 Load+Validate 双段，非法数据进不了运行时）。
+            std::ofstream bad(dir / "chapters.json", std::ios::binary);
+            bad << "{\"schemaVersion\":1,\"chapters\":[{\"chapterId\":0,\"title\":\"x\","
+                   "\"finalQuestId\":4006,\"questIds\":[4006]}]}";
+            bad.close();
+            GameDataSet badLoaded;
+            Check("GameData: invalid chapters.json parsed but validation rejects",
+                  LoadGameData(dir.string(), badLoaded, saveError) &&
+                      !ValidateGameData(badLoaded, defaultWorld, saveError));
+            fs::remove_all(dir, ec);
+        }
     }
 
     // ---- Roundtrip + 原子保存（23.25）----
@@ -76,10 +132,10 @@ void RunGameDataLogicChecks() {
             return ok;
         }());
         Check("GameData: roundtrip preserves counts",
-              loaded.items.size() == 3 && loaded.monsters.size() == 1 &&
+              loaded.items.size() == 7 && loaded.monsters.size() == 2 &&
                   loaded.skills.size() == 5 && loaded.statuses.size() == 5 &&
-                  loaded.quests.size() == 5 && loaded.shops.size() == 1 &&
-                  loaded.teleports.size() == 2 && loaded.lootTables.size() == 1);
+                  loaded.quests.size() == 6 && loaded.shops.size() == 1 &&
+                  loaded.teleports.size() == 2 && loaded.lootTables.size() == 2);
         Check("GameData: roundtrip preserves manifest contentVersion",
               loaded.manifest.contentVersion == 1);
         bool noTmp = true;
@@ -235,7 +291,7 @@ void RunGameDataMigrationChecks() {
         for (const auto& quest : data.quests) {
             if (quest.questId == 4001) slimeHunter = &quest;
         }
-        Check("Migration: 4001 Slime Hunter kill5 reward100/20 npc5001",
+        Check("Migration: 4001 First Trouble kill5 reward100/20 npc5001",
               slimeHunter != nullptr && slimeHunter->objectives.size() == 1 &&
                   slimeHunter->objectives[0].requiredCount == 5 &&
                   slimeHunter->reward.exp == 100 && slimeHunter->reward.gold == 20 &&
@@ -284,10 +340,11 @@ void RunGameDataChainChecks() {
         Check("GameData: server starts with real Data/Game", started);
         if (started) {
             // 23.26：地图/NPC/Monster/Skill/Item/Quest/Shop/Teleport 全部由数据定义加载
-            //（Monster 现从 Data/Game monsters（1 只 Training Slime）——legacy spawn 仍走
-            // kTrainingSlimeTypeId 引用 Data/Game 定义）。
+            //（Monster 现从 Data/Game monsters（2 只：Training Slime + Boss）——legacy
+            // spawn 仍走 kTrainingSlimeTypeId 引用 Data/Game 定义）。
+            // 阶段25：slots = legacy(20) + Map2(20) + Map3 slime(10) + Map3 boss(1) = 51。
             Check("GameData: server spawn slots intact after game load",
-                  servers.world->SpawnSlotCount() == 50);
+                  servers.world->SpawnSlotCount() == 51);
         }
         servers.StopAll();
         fs::remove_all(dir, ec);
@@ -326,8 +383,9 @@ void RunGameDataChainChecks() {
 void LoadDefaultsForAllGameRegistries() {
     ItemRegistry registry;
     registry.LoadDefaults();
-    Check("GameData: ItemRegistry defaults load 3 items",
-          registry.Count() == 3 && registry.Find(kItemRustySwordId) != nullptr);
+    Check("GameData: ItemRegistry defaults load 7 items",
+          registry.Count() == 7 && registry.Find(kItemRustySwordId) != nullptr &&
+              registry.Find(kItemBronzeSwordId) != nullptr);
     SkillRegistry skills;
     skills.LoadDefaults();
     Check("GameData: SkillRegistry defaults load 5 skills",
@@ -337,9 +395,10 @@ void LoadDefaultsForAllGameRegistries() {
     Check("GameData: StatusEffectRegistry defaults load 5 statuses",
           statuses.Count() == 5 && statuses.FindEffect(kStatusEffectIdBurn) != nullptr);
     QuestRegistry::LoadDefaults();
-    Check("GameData: QuestRegistry defaults load 5 quests",
-          QuestRegistry::Instance().Count() == 5 &&
-              QuestRegistry::Instance().FindQuest(4005) != nullptr);
+    Check("GameData: QuestRegistry defaults load 6 quests",
+          QuestRegistry::Instance().Count() == 6 &&
+              QuestRegistry::Instance().FindQuest(4005) != nullptr &&
+              QuestRegistry::Instance().FindQuest(4006) != nullptr);
     ShopRegistry::LoadDefaults();
     Check("GameData: ShopRegistry defaults load shop 6001",
           ShopRegistry::Instance().FindShop(6001) != nullptr);
@@ -348,12 +407,14 @@ void LoadDefaultsForAllGameRegistries() {
           TeleportRegistry::Instance().FindTeleport(7001) != nullptr &&
               TeleportRegistry::Instance().FindTeleport(7002) != nullptr);
     MonsterDefinitionRegistry::LoadDefaults();
-    Check("GameData: MonsterDefinitionRegistry defaults load Training Slime",
+    Check("GameData: MonsterDefinitionRegistry defaults load Training Slime + Boss",
           MonsterDefinitionRegistry::Instance().Find(1) != nullptr &&
+              MonsterDefinitionRegistry::Instance().Find(2001) != nullptr &&
               FindMonsterDefinition(1) != nullptr);
     LootTableRegistry::LoadDefaults();
-    Check("GameData: LootTableRegistry defaults load table 1",
-          LootTableRegistry::Instance().Find(1) != nullptr);
+    Check("GameData: LootTableRegistry defaults load tables 1 + 2001",
+          LootTableRegistry::Instance().Find(1) != nullptr &&
+              LootTableRegistry::Instance().Find(2001) != nullptr);
 }
 
 } // namespace

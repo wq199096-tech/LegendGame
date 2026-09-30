@@ -83,6 +83,9 @@ public:
     std::int64_t LocalExperience() const { return m_localExperience; }
     std::int64_t LocalExpToNext() const { return m_localExpToNext; }
     std::int64_t LocalGold() const { return m_localGold; }
+    // 阶段25 指令十五：Base 攻防展示（装备加成在 Equipment 镜像；HUD/Character Panel 用）。
+    std::uint32_t LocalAttackPower() const { return m_localAttackPower; }
+    std::uint32_t LocalDefensePower() const { return m_localDefensePower; }
 
     // ------------------------------------------------------------------
     // 阶段18：掉落/背包/装备镜像与 Debug 操作（E/I/6/7/8/9）。
@@ -150,6 +153,8 @@ public:
     // 指令八十一：B 买选中条目（quantity=1，Material 可配）；S 卖（按背包实例）。
     bool SendBuySelected(std::uint32_t quantity = 1);
     bool SendSellSelected(std::uint64_t inventoryInstanceId, std::uint32_t quantity);
+    // 阶段25 指令十九：正式 Shop UI 按条目索引购买。
+    bool SendBuyByIndex(std::size_t zeroBasedIndex, std::uint32_t quantity = 1);
     void SendShopOpenRequest();
     // 指令六十三：Teleport Option 选择。
     bool SendTeleportByOptionIndex(std::size_t oneBased);
@@ -212,6 +217,9 @@ private:
     std::int64_t m_localExperience = 0;
     std::int64_t m_localExpToNext = 100;
     std::int64_t m_localGold = 0;
+    // 阶段25 指令十五：Base 攻防展示（服务器 Progression 事件驱动）。
+    std::uint32_t m_localAttackPower = 0;
+    std::uint32_t m_localDefensePower = 0;
     // 阶段18：掉落/背包/装备镜像 + 请求 id 计数。
     RemoteWorldItemManager m_worldItems;
     ClientInventoryModel m_inventory;

@@ -11,11 +11,19 @@
 #include "Engine/Render/Camera2D.h"
 #include "Engine/Render/Shader.h"
 #include "Shared/Combat/CombatTypes.h"
+#include "Shared/Item/ItemTypes.h"
+#include "Shared/Monster/MonsterTypes.h"
+#include "Shared/Quest/QuestTypes.h"
 #include "Shared/Skill/SkillTypes.h"
+#include "Shared/Shop/ShopTypes.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 
 namespace legend::client {
 
@@ -43,6 +51,58 @@ const Color kPanelBack(0.08f, 0.09f, 0.13f, 0.62f);
 const Color kTextWhite(0.96f, 0.96f, 0.96f, 1.0f);
 const Color kTextGold(1.0f, 0.85f, 0.25f, 1.0f);
 const Color kTextGray(0.62f, 0.65f, 0.70f, 1.0f);
+
+// 阶段25：本地客户端设置文件（savedata/client_settings.json；指令五十一/六）。
+constexpr const char* kClientSettingsPath = "savedata/client_settings.json";
+
+// 常见服务器错误码 -> 玩家可读 Toast 文案（指令五十五：不能只打印 Console）。
+std::string SkillErrorText(std::uint8_t code) {
+    switch (static_cast<world::SkillResultCode>(code)) {
+        case world::SkillResultCode::Cooldown: return "Skill is on cooldown";
+        case world::SkillResultCode::NotEnoughMana: return "Not enough mana";
+        case world::SkillResultCode::OutOfRange: return "Target too far";
+        case world::SkillResultCode::InvalidTarget: return "Invalid target";
+        case world::SkillResultCode::TargetDead: return "Target is dead";
+        case world::SkillResultCode::AlreadyCasting: return "Already casting";
+        default: return "Cannot use skill";
+    }
+}
+
+std::string ItemErrorText(std::uint8_t code) {
+    switch (static_cast<world::ItemResultCode>(code)) {
+        case world::ItemResultCode::InventoryFull: return "Inventory full";
+        case world::ItemResultCode::TooFar: return "Too far away";
+        case world::ItemResultCode::NotVisible: return "Item not visible";
+        case world::ItemResultCode::OwnerLocked: return "Item is owned by another player";
+        case world::ItemResultCode::DropNotFound: return "Item is gone";
+        case world::ItemResultCode::Dead: return "Cannot do that while dead";
+        default: return "Item action failed";
+    }
+}
+
+std::string QuestErrorText(std::uint8_t code) {
+    switch (static_cast<world::QuestResultCode>(code)) {
+        case world::QuestResultCode::LevelTooLow: return "Level too low for this quest";
+        case world::QuestResultCode::PrerequisiteNotMet: return "Complete the previous quest first";
+        case world::QuestResultCode::AlreadyAccepted: return "Quest already accepted";
+        case world::QuestResultCode::AlreadyCompleted: return "Quest already completed";
+        case world::QuestResultCode::QuestLogFull: return "Quest log is full";
+        case world::QuestResultCode::NotAccepted: return "Quest not accepted";
+        case world::QuestResultCode::NotReady: return "Quest objectives not complete";
+        case world::QuestResultCode::InventoryFull: return "Inventory full (reward lost?)";
+        default: return "Quest action failed";
+    }
+}
+
+std::string ShopErrorText(std::uint8_t code) {
+    switch (static_cast<world::ShopResultCode>(code)) {
+        case world::ShopResultCode::TooFar: return "Too far from merchant";
+        case world::ShopResultCode::CannotBuy: return "Cannot buy this item";
+        case world::ShopResultCode::SessionExpired: return "Shop session expired";
+        case world::ShopResultCode::ItemNotInShop: return "Item not sold here";
+        default: return "Shop action failed";
+    }
+}
 
 } // namespace
 
@@ -84,6 +144,46 @@ bool VisualRuntime::Initialize(legend::resource::ResourceManager& resources,
     m_whiteTexture =
         resources.CreateSolidTexture("internal/vr_white", 64, Color(1.0f, 1.0f, 1.0f, 1.0f));
 
+    // 阶段25：物品展示目录（items.json 展示字段；失败不致命——空名/fallback 图标）。
+    {
+        std::string itemError;
+        if (!m_itemDisplay.Load(dataRoot, itemError)) {
+            LOG_WARN("[VisualRuntime] item display catalog unavailable: " + itemError);
+        }
+    }
+    // 阶段25：章节展示目录（chapters.json；失败不致命——无 Chapter Complete 提示）。
+    {
+        std::string chapterError;
+        if (!m_chapterDisplay.Load(dataRoot, chapterError)) {
+            LOG_WARN("[VisualRuntime] chapter display catalog unavailable: " + chapterError);
+        }
+    }
+    // 阶段25：技能槽显示状态（1001/1002/1003；展示值来自 skills.json，服务器仍权威）。
+    {
+        const std::uint32_t slotSkills[3] = {world::kSkillIdQuickStrike, world::kSkillIdFireBolt,
+                                             world::kSkillIdWhirlwind};
+        const char* slotIcons[3] = {"ui_icon_skill_1001", "ui_icon_skill_1002",
+                                    "ui_icon_skill_1003"};
+        for (int i = 0; i < 3; ++i) {
+            m_skillSlots[i].unlocked = true;
+            m_skillSlots[i].iconAsset = slotIcons[i];
+            const visual::SkillDisplay* display = m_catalog->FindSkillDisplay(slotSkills[i]);
+            if (display != nullptr) {
+                m_skillSlots[i].name = display->name;
+                m_skillSlots[i].manaCost = display->manaCost;
+                m_skillSlots[i].cooldownTotal = display->cooldownSeconds;
+            }
+        }
+    }
+    LoadClientSettings();
+
+    // 阶段25 指令四十八：Audio Runtime（失败不致命——静默 fallback）。
+    if (!m_audio.Initialize()) {
+        LOG_WARN("[VisualRuntime] audio runtime unavailable — running silent.");
+    } else {
+        m_audio.SetVolumes(m_masterVolume, m_musicVolume, m_sfxVolume);
+    }
+
     m_ready = true;
     LOG_INFO("[VisualRuntime] ready. assets=" + std::to_string(m_catalog->Manifest().assets.size()) +
              " clips=" + std::to_string(m_catalog->Animations().clips.size()) +
@@ -101,6 +201,7 @@ bool VisualRuntime::Initialize(legend::resource::ResourceManager& resources,
 void VisualRuntime::Shutdown() {
     m_uiBatch.Shutdown();
     m_text.Shutdown();
+    m_audio.Shutdown();
     m_effects.clear();
     m_damageNumbers.clear();
     m_playerVisuals.clear();
@@ -127,7 +228,8 @@ void VisualRuntime::ClearTransientVisuals() {
     m_currentVisualMapId.clear();
 }
 
-void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event) {
+void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event,
+                                 const WorldClientController& world) {
     if (!m_ready) {
         return;
     }
@@ -148,6 +250,85 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event) {
         case WorldNetworkEvent::Type::MapChangedEvent: {
             // 指令四十八（阶段48 验收）：MapChanged 清场。
             ClearTransientVisuals();
+            // 阶段25 指令三十六：地图名横幅（淡入淡出约 2s）。
+            if (!event.mapChanged.mapName.empty()) {
+                m_mapBanner.Show(event.mapChanged.mapName);
+            }
+            // 阶段25 指令四十九：每图 BGM。
+            m_audio.PlayBgmForMap(event.mapChanged.mapId);
+            break;
+        }
+        case WorldNetworkEvent::Type::RewardGrantedEvent: {
+            // 阶段25 指令二十五/二十六：+X Gold / +X EXP 反馈。
+            if (event.progression.goldGranted > 0) {
+                m_toasts.Push(ui::ToastLevel::Success,
+                              "+" + std::to_string(event.progression.goldGranted) + " Gold");
+                m_audio.PlaySfx(SfxId::Gold);
+            }
+            if (event.progression.expGranted > 0) {
+                m_toasts.Push(ui::ToastLevel::Info,
+                              "+" + std::to_string(event.progression.expGranted) + " EXP");
+            }
+            break;
+        }
+        case WorldNetworkEvent::Type::LevelUpEvent: {
+            // 阶段25 指令二十三：屏幕中央 LEVEL UP!（光环为本地视觉，不影响服务器）。
+            m_levelUpFx.Trigger();
+            m_audio.PlaySfx(SfxId::LevelUp);
+            m_toasts.Push(ui::ToastLevel::Success,
+                          "Level Up! Now level " + std::to_string(event.progression.level));
+            break;
+        }
+        case WorldNetworkEvent::Type::QuestStateChangedEvent: {
+            // 阶段25 指令二十二/四十七：任务完成反馈 + Chapter 完成判定。
+            const auto newState = static_cast<world::QuestState>(event.questState);
+            if (newState == world::QuestState::ReadyToTurnIn) {
+                m_toasts.Push(ui::ToastLevel::Warning, "Quest Ready to Turn In");
+            } else if (newState == world::QuestState::Completed) {
+                m_toasts.Push(ui::ToastLevel::Success, "Quest Complete");
+                m_audio.PlaySfx(SfxId::QuestComplete);
+                // 阶段25：Chapter Complete 数据驱动（chapters.json finalQuestId 命中）。
+                std::string chapterTitle;
+                if (m_chapterDisplay.ChapterCompletion(event.questId, chapterTitle)) {
+                    m_toasts.Push(ui::ToastLevel::Success,
+                                  "Chapter Complete: " + chapterTitle);
+                    m_toasts.Push(ui::ToastLevel::Info, "More content coming soon");
+                }
+            }
+            break;
+        }
+        case WorldNetworkEvent::Type::QuestRewardGrantedEvent: {
+            // 阶段25 指令二十二：Turn In 成功 -> Quest Complete + Rewards。
+            std::string rewardText = "Rewards:";
+            if (event.questRewardExp > 0) {
+                rewardText += " " + std::to_string(event.questRewardExp) + " EXP";
+            }
+            if (event.questRewardGold > 0) {
+                rewardText += " " + std::to_string(event.questRewardGold) + " Gold";
+            }
+            if (event.questRewardItemDefinitionId != 0) {
+                const std::string itemName =
+                    m_itemDisplay.DisplayName(event.questRewardItemDefinitionId);
+                rewardText += " " + (itemName.empty() ? "Item" : itemName);
+            }
+            m_toasts.Push(ui::ToastLevel::Success, rewardText);
+            break;
+        }
+        case WorldNetworkEvent::Type::SkillCastResponseEvent: {
+            // 服务器接受施法 → HUD CD 显示（展示值来自本地 skills.json，服务器仍权威）。
+            if (event.accepted && event.skillId != 0) {
+                const visual::SkillDisplay* display = m_catalog->FindSkillDisplay(event.skillId);
+                if (display != nullptr && display->cooldownSeconds > 0.0f) {
+                    m_skillCooldowns[event.skillId] = display->cooldownSeconds;
+                }
+            } else if (!event.accepted) {
+                // 阶段25 指令二十九/三十：Mana 不足 / CD 反馈（Toast + 槽位红闪）。
+                m_toasts.Push(ui::ToastLevel::Error, SkillErrorText(event.skillResultCode));
+                m_audio.PlaySfx(SfxId::Error);
+                for (auto& slot : m_skillSlots) {
+                    slot.errorFlash = 0.6f;
+                }
+            }
             break;
         }
         case WorldNetworkEvent::Type::PositionSnapshot: {
@@ -175,6 +356,20 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event) {
         }
         case WorldNetworkEvent::Type::CombatEvent: {
             // 伤害飘字（指令二十七）+ 攻击/受击动画。
+            // 阶段25 指令三十四：本地玩家攻击 Boss -> 顶部 Boss Bar（远离/死亡自动隐藏）。
+            if (event.attackerType == kEntityTypePlayer &&
+                event.attackerId == m_localCharacterId &&
+                event.targetType == kEntityTypeMonster) {
+                const auto* monster = world.RemoteMonsters().Find(event.targetId);
+                if (monster != nullptr &&
+                    monster->MonsterTypeId() == world::kAncientGuardianTypeId) {
+                    m_bossBar.ShowBoss(event.targetId, monster->Name(),
+                                       event.targetHpAfter != 0 ? event.targetHpAfter
+                                                                : monster->CurrentHp(),
+                                       event.targetMaxHp != 0 ? event.targetMaxHp
+                                                              : monster->MaxHp());
+                }
+            }
             const bool attackerIsPlayer = event.attackerType == kEntityTypePlayer;
             const bool targetIsPlayer = event.targetType == kEntityTypePlayer;
             // 攻击者动画（普攻/技能命中瞬间都视作攻击表现）。
@@ -227,17 +422,42 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event) {
             }
             break;
         }
-        case WorldNetworkEvent::Type::SkillCastResponseEvent: {
-            // 服务器接受施法 → HUD CD 显示（展示值来自本地 skills.json，服务器仍权威）。
-            if (event.accepted && event.skillId != 0) {
-                const visual::SkillDisplay* display = m_catalog->FindSkillDisplay(event.skillId);
-                if (display != nullptr && display->cooldownSeconds > 0.0f) {
-                    m_skillCooldowns[event.skillId] = display->cooldownSeconds;
+        case WorldNetworkEvent::Type::InventoryDeltaEvent: {
+            // 阶段25 指令五十：拾取 SFX（opcode 1 = Set/新增）。
+            if (event.inventoryOpcode == 1) {
+                m_audio.PlaySfx(SfxId::ItemPickup);
+            }
+            break;
+        }
+        case WorldNetworkEvent::Type::HealthSnapshot: {
+            // 阶段25：Boss Bar 血量跟随（服务器快照纠偏）。
+            if (m_bossBar.Visible() && event.entityType == kEntityTypeMonster &&
+                event.entityId == m_bossBar.EntityId()) {
+                m_bossBar.UpdateBoss(event.entityId, event.currentHp, event.maxHp);
+                if (!event.alive || event.currentHp == 0) {
+                    m_bossBar.Hide();
                 }
             }
             break;
         }
+        case WorldNetworkEvent::Type::MonsterDeath: {
+            // 阶段25：Boss 死亡 -> 隐藏 Boss Bar。
+            if (m_bossBar.Visible() && event.monsterEntityId == m_bossBar.EntityId()) {
+                m_bossBar.Hide();
+            }
+            break;
+        }
         case WorldNetworkEvent::Type::SkillCastStartedEvent: {
+            // 阶段25 指令五十：技能 SFX（仅本地玩家施法，避免嘈杂）。
+            if (event.characterId == m_localCharacterId) {
+                if (event.skillId == world::kSkillIdQuickStrike) {
+                    m_audio.PlaySfx(SfxId::SwordAttack);
+                } else if (event.skillId == world::kSkillIdFireBolt) {
+                    m_audio.PlaySfx(SfxId::FireBolt);
+                } else if (event.skillId == world::kSkillIdWhirlwind) {
+                    m_audio.PlaySfx(SfxId::Whirlwind);
+                }
+            }
             // 施法者位置：本地取平滑位置；远程取镜像 render 位置。
             Vector2 from(m_localVisualX, m_localVisualY);
             if (event.characterId != m_localCharacterId) {
@@ -410,6 +630,9 @@ void VisualRuntime::Update(const WorldClientController& world, float deltaTime) 
     if (!m_ready) {
         return;
     }
+    m_worldTimeSeconds += deltaTime;
+    // 阶段25：UI 瞬态推进（Toast/Banner/LevelUp/BossBar/技能槽/设置持久化）。
+    UpdateUiState(world, deltaTime);
 
     // ---- 本地玩家平滑位置（指令十三：服务器权威 + 插值）----
     if (world.IsWorldReady()) {
@@ -1138,8 +1361,146 @@ void VisualRuntime::RenderOverlays(legend::render::SpriteBatch& batch,
 }
 
 // ---------------------------------------------------------------------------
-// HUD（屏幕空间；指令二十九/三十二/三十三）
 // ---------------------------------------------------------------------------
+// 阶段25 指令五十三/五十四：Loading 覆盖层（登录→选角→进世界 链路提示）。
+// ---------------------------------------------------------------------------
+
+void VisualRuntime::RenderLoading(float viewportWidth, float viewportHeight) {
+    if (!m_ready || m_spriteShader == nullptr || !m_text.IsReady()) {
+        return;
+    }
+    m_uiDrawCallBase = m_uiBatch.GetDrawCallCount();
+    m_identityCamera.SetPosition({viewportWidth * 0.5f, viewportHeight * 0.5f});
+    m_identityCamera.SetZoom(1.0f);
+    m_uiBatch.Begin(*m_spriteShader, m_identityCamera, viewportWidth, viewportHeight);
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float scale = ui::UiTheme::ScaleFor(viewportWidth, viewportHeight);
+    // 半透明暗幕 + Loading...（资源预载快时不强制黑屏——轻提示）。
+    m_uiBatch.DrawQuad(*m_whiteTexture, {viewportWidth * 0.5f, viewportHeight * 0.5f},
+                       {viewportWidth / 64.0f, viewportHeight / 64.0f}, 0.0f,
+                       Color(0.0f, 0.0f, 0.0f, 0.45f));
+    m_text.DrawStringShadow(m_uiBatch, {viewportWidth * 0.5f, viewportHeight * 0.5f},
+                            "Loading...", 26.0f * scale, theme.textPrimary, true, true);
+    m_uiBatch.End();
+    m_stats.drawCalls += m_uiBatch.GetDrawCallCount() - m_uiDrawCallBase;
+}
+
+// ---------------------------------------------------------------------------
+// 阶段25 正式 UI（指令十六~六十三）：HUD V2 / SkillBar / Tracker / BossBar /
+// MiniMap / Toast / MapBanner / LevelUp / Dialogue / Shop / Inventory /
+// Character / Settings。布局全部经 UiTheme 参考分辨率（1920×1080）缩放。
+// ---------------------------------------------------------------------------
+
+void VisualRuntime::LoadClientSettings() {
+    std::ifstream file(kClientSettingsPath, std::ios::binary);
+    if (!file) {
+        return; // 首次启动：默认值（新手提示未读过 -> 显示）
+    }
+    auto text = std::string((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    auto json = nlohmann::json::parse(text, nullptr, false);
+    if (json.is_discarded() || !json.is_object()) {
+        return;
+    }
+    const auto readF = [&](const char* key, float fallback) {
+        const auto it = json.find(key);
+        return it != json.end() && it->is_number() ? it->get<float>() : fallback;
+    };
+    const auto readB = [&](const char* key, bool fallback) {
+        const auto it = json.find(key);
+        return it != json.end() && it->is_boolean() ? it->get<bool>() : fallback;
+    };
+    const auto readI = [&](const char* key, int fallback) {
+        const auto it = json.find(key);
+        return it != json.end() && it->is_number_integer() ? it->get<int>() : fallback;
+    };
+    m_masterVolume = readF("masterVolume", m_masterVolume);
+    m_musicVolume = readF("musicVolume", m_musicVolume);
+    m_sfxVolume = readF("sfxVolume", m_sfxVolume);
+    m_fullscreen = readB("fullscreen", m_fullscreen);
+    m_resolutionIndex = readI("resolutionIndex", m_resolutionIndex);
+    m_tutorialShown = readB("tutorialShown", m_tutorialShown);
+}
+
+void VisualRuntime::SaveClientSettings() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories("savedata", ec);
+    nlohmann::json json;
+    json["masterVolume"] = m_masterVolume;
+    json["musicVolume"] = m_musicVolume;
+    json["sfxVolume"] = m_sfxVolume;
+    json["fullscreen"] = m_fullscreen;
+    json["resolutionIndex"] = m_resolutionIndex;
+    json["tutorialShown"] = m_tutorialShown;
+    std::ofstream file(kClientSettingsPath, std::ios::binary | std::ios::trunc);
+    if (file) {
+        file << json.dump(2);
+    }
+    m_settingsDirty = false;
+}
+
+std::vector<VisualRuntime::UiRequest> VisualRuntime::DrainUiRequests() {
+    std::vector<UiRequest> out;
+    out.swap(m_uiRequests);
+    return out;
+}
+
+void VisualRuntime::PushErrorToast(std::uint16_t errorCode) {
+    // 常见服务器错误（指令五十五）：TooFar/NotVisible/Cooldown/NoMana/InventoryFull/
+    // NotEnoughGold/LevelTooLow -> 短 Toast。
+    switch (errorCode) {
+        case 8: m_toasts.Push(ui::ToastLevel::Error, "Too far away"); break;      // TooFar
+        case 7: m_toasts.Push(ui::ToastLevel::Error, "Not visible"); break;       // NotVisible
+        case 10: m_toasts.Push(ui::ToastLevel::Error, "Inventory full"); break;   // InventoryFull
+        case 4: m_toasts.Push(ui::ToastLevel::Error, "Level too low"); break;     // LevelTooLow
+        case 11: m_toasts.Push(ui::ToastLevel::Error, "Not enough gold"); break;  // NotEnoughGold
+        default: break;
+    }
+}
+
+void VisualRuntime::UpdateUiState(const WorldClientController& world, float deltaTime) {
+    m_toasts.Update(deltaTime);
+    m_mapBanner.Update(deltaTime);
+    m_levelUpFx.Update(deltaTime);
+    m_inventoryClickTimer += deltaTime;
+    // 指令五十一：音量实时生效（Settings 拖动立即应用）。
+    m_audio.SetVolumes(m_masterVolume, m_musicVolume, m_sfxVolume);
+    for (auto& slot : m_skillSlots) {
+        if (slot.errorFlash > 0.0f) {
+            slot.errorFlash -= deltaTime;
+        }
+    }
+    // 技能槽 CD 值（m_skillCooldowns 以 skillId 为键——按槽位映射）。
+    const std::uint32_t slotSkills[3] = {world::kSkillIdQuickStrike, world::kSkillIdFireBolt,
+                                         world::kSkillIdWhirlwind};
+    for (int i = 0; i < 3; ++i) {
+        const auto it = m_skillCooldowns.find(slotSkills[i]);
+        m_skillSlots[i].cooldownRemaining = it != m_skillCooldowns.end() ? it->second : 0.0f;
+        m_skillSlots[i].cooldownTotal =
+            m_skillSlots[i].cooldownTotal > 0.0f ? m_skillSlots[i].cooldownTotal : 1.0f;
+    }
+    // Boss Bar 距离隐藏（指令三十四：距离过远隐藏）。
+    if (m_bossBar.Visible()) {
+        const auto* monster = world.RemoteMonsters().Find(m_bossBar.EntityId());
+        if (monster == nullptr) {
+            m_bossBar.Hide();
+        } else {
+            const float dx = monster->RenderX() - m_localVisualX;
+            const float dy = monster->RenderY() - m_localVisualY;
+            if (dx * dx + dy * dy > 1400.0f * 1400.0f) {
+                m_bossBar.Hide();
+            } else {
+                m_bossBar.UpdateBoss(m_bossBar.EntityId(), monster->CurrentHp(),
+                                     monster->MaxHp());
+            }
+        }
+    }
+    // 设置持久化（变更后延迟保存由 SetXxx 触发；此处只在 dirty 时落盘一次/秒级）。
+    if (m_settingsDirty) {
+        SaveClientSettings();
+    }
+}
 
 void VisualRuntime::RenderHUD(const WorldClientController& world, const std::string& playerName,
                               float viewportWidth, float viewportHeight, bool mapDebug) {
@@ -1153,186 +1514,784 @@ void VisualRuntime::RenderHUD(const WorldClientController& world, const std::str
     m_identityCamera.SetZoom(1.0f);
     m_uiBatch.Begin(*m_spriteShader, m_identityCamera, viewportWidth, viewportHeight);
     const bool haveText = m_text.IsReady();
+    const float scale = ui::UiTheme::ScaleFor(viewportWidth, viewportHeight); // 指令六十二/六十三
 
-    // ---- 左上：头像 + 名字 + 等级 + HP/Mana ----
-    DrawPanel(m_uiBatch, {8.0f, 8.0f}, 240.0f, 92.0f);
+    RenderHudV2(world, playerName, viewportWidth, viewportHeight, scale, haveText);
+    RenderSkillBar(world, viewportWidth, viewportHeight, scale, haveText);
+    RenderTracker(world, viewportWidth, scale, haveText);
+    RenderMinimap(world, viewportWidth, viewportHeight, scale, haveText);
+    RenderGlobalOverlays(world, viewportWidth, viewportHeight, scale, haveText);
+
+    // ---- 窗口（Dialogue/Shop/Inventory/Character/Settings；鼠标交互）----
+    {
+        // 鼠标（raw 像素）→ 参考分辨率坐标。
+        const math::Vector2 refMouse(m_lastMouseX / scale, m_lastMouseY / scale);
+        RenderWindows(world, viewportWidth, viewportHeight, scale, haveText, refMouse,
+                      m_lastMouseClicked);
+        m_lastMouseClicked = false; // 消费本帧点击
+    }
+
+    // ---- F9：性能/视觉统计（指令四十二/五十七：默认关闭，F9 开发开关）----
+    if (mapDebug && haveText) {
+        const float s = scale;
+        char statsText[192];
+        std::snprintf(statsText, sizeof(statsText),
+                      "Sprites %d | DrawCalls %d | Textures %d | FX %d",
+                      m_stats.visibleSprites, m_stats.drawCalls, m_stats.texturesLoaded,
+                      m_stats.effectsActive);
+        m_text.DrawString(m_uiBatch, {12.0f * s, viewportHeight - 76.0f * s}, statsText,
+                          13.0f * s, kTextGold);
+        char posText[96];
+        std::snprintf(posText, sizeof(posText), "Pos %.0f,%.0f | map %u",
+                      world.ServerPositionX(), world.ServerPositionY(),
+                      static_cast<unsigned>(world.MapModel().CurrentMapId()));
+        m_text.DrawString(m_uiBatch, {12.0f * s, viewportHeight - 58.0f * s}, posText,
+                          13.0f * s, kTextGold);
+    }
+
+    m_uiBatch.End();
+    m_stats.drawCalls += m_uiBatch.GetDrawCallCount() - m_uiDrawCallBase;
+}
+
+void VisualRuntime::RenderHudV2(const WorldClientController& world, const std::string& playerName,
+                                float viewportWidth, float viewportHeight, float scale,
+                                bool haveText) {
+    (void)viewportHeight;
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float s = scale;
+
+    // ---- 左上：头像 + Name + Lv + HP/Mana/EXP + Gold/Atk/Def（指令二十七 V2）----
+    const float panelW = 250.0f * s;
+    const float panelH = 128.0f * s;
+    DrawPanel(m_uiBatch, {8.0f, 8.0f}, panelW, panelH, 0.75f);
     {
         const int classId = m_localClassId != 0 ? m_localClassId : 1;
         const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(classId);
         if (def != nullptr && !def->portraitAsset.empty()) {
             auto portrait = m_assets.GetTexture(def->portraitAsset, nullptr, "portrait");
             if (portrait != nullptr && portrait->IsValid()) {
-                const float scale = 56.0f / static_cast<float>(portrait->GetWidth());
-                m_uiBatch.DrawQuad(*portrait, {40.0f, 44.0f}, {scale, scale}, 0.0f,
-                                   Color(1, 1, 1, 1));
+                const float iconScale = 56.0f * s / static_cast<float>(portrait->GetWidth());
+                m_uiBatch.DrawQuad(*portrait, {44.0f * s, 50.0f * s}, {iconScale, iconScale},
+                                   0.0f, Color(1, 1, 1, 1));
             }
         }
         if (haveText) {
             const std::string displayName =
                 playerName.empty() ? (m_localName.empty() ? std::string("Player") : m_localName)
                                    : playerName;
-            m_text.DrawString(m_uiBatch, {78.0f, 14.0f}, displayName, 15.0f, kTextWhite);
-            char levelText[64];
-            std::snprintf(levelText, sizeof(levelText), "Lv.%u  Gold %lld",
-                          static_cast<unsigned>(world.LocalLevel()),
-                          static_cast<long long>(world.LocalGold()));
-            m_text.DrawString(m_uiBatch, {78.0f, 34.0f}, levelText, 12.0f, kTextGray);
+            m_text.DrawString(m_uiBatch, {84.0f * s, 14.0f * s}, displayName, 15.0f * s,
+                              theme.textPrimary);
+            char line[128];
+            std::snprintf(line, sizeof(line), "Lv.%u", static_cast<unsigned>(world.LocalLevel()));
+            m_text.DrawString(m_uiBatch, {84.0f * s, 34.0f * s}, line, 13.0f * s, theme.textDim);
         }
+        // HP / Mana / EXP 三条（指令二十七：EXP Bar）。
+        const float barX = 84.0f * s;
+        const float barW = 156.0f * s;
         const float hpPct =
             world.LocalMaxHp() > 0
                 ? static_cast<float>(world.LocalCurrentHp()) / static_cast<float>(world.LocalMaxHp())
                 : 0.0f;
-        DrawBar(m_uiBatch, {78.0f, 54.0f}, 160.0f, 12.0f, hpPct,
-                hpPct > 0.35f ? Color(0.30f, 0.80f, 0.35f, 0.95f) : kHpFill);
+        DrawBar(m_uiBatch, {barX, 54.0f * s}, barW, 13.0f * s, hpPct, theme.hpFill);
         if (haveText) {
             char hpText[64];
             std::snprintf(hpText, sizeof(hpText), "HP %u/%u",
                           static_cast<unsigned>(world.LocalCurrentHp()),
                           static_cast<unsigned>(world.LocalMaxHp()));
-            m_text.DrawString(m_uiBatch, {84.0f, 55.0f}, hpText, 11.0f, kTextWhite);
+            m_text.DrawString(m_uiBatch, {barX + 6.0f * s, 55.0f * s}, hpText, 10.0f * s,
+                              theme.textPrimary);
         }
         const float manaPct =
             world.LocalMaxMana() > 0
                 ? static_cast<float>(world.LocalCurrentMana()) /
                       static_cast<float>(world.LocalMaxMana())
                 : 0.0f;
-        DrawBar(m_uiBatch, {78.0f, 72.0f}, 160.0f, 10.0f, manaPct, kManaFill);
+        DrawBar(m_uiBatch, {barX, 72.0f * s}, barW, 11.0f * s, manaPct, theme.manaFill);
         if (haveText) {
             char manaText[64];
             std::snprintf(manaText, sizeof(manaText), "MP %u/%u",
                           static_cast<unsigned>(world.LocalCurrentMana()),
                           static_cast<unsigned>(world.LocalMaxMana()));
-            m_text.DrawString(m_uiBatch, {84.0f, 72.5f}, manaText, 10.0f, kTextWhite);
+            m_text.DrawString(m_uiBatch, {barX + 6.0f * s, 72.5f * s}, manaText, 9.0f * s,
+                              theme.textPrimary);
+        }
+        const float expPct = world.LocalExpToNext() > 0
+                                 ? static_cast<float>(world.LocalExperience()) /
+                                       static_cast<float>(world.LocalExpToNext())
+                                 : 0.0f;
+        DrawBar(m_uiBatch, {barX, 88.0f * s}, barW, 7.0f * s, expPct, theme.expFill);
+        // Gold / Attack / Defense（指令十五：装备后立即变化——数值来自服务器事件镜像）。
+        if (haveText) {
+            char line2[128];
+            std::snprintf(line2, sizeof(line2), "Gold %lld   ATK %u   DEF %u",
+                          static_cast<long long>(world.LocalGold()),
+                          static_cast<unsigned>(world.LocalAttackPower()),
+                          static_cast<unsigned>(world.LocalDefensePower()));
+            m_text.DrawString(m_uiBatch, {20.0f * s, 108.0f * s}, line2, 12.0f * s,
+                              theme.textGold);
         }
     }
+}
 
-    // ---- 底部：Skill Bar 1001/1002/1003（指令三十二）----
-    {
-        const std::uint32_t slotSkills[3] = {world::kSkillIdQuickStrike, world::kSkillIdFireBolt,
-                                             world::kSkillIdWhirlwind};
-        const char* slotIcons[3] = {"ui_icon_skill_1001", "ui_icon_skill_1002",
-                                    "ui_icon_skill_1003"};
-        const float slotSize = 50.0f;
-        const float gap = 8.0f;
-        const float totalW = slotSize * 3.0f + gap * 2.0f;
-        const float startX = (viewportWidth - totalW) * 0.5f;
-        const float slotY = viewportHeight - slotSize - 12.0f;
-        for (int i = 0; i < 3; ++i) {
-            const Vector2 topLeft(startX + static_cast<float>(i) * (slotSize + gap), slotY);
-            DrawPanel(m_uiBatch, topLeft, slotSize, slotSize, 0.75f);
-            auto icon = m_assets.GetTexture(slotIcons[i], nullptr, "skillbar");
-            if (icon != nullptr && icon->IsValid()) {
-                const float iconSize = slotSize - 10.0f;
-                const float scale = iconSize / static_cast<float>(icon->GetWidth());
-                m_uiBatch.DrawQuad(*icon, topLeft + Vector2(slotSize * 0.5f, slotSize * 0.5f),
-                                   {scale, scale}, 0.0f, Color(1, 1, 1, 1));
-            }
-            // Mana 不足：蓝色遮罩（服务器仍权威决定能否释放）
-            const visual::SkillDisplay* display = m_catalog->FindSkillDisplay(slotSkills[i]);
-            if (display != nullptr &&
-                world.LocalCurrentMana() < display->manaCost) {
-                m_uiBatch.DrawQuad(*m_whiteTexture,
-                                   topLeft + Vector2(slotSize * 0.5f, slotSize * 0.5f),
-                                   {(slotSize - 4.0f) / 64.0f, (slotSize - 4.0f) / 64.0f}, 0.0f,
-                                   Color(0.20f, 0.35f, 0.85f, 0.45f));
-            }
-            // CD 遮罩（自上而下收缩）
-            const auto cdIt = m_skillCooldowns.find(slotSkills[i]);
-            if (cdIt != m_skillCooldowns.end() && display != nullptr &&
-                display->cooldownSeconds > 0.0f) {
-                const float pct =
-                    std::clamp(cdIt->second / display->cooldownSeconds, 0.0f, 1.0f);
-                const float maskH = (slotSize - 4.0f) * pct;
-                m_uiBatch.DrawQuad(*m_whiteTexture,
-                                   topLeft + Vector2(slotSize * 0.5f, 2.0f + maskH * 0.5f),
-                                   {(slotSize - 4.0f) / 64.0f, maskH / 64.0f}, 0.0f,
-                                   Color(0.05f, 0.05f, 0.08f, 0.65f));
-                if (haveText) {
-                    char cdText[32];
-                    std::snprintf(cdText, sizeof(cdText), "%.1f", cdIt->second);
-                    m_text.DrawString(m_uiBatch, topLeft + Vector2(slotSize * 0.5f, slotSize * 0.4f),
-                                    cdText, 13.0f, kTextWhite, false, true);
-                }
-            }
+void VisualRuntime::RenderSkillBar(const WorldClientController& world, float viewportWidth,
+                                   float viewportHeight, float scale, bool haveText) {
+    (void)world;
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float s = scale;
+    const float slotSize = 52.0f * s;
+    const float gap = 8.0f * s;
+    const float totalW = slotSize * 3.0f + gap * 2.0f;
+    const float startX = (viewportWidth - totalW) * 0.5f;
+    const float slotY = viewportHeight - slotSize - 12.0f * s;
+    for (int i = 0; i < 3; ++i) {
+        const ui::SkillSlotState& slot = m_skillSlots[i];
+        const Vector2 topLeft(startX + static_cast<float>(i) * (slotSize + gap), slotY);
+        DrawPanel(m_uiBatch, topLeft, slotSize, slotSize, 0.8f);
+        auto icon = m_assets.GetTexture(slot.iconAsset, nullptr, "skillbar");
+        if (icon != nullptr && icon->IsValid()) {
+            const float iconScale = (slotSize - 10.0f * s) / static_cast<float>(icon->GetWidth());
+            m_uiBatch.DrawQuad(*icon, topLeft + Vector2(slotSize * 0.5f, slotSize * 0.5f),
+                               {iconScale, iconScale}, 0.0f, Color(1, 1, 1, 1));
+        }
+        // Mana 不足：蓝色遮罩（服务器仍权威）。
+        if (slot.ManaInsufficient(world.LocalCurrentMana())) {
+            m_uiBatch.DrawQuad(*m_whiteTexture,
+                               topLeft + Vector2(slotSize * 0.5f, slotSize * 0.5f),
+                               {(slotSize - 4.0f * s) / 64.0f, (slotSize - 4.0f * s) / 64.0f},
+                               0.0f, Color(0.20f, 0.35f, 0.85f, 0.45f));
+        }
+        // CD 遮罩（自上而下收缩）+ 倒计时文本（指令二十八：槽位视觉倒计时）。
+        if (slot.cooldownRemaining > 0.0f && slot.cooldownTotal > 0.0f) {
+            const float pct = std::clamp(slot.cooldownRemaining / slot.cooldownTotal, 0.0f, 1.0f);
+            const float maskH = (slotSize - 4.0f * s) * pct;
+            m_uiBatch.DrawQuad(*m_whiteTexture,
+                               topLeft + Vector2(slotSize * 0.5f, 2.0f * s + maskH * 0.5f),
+                               {(slotSize - 4.0f * s) / 64.0f, maskH / 64.0f}, 0.0f,
+                               Color(0.05f, 0.05f, 0.08f, 0.65f));
             if (haveText) {
-                char keyText[8];
-                std::snprintf(keyText, sizeof(keyText), "%d", i + 1);
-                m_text.DrawString(m_uiBatch, topLeft + Vector2(4.0f, 2.0f), keyText, 11.0f,
-                                kTextGold);
+                char cdText[32];
+                std::snprintf(cdText, sizeof(cdText), "%.1f", slot.cooldownRemaining);
+                m_text.DrawString(m_uiBatch,
+                                  topLeft + Vector2(slotSize * 0.5f, slotSize * 0.4f), cdText,
+                                  13.0f * s, theme.textPrimary, false, true);
             }
         }
+        // 指令二十九/三十：失败红闪。
+        if (slot.errorFlash > 0.0f) {
+            const float a = std::clamp(slot.errorFlash / 0.6f, 0.0f, 1.0f) * 0.5f;
+            m_uiBatch.DrawQuad(*m_whiteTexture,
+                               topLeft + Vector2(slotSize * 0.5f, slotSize * 0.5f),
+                               {(slotSize - 2.0f * s) / 64.0f, (slotSize - 2.0f * s) / 64.0f},
+                               0.0f, Color(1.0f, 0.15f, 0.1f, a));
+        }
+        if (haveText) {
+            char keyText[8];
+            std::snprintf(keyText, sizeof(keyText), "%d", i + 1);
+            m_text.DrawString(m_uiBatch, topLeft + Vector2(4.0f * s, 2.0f * s), keyText,
+                              11.0f * s, theme.textGold);
+        }
     }
+}
 
-    // ---- 右上：地图名（指令三十三）----
+void VisualRuntime::RenderTracker(const WorldClientController& world, float viewportWidth,
+                                  float scale, bool haveText) {
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float s = scale;
+    // 指令二十一：右侧 Tracker 正式化，最多 3 个 Active Quest。
+    std::vector<ui::QuestTrackerEntry> entries;
+    for (const auto& [questId, state] : world.Quests().All()) {
+        if (state.state != world::QuestState::InProgress &&
+            state.state != world::QuestState::ReadyToTurnIn) {
+            continue;
+        }
+        ui::QuestTrackerEntry entry;
+        entry.questId = questId;
+        const visual::QuestDisplay* display = m_catalog->FindQuestDisplay(questId);
+        entry.title = display != nullptr ? display->name : ("Quest " + std::to_string(questId));
+        entry.readyToTurnIn = state.state == world::QuestState::ReadyToTurnIn;
+        // 目标文案（展示字段来自 quests.json；进度来自服务器事件镜像）。
+        if (display != nullptr && !display->objectives.empty()) {
+            const auto& objective = display->objectives.front();
+            if (!state.objectives.empty()) {
+                const auto& progress = state.objectives.begin()->second;
+                entry.current = progress.current;
+                entry.required = progress.required;
+            }
+            if (objective.type == "KillMonster") {
+                entry.objectiveText = "Slay";
+            } else if (objective.type == "CollectItem") {
+                entry.objectiveText = "Collect";
+            } else if (objective.type == "ReachLevel") {
+                entry.objectiveText = "Reach level";
+            } else if (objective.type == "ReachArea") {
+                entry.objectiveText = "Explore";
+            } else {
+                entry.objectiveText = "Progress";
+            }
+        }
+        entries.push_back(std::move(entry));
+        if (entries.size() >= 3) {
+            break;
+        }
+    }
+    if (entries.empty()) {
+        return;
+    }
+    const float trackerX = viewportWidth - 262.0f * s;
+    float trackerY = 60.0f * s;
+    DrawPanel(m_uiBatch, {trackerX, trackerY - 6.0f * s}, 250.0f * s, 26.0f * s, 0.6f);
     if (haveText) {
-        const std::string& mapName = world.MapModel().CurrentMapName();
-        m_text.DrawStringShadow(m_uiBatch, {viewportWidth - 12.0f, 12.0f},
-                              mapName.empty() ? std::string("Unknown Map") : mapName, 18.0f,
-                              kTextWhite, true, false);
+        m_text.DrawString(m_uiBatch, {trackerX + 8.0f * s, trackerY - 4.0f * s},
+                          "Quest Tracker", 13.0f * s, theme.textGold);
     }
+    trackerY += 24.0f * s;
+    for (const auto& entry : entries) {
+        char line[192];
+        if (entry.readyToTurnIn) {
+            std::snprintf(line, sizeof(line), "%s — Ready to Turn In!", entry.title.c_str());
+        } else {
+            std::snprintf(line, sizeof(line), "%s\n  %s %u/%u", entry.title.c_str(),
+                          entry.objectiveText.c_str(), static_cast<unsigned>(entry.current),
+                          static_cast<unsigned>(entry.required));
+        }
+        const float rowH = 34.0f * s;
+        DrawPanel(m_uiBatch, {trackerX, trackerY - 4.0f * s}, 250.0f * s, rowH, 0.45f);
+        if (haveText) {
+            // 单行显示（标题 + 进度），换行手动画第二行。
+            const std::string text(line);
+            const auto nl = text.find('\n');
+            m_text.DrawString(m_uiBatch, {trackerX + 8.0f * s, trackerY},
+                              text.substr(0, nl == std::string::npos ? text.size() : nl),
+                              12.0f * s,
+                              entry.readyToTurnIn ? theme.textGold : theme.textPrimary);
+            if (nl != std::string::npos) {
+                m_text.DrawString(m_uiBatch, {trackerX + 20.0f * s, trackerY + 16.0f * s},
+                                  text.substr(nl + 1), 11.0f * s, theme.textDim);
+            }
+        }
+        trackerY += rowH + 4.0f * s;
+    }
+}
 
-    // ---- 右侧：Quest Tracker（指令二十九）----
-    if (!world.Quests().All().empty()) {
-        float trackerY = 60.0f;
-        const float trackerX = viewportWidth - 262.0f;
-        int shown = 0;
-        for (const auto& [questId, state] : world.Quests().All()) {
-            if (state.state != world::QuestState::InProgress &&
-                state.state != world::QuestState::ReadyToTurnIn) {
-                continue;
+void VisualRuntime::RenderMinimap(const WorldClientController& world, float viewportWidth,
+                                  float viewportHeight, float scale, bool haveText) {
+    (void)haveText;
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float s = scale;
+    // 指令三十七/三十八：右上小地图（玩家/NPC/Portal/任务 NPC；只显示 AOI 已知实体）。
+    const float size = 150.0f * s;
+    const float x0 = viewportWidth - size - 12.0f;
+    const float y0 = 40.0f * s;
+    DrawPanel(m_uiBatch, {x0, y0}, size, size, 0.6f);
+    m_uiBatch.DrawQuad(*m_whiteTexture, {x0 + size * 0.5f, y0 + size * 0.5f},
+                       {size / 64.0f, size / 64.0f}, 0.0f, Color(0.10f, 0.16f, 0.10f, 0.85f));
+
+    const ui::MinimapModel model = BuildMinimapModel(world);
+    auto toScreen = [&](float wx, float wy) {
+        return Vector2(x0 + model.NormalizeX(wx) * size, y0 + model.NormalizeY(wy) * size);
+    };
+    // NPC（任务 NPC 金色/其余白点）。
+    for (const auto& blip : model.npcs) {
+        const Vector2 p = toScreen(blip.x, blip.y);
+        m_uiBatch.DrawQuad(*m_whiteTexture, p, {3.0f * s / 64.0f, 3.0f * s / 64.0f}, 0.0f,
+                           blip.isQuestGiver ? theme.textGold : theme.textPrimary);
+    }
+    // Portal（蓝色点）。
+    for (const auto& blip : model.portals) {
+        const Vector2 p = toScreen(blip.x, blip.y);
+        m_uiBatch.DrawQuad(*m_whiteTexture, p, {4.0f * s / 64.0f, 4.0f * s / 64.0f}, 0.0f,
+                           theme.manaFill);
+    }
+    // 玩家（绿色点）。
+    const Vector2 player = toScreen(model.playerX, model.playerY);
+    m_uiBatch.DrawQuad(*m_whiteTexture, player, {4.0f * s / 64.0f, 4.0f * s / 64.0f}, 0.0f,
+                       theme.textSuccess);
+}
+
+void VisualRuntime::RenderGlobalOverlays(const WorldClientController& world,
+                                         float viewportWidth, float viewportHeight, float scale,
+                                         bool haveText) {
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float s = scale;
+    // ---- Boss Bar（指令三十四：顶部 Boss Name + HP Bar）----
+    if (m_bossBar.Visible()) {
+        const float w = 520.0f * s;
+        const float x = (viewportWidth - w) * 0.5f;
+        const float y = 18.0f * s;
+        DrawPanel(m_uiBatch, {x, y}, w, 40.0f * s, 0.75f);
+        if (haveText) {
+            m_text.DrawString(m_uiBatch, {viewportWidth * 0.5f, y + 4.0f * s}, m_bossBar.Name(),
+                              14.0f * s, theme.textPrimary, false, true);
+        }
+        DrawBar(m_uiBatch, {x + 10.0f * s, y + 24.0f * s}, w - 20.0f * s, 10.0f * s,
+                m_bossBar.HpPct(), theme.bossHpFill);
+    }
+    // ---- Map Enter Banner（指令三十六）----
+    if (m_mapBanner.Active() && haveText) {
+        const float a = m_mapBanner.Alpha();
+        m_text.DrawStringShadow(m_uiBatch, {viewportWidth * 0.5f, viewportHeight * 0.30f},
+                                m_mapBanner.Text(), 34.0f * s,
+                                Color(theme.bannerText.r, theme.bannerText.g,
+                                      theme.bannerText.b, a),
+                                true, true);
+    }
+    // ---- Level Up（指令二十三：屏幕中央 LEVEL UP! 1.5~2s）----
+    if (m_levelUpFx.Active() && haveText) {
+        const float a = m_levelUpFx.Alpha();
+        m_text.DrawStringShadow(m_uiBatch, {viewportWidth * 0.5f, viewportHeight * 0.42f},
+                                "LEVEL UP!", 42.0f * s,
+                                Color(theme.levelUpText.r, theme.levelUpText.g,
+                                      theme.levelUpText.b, a),
+                                true, true);
+    }
+    // ---- Toast（指令五十六：右下角，最大 5 条，自动淡出）----
+    if (haveText) {
+        float ty = viewportHeight - 100.0f * s;
+        for (const auto& toast : m_toasts.Active()) {
+            const Color base = toast.level == ui::ToastLevel::Success ? theme.toastSuccess
+                               : toast.level == ui::ToastLevel::Warning ? theme.toastWarning
+                               : toast.level == ui::ToastLevel::Error   ? theme.toastError
+                                                                        : theme.toastInfo;
+            const float alpha = toast.Alpha();
+            const float w = 340.0f * s;
+            const float h = 22.0f * s;
+            m_uiBatch.DrawQuad(*m_whiteTexture,
+                               {viewportWidth - w * 0.5f - 12.0f * s, ty + h * 0.5f},
+                               {w / 64.0f, h / 64.0f}, 0.0f,
+                               Color(base.r, base.g, base.b, 0.85f * alpha));
+            m_text.DrawString(m_uiBatch, {viewportWidth - w - 22.0f * s, ty + 4.0f * s},
+                              toast.text, 12.0f * s,
+                              Color(theme.textPrimary.r, theme.textPrimary.g,
+                                    theme.textPrimary.b, alpha));
+            ty -= (h + 4.0f * s);
+        }
+    }
+    // ---- 新手提示（指令六：第一次进入显示，仅一次，本地保存）----
+    if (haveText && !m_tutorialShown && world.IsWorldReady()) {
+        const char* hintLines[] = {
+            "WASD / Arrow Keys = Move",
+            "E = Interact    F = Portal",
+            "1 / 2 / 3 = Skills",
+            "I = Inventory   C = Character",
+        };
+        const float boxW = 300.0f * s;
+        const float boxH = 96.0f * s;
+        const float bx = (viewportWidth - boxW) * 0.5f;
+        const float by = viewportHeight * 0.60f;
+        DrawPanel(m_uiBatch, {bx, by}, boxW, boxH, 0.8f);
+        float ly = by + 12.0f * s;
+        for (const char* lineText : hintLines) {
+            m_text.DrawString(m_uiBatch, {bx + 24.0f * s, ly}, lineText, 14.0f * s,
+                              theme.textPrimary);
+            ly += 22.0f * s;
+        }
+        // 20 秒后或按任意移动键（Update 侧判定）自动消失并保存。
+        if (m_worldTimeSeconds > 20.0f) {
+            m_tutorialShown = true;
+            m_settingsDirty = true;
+        }
+    }
+}
+
+// ---- MiniMap 数据（指令三十七/三十八：只显示 AOI 已知实体 + 当前图过滤）----
+ui::MinimapModel VisualRuntime::BuildMinimapModel(const WorldClientController& world) const {
+    ui::MinimapModel model;
+    const auto& mapModel = world.MapModel();
+    model.playerX = world.ServerPositionX();
+    model.playerY = world.ServerPositionY();
+    model.minX = mapModel.MinX();
+    model.minY = mapModel.MinY();
+    model.maxX = mapModel.MaxX();
+    model.maxY = mapModel.MaxY();
+    const std::uint16_t mapId = mapModel.CurrentMapId();
+    for (const auto& [npcEntityId, npc] : world.Npcs().All()) {
+        if (npc.mapId != mapId) {
+            continue;
+        }
+        model.npcs.push_back({npc.x, npc.y,
+                              npc.questMarker != world::NpcQuestMarker::None});
+    }
+    for (const auto& [portalEntityId, portal] : world.Portals().All()) {
+        if (portal.mapId != mapId || !portal.active) {
+            continue;
+        }
+        model.portals.push_back({portal.x, portal.y, false});
+    }
+    return model;
+}
+
+void VisualRuntime::HandleUiMouse(const WorldClientController& world,
+                                  const math::Vector2& refMouse, bool clicked, float scale) {
+    (void)world;
+    (void)refMouse;
+    (void)clicked;
+    (void)scale;
+    // 预留：复杂命中测试集中在 RenderWindows 内联处理。
+}
+
+void VisualRuntime::RenderWindows(const WorldClientController& world, float viewportWidth,
+                                  float viewportHeight, float scale, bool haveText,
+                                  const math::Vector2& refMouse, bool mouseClicked) {
+    const ui::UiTheme& theme = ui::DefaultUiTheme();
+    const float s = scale;
+    (void)viewportWidth;
+    (void)viewportHeight;
+
+    // 参考坐标 -> 屏幕像素。
+    auto P = [&](float x, float y) { return Vector2(x * s, y * s); };
+    auto inRect = [&](float x, float y, float w, float h) {
+        return refMouse.x >= x && refMouse.x <= x + w && refMouse.y >= y && refMouse.y <= y + h;
+    };
+    auto button = [&](float x, float y, float w, float h, const std::string& label,
+                      bool enabled) {
+        const bool hover = enabled && inRect(x, y, w, h);
+        const Color c = !enabled ? theme.buttonDisabled
+                                 : hover ? theme.buttonHover : theme.buttonNormal;
+        m_uiBatch.DrawQuad(*m_whiteTexture, P(x + w * 0.5f, y + h * 0.5f),
+                           {w * s / 64.0f, h * s / 64.0f}, 0.0f, c);
+        if (haveText && !label.empty()) {
+            m_text.DrawString(m_uiBatch, P(x + 8.0f, y + h * 0.5f - 7.0f), label, 13.0f * s,
+                              enabled ? theme.textPrimary : theme.textDim);
+        }
+        return enabled && hover && mouseClicked;
+    };
+    auto windowBg = [&](float x, float y, float w, float h, const std::string& title) {
+        DrawPanel(m_uiBatch, P(x, y), w * s, h * s, 0.88f);
+        if (haveText && !title.empty()) {
+            m_text.DrawString(m_uiBatch, P(x + 12.0f, y + 8.0f), title, 16.0f * s,
+                              theme.textGold);
+        }
+    };
+    auto drawIcon = [&](const std::string& assetId, float cx, float cy, float sizePx) {
+        if (assetId.empty()) {
+            return;
+        }
+        auto tex = m_assets.GetTexture(assetId, nullptr, "ui-item");
+        if (tex != nullptr && tex->IsValid()) {
+            const float k = sizePx * s / static_cast<float>(tex->GetWidth());
+            m_uiBatch.DrawQuad(*tex, P(cx, cy), {k, k}, 0.0f, Color(1, 1, 1, 1));
+        } else {
+            m_uiBatch.DrawQuad(*m_whiteTexture, P(cx, cy), {sizePx * s / 64.0f, sizePx * s / 64.0f},
+                               0.0f, theme.panelSlotSelected);
+        }
+    };
+
+    // ================= Dialogue（指令二十：NPC Name / Text / Options）=================
+    if (world.Dialogue().Active()) {
+        const float w = 460.0f;
+        const float h = 300.0f;
+        const float x = 60.0f;
+        const float y = 380.0f;
+        windowBg(x, y, w, h, world.Dialogue().Title());
+        if (haveText) {
+            m_text.DrawString(m_uiBatch, P(x + 12.0f, y + 34.0f), world.Dialogue().Text(),
+                              13.0f * s, theme.textPrimary);
+        }
+        float oy = y + 90.0f;
+        int idx = 1;
+        for (const auto& option : world.Dialogue().Options()) {
+            std::string label = std::to_string(idx) + ". " + option.label;
+            // 指令七：交互提示语义（Shop/Travel/Quest）已在服务器 label 中。
+            if (button(x + 14.0f, oy, w - 28.0f, 30.0f, label, true)) {
+                UiRequest req;
+                req.kind = UiRequest::Kind::DialogueOption;
+                req.index = idx;
+                m_uiRequests.push_back(req);
             }
-            if (shown == 0) {
-                DrawPanel(m_uiBatch, {trackerX, trackerY - 6.0f}, 250.0f, 26.0f, 0.6f);
-                if (haveText) {
-                    m_text.DrawString(m_uiBatch, {trackerX + 8.0f, trackerY - 4.0f},
-                                    "Quest Tracker", 13.0f, kTextGold);
-                }
-                trackerY += 24.0f;
-            }
-            const visual::QuestDisplay* display = m_catalog->FindQuestDisplay(questId);
-            std::uint32_t currentSum = 0;
-            std::uint32_t requiredSum = 0;
-            for (const auto& [objectiveId, progress] : state.objectives) {
-                (void)objectiveId;
-                currentSum += progress.current;
-                requiredSum += progress.required;
-            }
-            char line[160];
-            std::snprintf(line, sizeof(line), "%s  %u/%u",
-                          display != nullptr ? display->name.c_str() : "Quest",
-                          static_cast<unsigned>(currentSum), static_cast<unsigned>(requiredSum));
-            DrawPanel(m_uiBatch, {trackerX, trackerY - 4.0f}, 250.0f, 24.0f, 0.45f);
-            if (haveText) {
-                m_text.DrawString(m_uiBatch, {trackerX + 8.0f, trackerY},
-                                line, 12.0f,
-                                state.state == world::QuestState::ReadyToTurnIn ? kTextGold
-                                                                                : kTextWhite);
-            }
-            trackerY += 26.0f;
-            if (++shown >= 6) {
+            oy += 36.0f;
+            ++idx;
+            if (idx > 9) {
                 break;
             }
         }
     }
 
-    // ---- F9：性能/视觉统计（指令四十二）----
-    if (mapDebug && haveText) {
-        char statsText[192];
-        std::snprintf(statsText, sizeof(statsText),
-                      "Sprites %d | DrawCalls %d | Textures %d | FX %d",
-                      m_stats.visibleSprites, m_stats.drawCalls, m_stats.texturesLoaded,
-                      m_stats.effectsActive);
-        m_text.DrawString(m_uiBatch, {12.0f, viewportHeight - 76.0f}, statsText, 13.0f,
-                        kTextGold);
-        char posText[96];
-        std::snprintf(posText, sizeof(posText), "Pos %.0f,%.0f | map %u",
-                      world.ServerPositionX(), world.ServerPositionY(),
-                      static_cast<unsigned>(world.MapModel().CurrentMapId()));
-        m_text.DrawString(m_uiBatch, {12.0f, viewportHeight - 58.0f}, posText, 13.0f, kTextGold);
+    // ================= Shop（指令十九：Icon/Name/Price/Buy + Gold）=================
+    if (world.Shop().Active()) {
+        const float w = 420.0f;
+        const float h = 420.0f;
+        const float x = 940.0f;
+        const float y = 180.0f;
+        windowBg(x, y, w, h, "Shop");
+        char gold[64];
+        std::snprintf(gold, sizeof(gold), "Gold: %lld",
+                      static_cast<long long>(world.LocalGold()));
+        if (haveText) {
+            m_text.DrawString(m_uiBatch, P(x + w - 140.0f, y + 10.0f), gold, 14.0f * s,
+                              theme.textGold);
+        }
+        float ey = y + 40.0f;
+        int entryIdx = 0;
+        for (const auto& entry : world.Shop().Entries()) {
+            const bool selected = m_selectedShopIndex == entryIdx;
+            const bool hover = inRect(x + 10.0f, ey, w - 20.0f, 34.0f);
+            if (hover && mouseClicked) {
+                m_selectedShopIndex = entryIdx;
+                mouseClicked = false;
+            }
+            m_uiBatch.DrawQuad(*m_whiteTexture, P(x + 10.0f + (w - 20.0f) * 0.5f, ey + 17.0f),
+                               {(w - 20.0f) * s / 64.0f, 34.0f * s / 64.0f}, 0.0f,
+                               selected ? theme.panelSlotSelected : theme.panelSlot);
+            drawIcon(m_itemDisplay.IconAsset(entry.itemDefinitionId), x + 28.0f, ey + 17.0f, 24.0f);
+            if (haveText) {
+                char line[160];
+                std::snprintf(line, sizeof(line), "%s  -  %u G%s",
+                              m_itemDisplay.DisplayName(entry.itemDefinitionId).c_str(),
+                              entry.buyPrice,
+                              entry.canBuy ? "" : "  (cannot buy)");
+                m_text.DrawString(m_uiBatch, P(x + 48.0f, ey + 9.0f), line, 13.0f * s,
+                                  theme.textPrimary);
+            }
+            ey += 38.0f;
+            ++entryIdx;
+            if (entryIdx >= 8) {
+                break;
+            }
+        }
+        // Buy 选中条目（服务器权威）。
+        if (button(x + w - 150.0f, y + h - 46.0f, 130.0f, 32.0f, "Buy", m_selectedShopIndex >= 0)) {
+            UiRequest req;
+            req.kind = UiRequest::Kind::ShopBuy;
+            req.index = m_selectedShopIndex;
+            m_uiRequests.push_back(req);
+        }
+        // Sell：卖出背包选中物品（Material/装备皆可——服务器验证价格）。
+        if (button(x + w - 290.0f, y + h - 46.0f, 130.0f, 32.0f, "Sell",
+                   m_selectedInventorySlot >= 0)) {
+            const auto& slot = world.Inventory().Slot(
+                static_cast<std::size_t>(m_selectedInventorySlot));
+            if (slot.instanceId != 0) {
+                UiRequest req;
+                req.kind = UiRequest::Kind::ShopSell;
+                req.instanceId = slot.instanceId;
+                m_uiRequests.push_back(req);
+            }
+        }
     }
 
-    m_uiBatch.End();
-    m_stats.drawCalls += m_uiBatch.GetDrawCallCount() - m_uiDrawCallBase;
+    // ================= Inventory（指令十七/十八：40 格 + Tooltip + 双击装备）====
+    if (m_inventoryVisible) {
+        const float w = 470.0f;
+        const float h = 330.0f;
+        const float x = 940.0f;
+        const float y = 180.0f;
+        windowBg(x, y, w, h, "Inventory (I)");
+        const float cell = 44.0f;
+        const float gap = 5.0f;
+        for (std::size_t i = 0; i < ui::InventoryUiModel::kSlots; ++i) {
+            const int col = static_cast<int>(i % 8);
+            const int row = static_cast<int>(i / 8);
+            const float cx = x + 14.0f + col * (cell + gap);
+            const float cy = y + 40.0f + row * (cell + gap);
+            const auto& slot = world.Inventory().Slot(i);
+            const bool selected = m_selectedInventorySlot == static_cast<int>(i);
+            const bool hover = inRect(cx, cy, cell, cell);
+            Color bg = theme.panelSlot;
+            const ui::ItemDisplay* display =
+                slot.quantity > 0 ? m_itemDisplay.Find(slot.definitionId) : nullptr;
+            if (display != nullptr && display->isEquipment()) {
+                bg = Color(bg.r, bg.g * 0.8f, bg.b * 0.6f, bg.a); // 装备边框感（暖色）
+            }
+            m_uiBatch.DrawQuad(*m_whiteTexture, P(cx + cell * 0.5f, cy + cell * 0.5f),
+                               {cell * s / 64.0f, cell * s / 64.0f}, 0.0f,
+                               selected ? theme.panelSlotSelected : bg);
+            if (slot.quantity > 0) {
+                drawIcon(m_itemDisplay.IconAsset(slot.definitionId), cx + cell * 0.5f,
+                         cy + cell * 0.5f, 28.0f);
+                if (haveText && slot.quantity > 1) {
+                    char qty[16];
+                    std::snprintf(qty, sizeof(qty), "%u", slot.quantity);
+                    m_text.DrawString(m_uiBatch, P(cx + cell - 16.0f, cy + cell - 16.0f), qty,
+                                      11.0f * s, theme.textPrimary, false, true);
+                }
+            }
+            if (hover && mouseClicked) {
+                if (m_lastClickedInventorySlot == static_cast<int>(i) &&
+                    m_inventoryClickTimer < 0.4f) {
+                    // 指令十八：双击 Equip（服务器依旧权威）。
+                    if (slot.quantity > 0 && display != nullptr && display->isEquipment()) {
+                        UiRequest req;
+                        req.kind = UiRequest::Kind::EquipDefinition;
+                        req.definitionId = slot.definitionId;
+                        m_uiRequests.push_back(req);
+                    }
+                    m_lastClickedInventorySlot = -1;
+                } else {
+                    m_selectedInventorySlot = static_cast<int>(i);
+                    m_lastClickedInventorySlot = static_cast<int>(i);
+                    m_inventoryClickTimer = 0.0f;
+                }
+                mouseClicked = false;
+            }
+        }
+        // Tooltip（指令十七：Name/Type/Attack/Defense/Sell Price）。
+        if (m_selectedInventorySlot >= 0) {
+            const auto& slot =
+                world.Inventory().Slot(static_cast<std::size_t>(m_selectedInventorySlot));
+            if (slot.quantity > 0) {
+                const ui::ItemDisplay* display = m_itemDisplay.Find(slot.definitionId);
+                if (display != nullptr) {
+                    const float tw = 200.0f;
+                    const float th = 110.0f;
+                    const float tx = x - tw - 12.0f;
+                    const float ty = y + 40.0f;
+                    windowBg(tx, ty, tw, th, display->name);
+                    if (haveText) {
+                        char line[128];
+                        std::snprintf(line, sizeof(line), "Type: %s (%s)",
+                                      display->type.c_str(), display->equipSlot.c_str());
+                        m_text.DrawString(m_uiBatch, P(tx + 12.0f, ty + 34.0f), line, 12.0f * s,
+                                          theme.textDim);
+                        std::snprintf(line, sizeof(line), "ATK +%u   DEF +%u",
+                                      display->attackBonus, display->defenseBonus);
+                        m_text.DrawString(m_uiBatch, P(tx + 12.0f, ty + 54.0f), line, 12.0f * s,
+                                          theme.textPrimary);
+                        std::uint32_t sellPrice = 0;
+                        bool havePrice = false;
+                        for (const auto& entry : world.Shop().Entries()) {
+                            if (entry.itemDefinitionId == slot.definitionId) {
+                                sellPrice = entry.sellPrice;
+                                havePrice = true;
+                            }
+                        }
+                        std::snprintf(line, sizeof(line), "Sell: %s",
+                                      havePrice ? std::to_string(sellPrice).c_str() : "N/A");
+                        m_text.DrawString(m_uiBatch, P(tx + 12.0f, ty + 74.0f), line, 12.0f * s,
+                                          theme.textGold);
+                    }
+                }
+            }
+        }
+    }
+
+    // ================= Character Panel（指令十六：C 键）=================
+    if (m_characterVisible) {
+        const float w = 320.0f;
+        const float h = 400.0f;
+        const float x = 60.0f;
+        const float y = 140.0f;
+        windowBg(x, y, w, h, "Character (C)");
+        const int classId = m_localClassId != 0 ? m_localClassId : 1;
+        const char* className = classId == 1 ? "Warrior" : classId == 2 ? "Mage" : "Taoist";
+        if (haveText) {
+            char line[160];
+            std::snprintf(line, sizeof(line), "%s  (%s)",
+                          m_localName.empty() ? "Player" : m_localName.c_str(), className);
+            m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 32.0f), line, 14.0f * s,
+                              theme.textPrimary);
+            std::snprintf(line, sizeof(line), "Level %u    EXP %lld/%lld",
+                          static_cast<unsigned>(world.LocalLevel()),
+                          static_cast<long long>(world.LocalExperience()),
+                          static_cast<long long>(world.LocalExpToNext()));
+            m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 56.0f), line, 12.0f * s,
+                              theme.textDim);
+            std::snprintf(line, sizeof(line), "HP %u/%u   MP %u/%u",
+                          static_cast<unsigned>(world.LocalCurrentHp()),
+                          static_cast<unsigned>(world.LocalMaxHp()),
+                          static_cast<unsigned>(world.LocalCurrentMana()),
+                          static_cast<unsigned>(world.LocalMaxMana()));
+            m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 76.0f), line, 12.0f * s,
+                              theme.textDim);
+            std::snprintf(line, sizeof(line), "Attack %u (+%u equip)   Defense %u (+%u equip)",
+                          static_cast<unsigned>(world.LocalAttackPower()),
+                          static_cast<unsigned>(world.Equipment().AttackBonus()),
+                          static_cast<unsigned>(world.LocalDefensePower()),
+                          static_cast<unsigned>(world.Equipment().DefenseBonus()));
+            m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 96.0f), line, 12.0f * s,
+                              theme.textDim);
+            std::snprintf(line, sizeof(line), "Gold %lld",
+                          static_cast<long long>(world.LocalGold()));
+            m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 116.0f), line, 13.0f * s,
+                              theme.textGold);
+        }
+        // Weapon / Armor 槽（点击 = Unequip 请求）。
+        auto equipSlotRow = [&](float ry, const char* slotLabel, std::uint32_t definitionId,
+                                std::uint8_t slotCode) {
+            const bool filled = definitionId != 0;
+            const bool hover = inRect(x + 14.0f, ry, w - 28.0f, 36.0f);
+            m_uiBatch.DrawQuad(*m_whiteTexture, P(x + 14.0f + (w - 28.0f) * 0.5f, ry + 18.0f),
+                               {(w - 28.0f) * s / 64.0f, 36.0f * s / 64.0f}, 0.0f,
+                               filled ? theme.panelSlot : Color(0.10f, 0.11f, 0.14f, 0.8f));
+            if (filled) {
+                drawIcon(m_itemDisplay.IconAsset(definitionId), x + 32.0f, ry + 18.0f, 26.0f);
+            }
+            if (haveText) {
+                char line[160];
+                std::snprintf(line, sizeof(line), "%s: %s", slotLabel,
+                              filled ? m_itemDisplay.DisplayName(definitionId).c_str()
+                                     : "(empty)");
+                m_text.DrawString(m_uiBatch, P(x + 52.0f, ry + 10.0f), line, 12.0f * s,
+                                  filled ? theme.textPrimary : theme.textDim);
+            }
+            // 指令十八：装备面板点击 = Unequip（服务器权威）。
+            if (filled && hover && mouseClicked) {
+                UiRequest req;
+                req.kind = UiRequest::Kind::UnequipSlot;
+                req.equipmentSlot = slotCode;
+                m_uiRequests.push_back(req);
+                mouseClicked = false;
+            }
+        };
+        equipSlotRow(y + 150.0f, "Weapon", world.Equipment().WeaponDefinitionId(), 1);
+        equipSlotRow(y + 192.0f, "Armor", world.Equipment().ArmorDefinitionId(), 2);
+    }
+
+    // ================= Settings（指令五十二：Esc —— Resolution/Fullscreen/音量）====
+    if (m_settingsVisible) {
+        const float w = 420.0f;
+        const float h = 330.0f;
+        const float x = 750.0f;
+        const float y = 300.0f;
+        windowBg(x, y, w, h, "Settings (Esc)");
+        // Resolution（1280x720 / 1600x900 / 1920x1080 循环；指令六十二）。
+        {
+            static const char* kRes[3] = {"1280 x 720", "1600 x 900", "1920 x 1080"};
+            char resLabel[64];
+            std::snprintf(resLabel, sizeof(resLabel), "Resolution: %s",
+                          kRes[m_resolutionIndex < 0 || m_resolutionIndex > 2 ? 1
+                                                                              : m_resolutionIndex]);
+            if (button(x + 20.0f, y + 44.0f, 240.0f, 32.0f, resLabel, true)) {
+                UiRequest req;
+                req.kind = UiRequest::Kind::WindowResolution;
+                req.index = (m_resolutionIndex + 1) % 3;
+                m_uiRequests.push_back(req);
+            }
+        }
+        // Fullscreen / Windowed。
+        if (button(x + 20.0f, y + 86.0f, 240.0f, 32.0f,
+                   m_fullscreen ? "Mode: Fullscreen" : "Mode: Windowed", true)) {
+            UiRequest req;
+            req.kind = UiRequest::Kind::WindowFullscreen;
+            req.index = m_fullscreen ? 0 : 1;
+            m_uiRequests.push_back(req);
+        }
+        // 音量（点击条设置值；指令五十一）。
+        auto volumeBar = [&](float by, const char* label, float& value) {
+            if (haveText) {
+                m_text.DrawString(m_uiBatch, P(x + 20.0f, by + 4.0f), label, 13.0f * s,
+                                  theme.textPrimary);
+            }
+            const float barX = x + 150.0f;
+            const float barW = 220.0f;
+            const float barH = 18.0f;
+            m_uiBatch.DrawQuad(*m_whiteTexture, P(barX + barW * 0.5f, by + barH * 0.5f),
+                               {barW * s / 64.0f, barH * s / 64.0f}, 0.0f, theme.barBack);
+            m_uiBatch.DrawQuad(*m_whiteTexture, P(barX + barW * value * 0.5f, by + barH * 0.5f),
+                               {barW * value * s / 64.0f, barH * s / 64.0f}, 0.0f,
+                               theme.expFill);
+            if (inRect(barX, by, barW, barH) && mouseClicked) {
+                value = std::clamp((refMouse.x - barX) / barW, 0.0f, 1.0f);
+                m_settingsDirty = true;
+                mouseClicked = false;
+            }
+        };
+        volumeBar(y + 140.0f, "Master", m_masterVolume);
+        volumeBar(y + 172.0f, "Music", m_musicVolume);
+        volumeBar(y + 204.0f, "SFX", m_sfxVolume);
+        if (button(x + 20.0f, y + h - 46.0f, 120.0f, 32.0f, "Resume", true)) {
+            m_settingsVisible = false;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-﻿#include "Client/Visuals/VisualDataCatalog.h"
+#include "Client/Visuals/VisualDataCatalog.h"
 
 #include <nlohmann/json.hpp>
 
@@ -134,6 +134,18 @@ bool VisualDataCatalog::Load(const std::string& dataRoot, std::string& error) {
             QuestDisplay display;
             display.questId = e.value("questId", 0u);
             display.name = ReadStringField(e, "name", "");
+            // 阶段25：目标展示字段（type/requiredCount）。
+            const auto objIt = e.find("objectives");
+            if (objIt != e.end() && objIt->is_array()) {
+                for (const auto& o : *objIt) {
+                    QuestObjectiveDisplay od;
+                    od.type = ReadStringField(o, "type", "");
+                    const auto reqIt = o.find("requiredCount");
+                    od.requiredCount =
+                        reqIt != o.end() && reqIt->is_number_unsigned() ? reqIt->get<std::uint32_t>() : 0u;
+                    display.objectives.push_back(std::move(od));
+                }
+            }
             m_quests[display.questId] = display;
         }
     }

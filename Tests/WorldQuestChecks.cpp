@@ -165,6 +165,37 @@ auto RunOnWorldIo(net::NetworkService& service, F&& fn) -> std::invoke_result_t<
     return future.get();
 }
 
+// 阶段25：跨图 Portal 链路（4004/4005 区域在 Map2/Map3）——teleport 到 portal 旁 ->
+// 等 VisiblePortals 收录 -> SendPortalUse -> 等 MapChanged(targetMap)。
+// portalEntityId 按生成顺序：8001->1 / 8002->2 / 8003->3。
+bool UsePortalTo(WorldTestServers& servers, WorldTestClient& client, std::uint64_t characterId,
+                 std::uint64_t portalEntityId, float portalX, float portalY,
+                 std::uint16_t expectMapId) {
+    static std::uint32_t s_portalSeq = 500000;
+    if (!TeleportPlayer(client, servers, characterId, portalX, portalY)) {
+        return false;
+    }
+    const bool visible = WaitUntil(
+        [&] {
+            return RunOnWorldIo(servers.worldService, [&]() -> bool {
+                auto p = servers.world->FindPlayerByCharacter(characterId);
+                return p && p->VisiblePortals().count(portalEntityId) != 0;
+            });
+        },
+        3000);
+    if (!visible) {
+        return false;
+    }
+    const std::size_t changedBaseline =
+        CountEventsOf(client, WorldNetworkEvent::Type::MapChangedEvent);
+    client.client().SendPortalUse(++s_portalSeq, portalEntityId);
+    WorldNetworkEvent changed;
+    return WaitRecordedFrom(
+        client, WorldNetworkEvent::Type::MapChangedEvent, changedBaseline,
+        [&](const WorldNetworkEvent& e) { return e.mapChanged.mapId == expectMapId; }, changed,
+        5000);
+}
+
 struct QuestView {
     bool found = false;
     std::uint8_t state = 0;
@@ -247,12 +278,12 @@ std::int64_t QueryCharacterColumn(const std::string& dbPath, std::uint64_t chara
 void RunQuestLogicChecks() {
     std::string error;
 
-    // ---- QuestDefinitionCheck（指令八十五）：4001~4005 全部配置 ----
+    // ---- QuestDefinitionCheck（指令八十五；阶段25：Chapter 1 任务链 4001~4006）----
     {
         const auto& registry = QuestRegistry::Instance();
-        bool ok = registry.Count() == 5;
+        bool ok = registry.Count() == 6;
         const auto* q4001 = registry.FindQuest(4001);
-        ok = ok && q4001 != nullptr && q4001->name == "Slime Hunter" && q4001->minLevel == 1 &&
+        ok = ok && q4001 != nullptr && q4001->name == "First Trouble" && q4001->minLevel == 1 &&
              q4001->prerequisiteQuestId == 0 && !q4001->repeatable &&
              q4001->objectives.size() == 1 && q4001->objectives[0].objectiveId == 40011 &&
              q4001->objectives[0].type == QuestObjectiveType::KillMonster &&
@@ -260,43 +291,60 @@ void RunQuestLogicChecks() {
              q4001->objectives[0].requiredCount == 5 && q4001->reward.exp == 100 &&
              q4001->reward.gold == 20 && q4001->reward.itemDefinitionId == 0;
         const auto* q4002 = registry.FindQuest(4002);
-        ok = ok && q4002 != nullptr && q4002->name == "Core Collector" &&
+        ok = ok && q4002 != nullptr && q4002->name == "Strange Cores" &&
              q4002->prerequisiteQuestId == 4001 && q4002->objectives.size() == 1 &&
              q4002->objectives[0].objectiveId == 40021 &&
              q4002->objectives[0].type == QuestObjectiveType::CollectItem &&
              q4002->objectives[0].targetId == kItemSlimeCoreId &&
              q4002->objectives[0].requiredCount == 3 && q4002->reward.exp == 80 &&
-             q4002->reward.gold == 10;
+             q4002->reward.gold == 30 &&
+             q4002->reward.itemDefinitionId == kItemClothArmorId;
         const auto* q4003 = registry.FindQuest(4003);
-        ok = ok && q4003 != nullptr && q4003->name == "Growing Warrior" &&
+        ok = ok && q4003 != nullptr && q4003->name == "Growing Stronger" &&
              q4003->prerequisiteQuestId == 4001 && q4003->objectives.size() == 1 &&
              q4003->objectives[0].objectiveId == 40031 &&
              q4003->objectives[0].type == QuestObjectiveType::ReachLevel &&
              q4003->objectives[0].targetId == 3 && q4003->objectives[0].requiredCount == 1 &&
-             q4003->reward.exp == 0 && q4003->reward.gold == 50;
+             q4003->reward.exp == 0 && q4003->reward.gold == 80;
         const auto* q4004 = registry.FindQuest(4004);
-        ok = ok && q4004 != nullptr && q4004->name == "Explorer" &&
-             q4004->prerequisiteQuestId == 0 && q4004->objectives.size() == 1 &&
+        ok = ok && q4004 != nullptr && q4004->name == "Explore the Meadow" &&
+             q4004->prerequisiteQuestId == 4001 && q4004->objectives.size() == 1 &&
              q4004->objectives[0].objectiveId == 40041 &&
              q4004->objectives[0].type == QuestObjectiveType::ReachArea &&
-             q4004->objectives[0].mapId == 1 &&
-             std::abs(q4004->objectives[0].areaX - 1500.0f) < 0.01f &&
+             q4004->objectives[0].mapId == 2 &&
+             std::abs(q4004->objectives[0].areaX - 300.0f) < 0.01f &&
              std::abs(q4004->objectives[0].areaY - 1500.0f) < 0.01f &&
-             std::abs(q4004->objectives[0].areaRadius - 100.0f) < 0.01f &&
-             q4004->reward.exp == 50 && q4004->reward.gold == 10;
+             std::abs(q4004->objectives[0].areaRadius - 200.0f) < 0.01f &&
+             q4004->reward.exp == 60 && q4004->reward.gold == 10;
         const auto* q4005 = registry.FindQuest(4005);
-        ok = ok && q4005 != nullptr && q4005->name == "Slime Cleanup" &&
-             q4005->prerequisiteQuestId == 4002 && q4005->objectives.size() == 2 &&
+        ok = ok && q4005 != nullptr && q4005->name == "Deeper Threat" &&
+             q4005->minLevel == 3 &&
+             q4005->prerequisiteQuestId == 4002 && q4005->objectives.size() == 3 &&
              q4005->objectives[0].objectiveId == 40051 &&
              q4005->objectives[0].type == QuestObjectiveType::KillMonster &&
-             q4005->objectives[0].requiredCount == 3 &&
+             q4005->objectives[0].requiredCount == 5 &&
              q4005->objectives[1].objectiveId == 40052 &&
              q4005->objectives[1].type == QuestObjectiveType::CollectItem &&
-             q4005->objectives[1].requiredCount == 2 && q4005->reward.exp == 150 &&
-             q4005->reward.gold == 30 && q4005->reward.itemDefinitionId == kItemRustySwordId &&
+             q4005->objectives[1].requiredCount == 2 &&
+             q4005->objectives[2].objectiveId == 40053 &&
+             q4005->objectives[2].type == QuestObjectiveType::ReachArea &&
+             q4005->objectives[2].mapId == 3 &&
+             q4005->reward.exp == 200 &&
+             q4005->reward.gold == 50 &&
+             q4005->reward.itemDefinitionId == kItemTravelerArmorId &&
              q4005->reward.itemQuantity == 1;
+        const auto* q4006 = registry.FindQuest(4006);
+        ok = ok && q4006 != nullptr && q4006->name == "Ruins Investigation" &&
+             q4006->minLevel == 3 && q4006->prerequisiteQuestId == 4005 &&
+             q4006->objectives.size() == 1 &&
+             q4006->objectives[0].objectiveId == 40061 &&
+             q4006->objectives[0].type == QuestObjectiveType::KillMonster &&
+             q4006->objectives[0].targetId == kAncientGuardianTypeId &&
+             q4006->objectives[0].requiredCount == 1 && q4006->reward.exp == 500 &&
+             q4006->reward.gold == 200 &&
+             q4006->reward.itemDefinitionId == kItemBronzeSwordId;
         ok = ok && registry.FindQuest(9999) == nullptr;
-        Check("QuestDefinitionCheck: quests 4001~4005 configured per spec", ok);
+        Check("QuestDefinitionCheck: Chapter 1 quests 4001~4006 configured per spec", ok);
     }
 
     // ---- QuestRegistryValidationCheck（指令八十六） ----
@@ -555,16 +603,23 @@ void RunQuestLogicChecks() {
         PlayerQuestContainer multi;
         (void)QuestService::AcceptQuest(registry, multi, 4005, 1,
                                         [](std::uint32_t) { return 1u; }, 1600);
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 5; ++i) {
             (void)QuestService::OnMonsterKilled(registry, multi, kTrainingSlimeTypeId);
         }
         auto multiChanges = QuestService::EvaluateQuestCompletion(registry, multi, 1650);
-        ok = multiChanges.empty() && multi.Find(4005)->ProgressOf(40051) == 3 &&
+        ok = multiChanges.empty() && multi.Find(4005)->ProgressOf(40051) == 5 &&
              multi.Find(4005)->ProgressOf(40052) == 1 &&
+             multi.Find(4005)->ProgressOf(40053) == 0 &&
              multi.Find(4005)->state == QuestState::InProgress;
         auto collectChanges =
             QuestService::OnInventoryChanged(registry, multi, [](std::uint32_t) { return 2u; });
         ok = ok && collectChanges.size() == 1;
+        // 阶段25：4005 三目标（kill/collect/area）——区域未完成前不 Ready。
+        auto stillNotReady = QuestService::EvaluateQuestCompletion(registry, multi, 1660);
+        ok = ok && stillNotReady.empty();
+        auto areaChanges =
+            QuestService::OnPlayerMoved(registry, multi, 3, 200.0f, 300.0f);
+        ok = ok && areaChanges.size() == 1;
         auto multiReady = QuestService::EvaluateQuestCompletion(registry, multi, 1700);
         ok = ok && multiReady.size() == 1 &&
              multiReady[0].newState == QuestState::ReadyToTurnIn;
@@ -572,12 +627,12 @@ void RunQuestLogicChecks() {
 
         PlayerQuestContainer area;
         (void)QuestService::AcceptQuest(registry, area, 4004, 1, {}, 1800);
-        auto wrongMap = QuestService::OnPlayerMoved(registry, area, 2, 1500.0f, 1500.0f);
-        auto tooFar = QuestService::OnPlayerMoved(registry, area, 1, 1420.0f, 1420.0f);
+        auto wrongMap = QuestService::OnPlayerMoved(registry, area, 1, 300.0f, 1500.0f);
+        auto tooFar = QuestService::OnPlayerMoved(registry, area, 2, 700.0f, 1500.0f);
         ok = wrongMap.empty() && tooFar.empty() && area.Find(4004)->ProgressOf(40041) == 0;
-        auto inside = QuestService::OnPlayerMoved(registry, area, 1, 1550.0f, 1480.0f);
+        auto inside = QuestService::OnPlayerMoved(registry, area, 2, 350.0f, 1520.0f);
         ok = ok && inside.size() == 1 && inside[0].newProgress == 1;
-        auto areaAgain = QuestService::OnPlayerMoved(registry, area, 1, 1500.0f, 1500.0f);
+        auto areaAgain = QuestService::OnPlayerMoved(registry, area, 2, 300.0f, 1500.0f);
         ok = ok && areaAgain.empty();
         Check("ReachAreaLogicCheck: map/radius gating, one-shot completion, no duplicate", ok);
 
@@ -1043,7 +1098,8 @@ void RunQuestChainChecks() {
         Check("QuestRewardLevelUpCheck: turn-in EXP levels 2->3, advances ReachLevel 4003", leveledOk);
     }
 
-    // ---- ReachAreaCheck（一百零六）+ ReachAreaServerAuthorityCheck（一百零七） ----
+    // ---- ReachAreaCheck（一百零六）+ ReachAreaServerAuthorityCheck（一百零七）
+    //      （阶段25：4004 区域在 Map2 南部 (300,1500)——Map1 位置永不完成，走 Portal）----
     {
         const std::size_t baseline =
             CountEventsOf(clientA, WorldNetworkEvent::Type::QuestAcceptResponseEvent);
@@ -1053,17 +1109,18 @@ void RunQuestChainChecks() {
             clientA, WorldNetworkEvent::Type::QuestAcceptResponseEvent, baseline,
             [&](const WorldNetworkEvent& e) { return e.questId == 4004 && e.success; },
             response);
-        // 安全区内真实移动不完成（服务器权威位置，Client 不能伪造）。
+        // Map1 内真实移动不完成（区域在 Map2——服务器权威位置，Client 不能伪造）。
         (void)TeleportPlayer(clientA, servers, seedA.characterId, 100.0f, 100.0f);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         const auto farView = ReadQuestView(servers, seedA.characterId, 4004);
         ok = ok && farView.found && farView.firstProgress == 0;
-        // 真实移动进入 (1500,1500) r=100 -> 1/1。
-        ok = ok && TeleportPlayer(clientA, servers, seedA.characterId, 1500.0f, 1500.0f);
+        // Portal 8001 (1000,300) -> Map2 (200,500) -> 真实移动进入 (300,1500) r=200 -> 1/1。
+        ok = ok && UsePortalTo(servers, clientA, seedA.characterId, 1, 950.0f, 300.0f, 2);
+        ok = ok && TeleportPlayer(clientA, servers, seedA.characterId, 300.0f, 1500.0f);
         ok = ok && WaitQuestProgress(servers, seedA.characterId, 4004, 1, 6000);
         ok = ok && WaitQuestState(servers, seedA.characterId, 4004, QuestState::ReadyToTurnIn);
         Check("ReachAreaCheck/ReachAreaServerAuthorityCheck: only server-authoritative "
-              "position completes ReachArea",
+              "cross-map position completes ReachArea",
               ok);
         const std::size_t turnInBaseline =
             CountEventsOf(clientA, WorldNetworkEvent::Type::QuestTurnInResponseEvent);
@@ -1076,10 +1133,13 @@ void RunQuestChainChecks() {
                                   return e.questId == 4004 && e.success;
                               },
                               turnIn);
-        Check("QuestChecks: 4004 turned in", ok);
+        // 返回 Map1（后续 4005 杀怪）：Portal 8002 (150,500) -> Map1 (900,300)。
+        ok = ok && UsePortalTo(servers, clientA, seedA.characterId, 2, 150.0f, 500.0f, 1);
+        Check("QuestChecks: 4004 turned in + returned to Map1", ok);
     }
 
-    // ---- MultiObjectiveCheck 链路（一百零八）+ QuestItemRewardCheck（一百一十二） ----
+    // ---- MultiObjectiveCheck 链路（一百零八）+ QuestItemRewardCheck（一百一十二）
+    //      （阶段25：4005 = 杀 5 Slime + 交 2 Core + 进入 Ancient Ruins 入口区域）----
     {
         const std::size_t baseline =
             CountEventsOf(clientA, WorldNetworkEvent::Type::QuestAcceptResponseEvent);
@@ -1089,19 +1149,24 @@ void RunQuestChainChecks() {
             clientA, WorldNetworkEvent::Type::QuestAcceptResponseEvent, baseline,
             [&](const WorldNetworkEvent& e) { return e.questId == 4005 && e.success; },
             response);
-        // A 背包已有 3 core -> collect 2/2 立即；kill 0/3 -> InProgress。
+        // A 背包已有 3 core -> collect 2/2 立即；kill 0/5 + area 0/1 -> InProgress。
         ok = ok && WaitQuestState(servers, seedA.characterId, 4005, QuestState::InProgress);
-        for (int i = 0; i < 3 && ok; ++i) {
+        for (int i = 0; i < 5 && ok; ++i) {
             const std::uint64_t slimeId = FindAliveSlime(servers);
-            MoveSlimeNear(servers, slimeId, 1560.0f, 1500.0f);
+            MoveSlimeNear(servers, slimeId, 960.0f, 320.0f); // 玩家附近（Map1 900,300 旁）
             std::uint64_t attackSeq = 6000 + i * 100;
             (void)BasicAttackUntilDead(servers, clientA, slimeId, attackSeq);
             const auto view = ReadQuestView(servers, seedA.characterId, 4005);
             ok = view.found && view.firstProgress == i + 1;
         }
+        // 进入 Map3：Portal 8001 -> Map2 -> Portal 8003 (1750,1000 旁) -> Map3 (200,300)。
+        ok = ok && UsePortalTo(servers, clientA, seedA.characterId, 1, 950.0f, 300.0f, 2);
+        ok = ok && UsePortalTo(servers, clientA, seedA.characterId, 3, 1750.0f, 1000.0f, 3);
         ok = ok &&
              WaitQuestState(servers, seedA.characterId, 4005, QuestState::ReadyToTurnIn, 5000);
-        Check("MultiObjectiveCheck: 4005 ReadyToTurnIn only when kill 3/3 AND core 2/2", ok);
+        Check("MultiObjectiveCheck: 4005 ReadyToTurnIn when kill 5/5 AND core 2/2 AND "
+              "Ancient Ruins entered",
+              ok);
 
         const std::size_t deltaBaseline =
             CountEventsOf(clientA, WorldNetworkEvent::Type::InventoryDeltaEvent);
@@ -1121,25 +1186,33 @@ void RunQuestChainChecks() {
              WaitRecordedFrom(clientA, WorldNetworkEvent::Type::InventoryDeltaEvent,
                               deltaBaseline,
                               [&](const WorldNetworkEvent& e) {
-                                  return e.itemDefinitionId == kItemRustySwordId &&
+                                  return e.itemDefinitionId == kItemTravelerArmorId &&
                                          e.inventoryOpcode == 1;
                               },
                               delta);
-        const std::int64_t swordRows =
+        const std::int64_t armorRows =
             QueryScalar(servers.dbPath,
                         std::string("SELECT COUNT(*) FROM inventory_items WHERE character_id = ") +
                             std::to_string(static_cast<long long>(seedA.characterId)) +
-                            " AND item_definition_id = " + std::to_string(kItemRustySwordId) + ";");
-        Check("QuestItemRewardCheck: TurnIn 4005 grants Rusty Sword (delta + DB row)",
-              ok && swordRows >= 1);
+                            " AND item_definition_id = " + std::to_string(kItemTravelerArmorId) +
+                            ";");
+        Check("QuestItemRewardCheck: TurnIn 4005 grants Traveler Armor (delta + DB row)",
+              ok && armorRows >= 1);
+        // 回 Map1（后续离线/上限等检查的布景位置在 Map1）：Map3 8004(150,300)->Map2，
+        // Map2 8002(150,500)->Map1。
+        ok = ok && UsePortalTo(servers, clientA, seedA.characterId, 4, 150.0f, 300.0f, 2);
+        ok = ok && UsePortalTo(servers, clientA, seedA.characterId, 2, 150.0f, 500.0f, 1);
+        Check("QuestChecks: 4005 turned in + returned to Map1", ok);
     }
 
     // ---- QuestItemInventoryFullCheck（一百一十三） ----
     {
         servers.world->TestFillInventory(seedA.characterId);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        servers.world->TestSeedQuestProgress(seedA.characterId, 4005, {{40051, 3}, {40052, 2}},
-                                             QuestState::ReadyToTurnIn);
+        // 阶段25：4005 三目标（kill5/collect2/area1）全部就绪 -> ReadyToTurnIn。
+        servers.world->TestSeedQuestProgress(
+            seedA.characterId, 4005, {{40051, 5}, {40052, 2}, {40053, 1}},
+            QuestState::ReadyToTurnIn);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         const std::int64_t goldBefore =
             QueryCharacterColumn(servers.dbPath, seedA.characterId, "gold");
@@ -1166,8 +1239,9 @@ void RunQuestChainChecks() {
         Check("QuestItemInventoryFullCheck: full bag -> InventoryFull, quest stays Ready, "
               "no partial rewards",
               ok);
-        servers.world->TestSeedQuestProgress(seedA.characterId, 4005, {{40051, 3}, {40052, 2}},
-                                             QuestState::Completed);
+        servers.world->TestSeedQuestProgress(
+            seedA.characterId, 4005, {{40051, 5}, {40052, 2}, {40053, 1}},
+            QuestState::Completed);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 

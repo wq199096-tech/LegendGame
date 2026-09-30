@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "Client/Visuals/VisualDataCatalog.h"
 #include "Engine/Map/Map.h"
@@ -13,6 +14,12 @@
 #include "Engine/Resource/ResourceManager.h"
 #include "Tools/MapEditor/Source/GameDataDocument.h"
 #include "Tools/MapEditor/Source/WorldDocument.h"
+
+// EditorProcess 需要 HANDLE/DWORD；NOMINMAX 防 min/max 宏污染 std::max/std::min。
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 namespace legend::render {
 class Texture;
@@ -82,6 +89,52 @@ private:
     void OpenWorldDir(const std::string& dir);
     void LaunchWorldServer();
     void UpdateWorldTitle();
+
+    // ---- 阶段25：World Editor 扩展（Asset Browser / Animation Preview /
+    //      Quest Flow / Quest Area Picker / Boss Editor / Process 管理）----
+    void DrawAssetBrowserWindow();        // Data/Assets 资产浏览（缩略图 + 详情）
+    void DrawAnimationPreviewWindow();    // 动画帧播放预览
+    void DrawQuestFlowWindow();           // 章节任务链流程视图
+    void DrawBossEditorWindow();          // Boss（怪物+掉落+刷新）绑定编辑
+    void DrawProcessStatusWindow();       // 本地游戏进程状态
+    void ValidateAll();                   // World + Game + Assets 全量校验
+    void LaunchFullGame();                // 四进程链（Login/Gateway/World/Client）
+    bool LaunchEditorProcess(const char* name, const std::string& exeName,
+                             const std::string& args = "");
+    void StopLocalGame();
+    void DrawQuestAreaOverlay();          // ReachArea 圈层绘制 + 拾取模式提示
+    // 加载/缓存整张 sheet 纹理（ImGui GL 纹理 id）；失败返回 0。
+    unsigned int GetOrLoadSheetTexture(const legend::visual::AssetManifestEntry* sheet);
+    // 在当前帧绘制 clip 的第 frame 帧第 direction 行（UV 计算 + Image）。
+    void DrawAnimationFrame(const legend::visual::AnimationClipDef* clip, int frame,
+                            int direction, float height);
+
+    bool m_showAssetBrowser = false;
+    bool m_showAnimationPreview = false;
+    bool m_showQuestFlow = false;
+    bool m_showBossEditor = false;
+    bool m_showProcessStatus = false;
+    std::string m_previewSelectedAsset;   // Asset Browser 选中 assetId
+    std::string m_animPreviewClipId;      // Animation Preview 选中 clip
+    bool m_animPreviewPlaying = true;
+    float m_animPreviewTime = 0.0f;
+    // Quest Area Map Picker：武装态（画布下一次左键点击写入 areaX/areaY）。
+    bool m_questAreaPickActive = false;
+    std::uint32_t m_questAreaPickQuestId = 0;
+    std::uint32_t m_questAreaPickObjectiveId = 0;
+    std::uint16_t m_questAreaPickMapId = 0;
+    float m_questAreaPickRadius = 0.0f;
+    std::uint32_t m_bossSelectedMonsterId = 0; // Boss Editor 选中怪物
+    // 本地游戏进程（Launch Full Game / Process Status / Stop Local Game）。
+    struct EditorProcess {
+        std::string name;
+        HANDLE hProcess = nullptr;
+        DWORD pid = 0;
+        bool launchFailed = false;
+        DWORD exitCode = 0;
+        bool exitCodeValid = false;
+    };
+    std::vector<EditorProcess> m_processes;
 
     // ---- 阶段24：Visual Asset 绑定 / Assets Validation / Visual Preview ----
     void LoadVisualCatalog();              // Initialize 时加载 Data/Assets（失败降级）

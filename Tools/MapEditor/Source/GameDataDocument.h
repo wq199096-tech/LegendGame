@@ -10,6 +10,7 @@
 
 namespace legend::editor {
 
+using legend::world::ChapterDefinition;
 using legend::world::GameDataSet;
 using legend::world::ItemDefinition;
 using legend::world::LootTableDefinition;
@@ -40,6 +41,7 @@ public:
         Shop = 6,
         Teleport = 7,
         LootTable = 8,
+        Chapter = 9, // 阶段25：章节展示元数据（chapters.json）
     };
 
     struct Selection {
@@ -105,6 +107,7 @@ public:
     std::uint32_t SuggestShopId() const;
     std::uint32_t SuggestTeleportId() const;
     std::uint32_t SuggestLootTableId() const;
+    std::uint32_t SuggestChapterId() const;
 
     // ---- 查找 ----
     const ItemDefinition* FindItem(std::uint32_t id) const;
@@ -115,6 +118,7 @@ public:
     const ShopDefinition* FindShop(std::uint32_t id) const;
     const TeleportDefinition* FindTeleport(std::uint32_t id) const;
     const LootTableDefinition* FindLootTable(std::uint32_t id) const;
+    const ChapterDefinition* FindChapter(std::uint32_t id) const;
 
     static constexpr std::size_t kMaxUndoSteps = 100;
 

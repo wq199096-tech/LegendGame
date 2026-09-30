@@ -199,6 +199,22 @@ bool ParseMaps(const json& root, WorldDataSet& out, std::string& error) {
             }
             map.visualMapId = visualIt->get<std::string>();
         }
+        // 阶段25 指令四十二：可选 safeZone（Map metadata；缺省/非法 = 无安全区）。
+        const auto safeIt = e.find("safeZone");
+        if (safeIt != e.end() && safeIt->is_object()) {
+            const auto xIt = safeIt->find("x");
+            const auto yIt = safeIt->find("y");
+            const auto rIt = safeIt->find("radius");
+            if (xIt != safeIt->end() && xIt->is_number()) {
+                map.safeZoneX = xIt->get<float>();
+            }
+            if (yIt != safeIt->end() && yIt->is_number()) {
+                map.safeZoneY = yIt->get<float>();
+            }
+            if (rIt != safeIt->end() && rIt->is_number()) {
+                map.safeZoneRadius = rIt->get<float>();
+            }
+        }
         map.mapId = static_cast<std::uint16_t>(mapId);
         out.maps.push_back(map);
     }
@@ -420,6 +436,11 @@ json MapToJson(const MapDefinition& map) {
     };
     if (!map.visualMapId.empty()) {
         j["visualMapId"] = map.visualMapId; // 阶段24
+    }
+    if (map.safeZoneRadius > 0.0f) {
+        j["safeZone"] = {{"x", map.safeZoneX},
+                         {"y", map.safeZoneY},
+                         {"radius", map.safeZoneRadius}}; // 阶段25 指令四十二
     }
     return j;
 }
@@ -990,6 +1011,10 @@ WorldDataSet MakeDefaultWorldData() {
     map1.respawnX = 300.0f;
     map1.respawnY = 300.0f;
     map1.visualMapId = "vmap_greenfield";
+    // 阶段25 指令四十二：Map1 新手村 Safe Zone metadata（无 PvP/怪物逻辑）。
+    map1.safeZoneX = 450.0f;
+    map1.safeZoneY = 300.0f;
+    map1.safeZoneRadius = 500.0f;
     data.maps.push_back(map1);
 
     MapDefinition map2;
@@ -1022,10 +1047,10 @@ WorldDataSet MakeDefaultWorldData() {
     map3.visualMapId = "vmap_ancient_ruins";
     data.maps.push_back(map3);
 
-    // 阶段20 指令九：NPC 5001~5004（含对话文本）。
+    // 阶段20 指令九：NPC 5001~5004（含对话文本）；阶段25 指令九：Elder 接 4006。
     data.npcs.push_back(
         {5001, "Village Elder", NpcType::QuestGiver, 1, 300.0f, 300.0f, 120.0f, 5001, 0, 0,
-         {4001, 4002, 4003, 4005}, 5001});
+         {4001, 4002, 4003, 4005, 4006}, 5001});
     data.npcs.push_back(
         {5002, "General Merchant", NpcType::Merchant, 1, 450.0f, 300.0f, 120.0f, 5002, 6001, 0,
          {}, 5002});
@@ -1067,6 +1092,20 @@ WorldDataSet MakeDefaultWorldData() {
     map3Spawn.respawnSeconds = 8;
     map3Spawn.enabled = true;
     data.monsterSpawns.push_back(map3Spawn);
+
+    // 阶段25 指令十/十一：Map3 Boss 区（1900,1500）只生成 1 只 Ancient Slime
+    // Guardian（远离入口 (200,300)——AOI 600 之外）；死亡后 45s Respawn。
+    MonsterSpawnDefinition map3BossSpawn;
+    map3BossSpawn.spawnId = 3002;
+    map3BossSpawn.mapId = 3;
+    map3BossSpawn.monsterDefinitionId = kAncientGuardianTypeId;
+    map3BossSpawn.centerX = 1900.0f;
+    map3BossSpawn.centerY = 1500.0f;
+    map3BossSpawn.radius = 40.0f;
+    map3BossSpawn.count = 1;
+    map3BossSpawn.respawnSeconds = 45;
+    map3BossSpawn.enabled = true;
+    data.monsterSpawns.push_back(map3BossSpawn);
 
     // 阶段21 指令十六：Portal 8001~8004（阶段24：visualId 全部 portal_default）。
     data.portals.push_back({8001, 1, 1000.0f, 300.0f, 100.0f, 2, 200.0f, 500.0f, 1, 0, true,

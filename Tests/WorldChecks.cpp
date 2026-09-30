@@ -35,6 +35,8 @@ void RunAnimationChecks(); // 阶段24：animations + 统一 AnimationPlayer
 void RunVisualDefinitionChecks(); // 阶段24：visual_entities/effects/visual_maps + Catalog
 void RunClientSmokeChecks(); // 阶段24：LegendClient.exe 真实启动冒烟（15s）
 void RunVerticalSliceChecks(); // 阶段25：Vertical Slice 检查（新角色出生/Chapter One 链路）
+void RunUiModelChecks(); // 阶段25：UI 模型检查（指令六十七）
+void RunChapterOneChecks(); // 阶段25：Chapter One 端到端（真实服务器链路）
 }
 
 namespace {
@@ -840,6 +842,11 @@ int main() {
 
     RunWorldProtocolChecks();
 
+    // ---- 阶段25：Chapter One E2E 与新角色出生检查最先执行（快速失败信号；
+    //      独立 servers 生命周期，套件顺序不影响结果）----
+    RunChapterOneChecks();
+    RunVerticalSliceChecks();
+
     // ---- 阶段11 检查链（握手/EnterWorld/移动/保存/Login 链路/鲁棒性） ----
     {
         WorldTestServers servers;
@@ -897,9 +904,10 @@ int main() {
     RunVisualDefinitionChecks();
     RunClientSmokeChecks();
 
-    // ---- 阶段25 Vertical Slice 检查（独立 servers 生命周期） ----
-    RunVerticalSliceChecks();
+    // ---- 阶段25 Vertical Slice 检查（已在 main 前段执行——此处保留调用点注释） ----
 
+    // ---- 阶段25 UI 模型检查（指令六十七：无服务器，纯模型） ----
+    RunUiModelChecks();
     // ---- 阶段11 验收主链（Gateway 全链） ----
     {
         WorldTestServers servers;

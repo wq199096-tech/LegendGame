@@ -205,6 +205,9 @@ private:
     bool m_visualHookWired = false;   // 事件钩子只挂一次
     bool m_visualCameraSnapped = false; // 进入世界后首帧相机 snap
     bool m_visualSmoke = false;       // LEGEND_CLIENT_VISUAL_SMOKE=1：15s 存活冒烟
+    bool m_vsSmoke = false;           // 阶段25 指令六十九：LEGEND_CLIENT_VS_SMOKE=1 30s
+    std::uint64_t m_vsSmokeStartMs = 0;
+    bool m_vsSmokeWorldReadyLogged = false;
     std::uint64_t m_visualSmokeStartMs = 0; // 墙钟起点（SDL_GetTicks；游戏时间会被低 FPS 钳制）
     float m_playerRespawnTimer = 0.0f; // 死亡后复活倒计时
     bool m_combatDebug = false;        // F4

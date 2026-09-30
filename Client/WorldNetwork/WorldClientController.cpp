@@ -464,6 +464,13 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                     m_localExpToNext = 0;
                 }
                 m_localGold = event.progression.newGold;
+                // 阶段25 指令十五：Attack/Defense 展示（Base 值；装备加成在 Equipment 镜像）。
+                if (event.progression.newAttackPower != 0) {
+                    m_localAttackPower = event.progression.newAttackPower;
+                }
+                if (event.progression.newDefense != 0) {
+                    m_localDefensePower = event.progression.newDefense;
+                }
             }
             LOG_INFO("[Progression] Reward " +
                      std::to_string(event.progression.expGranted) + " exp / " +
@@ -477,6 +484,13 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                 m_localExpToNext = event.progression.expToNext;
                 m_localMaxHp = event.progression.newMaxHp; // 升级回满（指令十二）
                 m_localCurrentHp = event.progression.newMaxHp;
+                // 阶段25 指令十五：升级后 Base 攻防立即更新展示。
+                if (event.progression.newAttackPower != 0) {
+                    m_localAttackPower = event.progression.newAttackPower;
+                }
+                if (event.progression.newDefense != 0) {
+                    m_localDefensePower = event.progression.newDefense;
+                }
             }
             LOG_INFO("[Progression] Player #" + std::to_string(event.characterId) + " leveled " +
                      std::to_string(event.progression.oldLevel) + " -> " +
@@ -488,6 +502,12 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
                 m_localExperience = event.progression.currentExp;
                 m_localExpToNext = event.progression.expToNext;
                 m_localGold = event.progression.newGold;
+                if (event.progression.newAttackPower != 0) {
+                    m_localAttackPower = event.progression.newAttackPower;
+                }
+                if (event.progression.newDefense != 0) {
+                    m_localDefensePower = event.progression.newDefense;
+                }
             }
             break;
         // ------------------------------------------------------------------
@@ -864,6 +884,24 @@ bool WorldClientController::SendBuySelected(std::uint32_t quantity) {
         }
     }
     return false;
+}
+
+// 阶段25 指令十九：正式 Shop UI —— 按条目索引购买（服务器重新验证价格/距离）。
+bool WorldClientController::SendBuyByIndex(std::size_t zeroBasedIndex, std::uint32_t quantity) {
+    if (!IsWorldReady() || !m_shop.Active()) {
+        return false;
+    }
+    if (zeroBasedIndex >= m_shop.Entries().size()) {
+        return false;
+    }
+    const auto& entry = m_shop.Entries()[zeroBasedIndex];
+    if (!entry.canBuy) {
+        return false;
+    }
+    m_lastNpcRequestId = m_nextNpcRequestId++;
+    m_client->SendShopBuy(m_lastNpcRequestId, m_shop.SessionId(), entry.itemDefinitionId,
+                          quantity);
+    return true;
 }
 
 bool WorldClientController::SendSellSelected(std::uint64_t inventoryInstanceId,

@@ -35,6 +35,15 @@ struct GameDataManifest {
     std::vector<std::string> files;
 };
 
+// 章节定义（阶段25：章节展示元数据——Chapter Complete 判定/编辑器 Chapter
+// Editor/Quest Flow 用；服务器逻辑不消费，加载可选）。
+struct ChapterDefinition {
+    std::uint32_t chapterId = 0;
+    std::string title;
+    std::uint32_t finalQuestId = 0;      // 该任务 Completed = 章节完成
+    std::vector<std::uint32_t> questIds; // 章节任务链（编辑器 Quest Flow 用）
+};
+
 struct GameDataSet {
     GameDataManifest manifest;
     std::vector<ItemDefinition> items;
@@ -45,9 +54,11 @@ struct GameDataSet {
     std::vector<ShopDefinition> shops;
     std::vector<TeleportDefinition> teleports;
     std::vector<LootTableDefinition> lootTables;
+    std::vector<ChapterDefinition> chapters;
 };
 
 // 加载目录下全部 9 个文件（任一缺失/JSON 非法/字段类型错 → false + error）。
+// chapters.json 为可选文件（存在则加载+校验；缺失 → 空 chapters，不报错）。
 bool LoadGameData(const std::string& dir, GameDataSet& out, std::string& error);
 
 // 23.11/23.14：全量校验（含交叉引用；world 参数提供 NPC/Map/Spawn 引用源）。

@@ -42,6 +42,33 @@
 
 GameScene::~GameScene() = default; // 阶段9：unique_ptr 完整类型在此实例化
 
+// ---------------------------------------------------------------------------
+// 阶段25 指令五十二：Settings 窗口的窗口模式/分辨率应用（SDL 直接调用）。
+// ---------------------------------------------------------------------------
+namespace {
+
+void SetWindowFullscreen(legend::Engine& engine, bool fullscreen) {
+    SDL_Window* window = engine.GetWindow().GetHandle();
+    if (window != nullptr) {
+        SDL_SetWindowFullscreen(window, fullscreen);
+    }
+}
+
+void SetWindowResolution(legend::Engine& engine, int index) {
+    static constexpr int kWidths[3] = {1280, 1600, 1920};
+    static constexpr int kHeights[3] = {720, 900, 1080};
+    if (index < 0 || index > 2) {
+        index = 1;
+    }
+    SDL_Window* window = engine.GetWindow().GetHandle();
+    if (window != nullptr) {
+        SDL_SetWindowSize(window, kWidths[index], kHeights[index]);
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+}
+
+} // namespace
+
 GameScene::GameScene(std::shared_ptr<legend::map::Map> map)
     : legend::scene::Scene("GameScene"), m_map(std::move(map)) {}
 
@@ -122,6 +149,8 @@ void GameScene::OnLoad() {
         m_visualRuntime.reset(); // 数据缺失：保持旧渲染路径（不崩溃）
     }
     m_visualSmoke = SDL_getenv("LEGEND_CLIENT_VISUAL_SMOKE") != nullptr;
+    // 阶段25 指令六十九：Vertical Slice Client Smoke —— AutoEnter 进世界后 30s 存活。
+    m_vsSmoke = SDL_getenv("LEGEND_CLIENT_VS_SMOKE") != nullptr;
     if (m_visualSmoke) {
         LOG_INFO("[VisualSmoke] game-scene-started");
     }
@@ -444,8 +473,8 @@ void GameScene::Update(float deltaTime) {
     if (m_visualRuntime && !m_visualHookWired) {
         m_networkController->World().SetVisualEventHook(
             [this](const legend::client::WorldNetworkEvent& event) {
-                if (m_visualRuntime != nullptr) {
-                    m_visualRuntime->OnWorldEvent(event);
+                if (m_visualRuntime != nullptr && m_networkController != nullptr) {
+                    m_visualRuntime->OnWorldEvent(event, m_networkController->World());
                 }
             });
         m_visualHookWired = true;
@@ -468,6 +497,24 @@ void GameScene::Update(float deltaTime) {
         }
         if (SDL_GetTicks() - m_visualSmokeStartMs >= 15000) {
             LOG_INFO("[VisualSmoke] pass — client alive 15s, quitting cleanly.");
+            legend::Engine::Get().Quit();
+        }
+    }
+    if (m_vsSmoke) {
+        // 阶段25 指令六十九：AutoEnter 进世界 + 30s 存活干净退出 + 里程碑标记。
+        if (m_vsSmokeStartMs == 0) {
+            m_vsSmokeStartMs = SDL_GetTicks();
+        }
+        if (!m_vsSmokeWorldReadyLogged &&
+            m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+            m_vsSmokeWorldReadyLogged = true;
+            LOG_INFO("[VsSmoke] entered-world map=" + std::to_string(
+                         m_networkController->World().MapModel().CurrentMapId()) + " name=" +
+                     m_networkController->World().MapModel().CurrentMapName());
+        }
+        if (SDL_GetTicks() - m_vsSmokeStartMs >= 30000) {
+            LOG_INFO("[VsSmoke] pass — client alive 30s (world-ready=%d), quitting cleanly.",
+                     m_vsSmokeWorldReadyLogged ? 1 : 0);
             legend::Engine::Get().Quit();
         }
     }
@@ -791,6 +838,52 @@ void GameScene::Update(float deltaTime) {
         }
     }
 
+    // ---- 阶段25 指令十六~五十二：正式 UI 开关键（I/C/Esc；鼠标状态喂入）----
+    if (m_visualRuntime != nullptr && m_networkController != nullptr &&
+        m_networkController->World().IsWorldReady()) {
+        auto& world25 = m_networkController->World();
+        if (input.IsKeyPressed(SDL_SCANCODE_I)) {
+            m_visualRuntime->ToggleInventory();
+        }
+        if (input.IsKeyPressed(SDL_SCANCODE_C)) {
+            m_visualRuntime->ToggleCharacterPanel();
+        }
+        if (input.IsKeyPressed(SDL_SCANCODE_ESCAPE)) {
+            m_visualRuntime->ToggleSettings();
+        }
+        m_visualRuntime->SetMouseState(input.GetMousePosition().x, input.GetMousePosition().y,
+                                       input.IsMouseButtonPressed(1));
+        // UI 请求分发（上一帧渲染产生；服务器依旧权威）。
+        for (const auto& req : m_visualRuntime->DrainUiRequests()) {
+            using K = legend::client::VisualRuntime::UiRequest::Kind;
+            switch (req.kind) {
+                case K::DialogueOption:
+                    world25.SendDialogueOptionByIndex(static_cast<std::size_t>(req.index));
+                    break;
+                case K::ShopBuy:
+                    world25.SendBuyByIndex(static_cast<std::size_t>(req.index));
+                    break;
+                case K::ShopSell:
+                    world25.SendSellSelected(req.instanceId, 1);
+                    break;
+                case K::EquipDefinition:
+                    world25.SendEquipFirstOf(req.definitionId);
+                    break;
+                case K::UnequipSlot:
+                    world25.SendUnequip(req.equipmentSlot);
+                    break;
+                case K::WindowFullscreen:
+                    SetWindowFullscreen(engine, req.index != 0);
+                    break;
+                case K::WindowResolution:
+                    SetWindowResolution(engine, req.index);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
     // ---- 阶段8：技能控制器（先于战斗：CD 递减/施法流程/1~4/M 按键/事件路由） ----
     m_playerSkill.Update(*m_player, m_playerCombat.GetTarget(), input, deltaTime);
 
@@ -891,6 +984,19 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
         m_visualRuntime->RenderHUD(world, std::string(), static_cast<float>(viewportW),
                                    static_cast<float>(viewportH), m_mapDebug);
         return;
+    }
+
+    // ---- 阶段25 指令五十三/五十四：World 连接管线中 → Loading 覆盖层 ----
+    if (m_visualRuntime && m_visualRuntime->IsReady() && m_networkController != nullptr) {
+        const auto worldState = m_networkController->World().State();
+        if (worldState == legend::client::WorldFlowState::Connecting ||
+            worldState == legend::client::WorldFlowState::Handshaking ||
+            worldState == legend::client::WorldFlowState::WaitingEnterWorld ||
+            worldState == legend::client::WorldFlowState::EnteringWorld) {
+            m_visualRuntime->RenderLoading(static_cast<float>(viewportW),
+                                           static_cast<float>(viewportH));
+            return;
+        }
     }
 
     m_mapRenderer.BeginFrame(camera, static_cast<float>(viewportW), static_cast<float>(viewportH));

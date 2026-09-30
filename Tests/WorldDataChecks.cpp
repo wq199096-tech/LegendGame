@@ -47,9 +47,9 @@ void RunWorldDataLogicChecks() {
     // ---- 默认世界 + 数量（22.18 迁移）----
     {
         WorldDataSet data = MakeDefaultWorldData();
-        Check("WorldData: default data has 3 maps / 4 npcs / 2 spawns / 4 portals",
+        Check("WorldData: default data has 3 maps / 4 npcs / 3 spawns / 4 portals",
               data.maps.size() == 3 && data.npcs.size() == 4 &&
-                  data.monsterSpawns.size() == 2 && data.portals.size() == 4 &&
+                  data.monsterSpawns.size() == 3 && data.portals.size() == 4 &&
                   data.dialogues.size() == 4);
         std::string error;
         Check("WorldData: default data validates", ValidateWorldData(data, error));
@@ -255,9 +255,10 @@ void RunWorldDataChainChecks() {
         const bool started = servers.StartLogin() && servers.StartWorld();
         Check("WorldData: server starts with real Data dir", started);
         if (started) {
-            // slots = legacy(20, harness 默认开) + Map2(25) + Map3(10) = 55。
+            // slots = legacy(20, harness 默认开) + Map2(25) + Map3 slime(10) + Map3 boss(1)
+            // = 56。
             Check("WorldData: spawn slots follow JSON counts",
-                  servers.world->SpawnSlotCount() == 55);
+                  servers.world->SpawnSlotCount() == 56);
         }
         servers.StopAll();
         fs::remove_all(dir, ec);
@@ -294,12 +295,13 @@ void RunWorldDataChainChecks() {
         Check("WorldData: registry defaults loaded",
               MapRegistry::Instance().Count() == 3 &&
                   NpcRegistry::Instance().Count() == 4 &&
-                  MonsterSpawnRegistry::Instance().Count() == 2 &&
+                  MonsterSpawnRegistry::Instance().Count() == 3 &&
                   PortalRegistry::Instance().Count() == 4);
         Check("WorldData: registry lookups intact",
               MapRegistry::Instance().FindMap(2) != nullptr &&
                   NpcRegistry::Instance().FindNpc(5003) != nullptr &&
                   MonsterSpawnRegistry::Instance().FindSpawn(3001) != nullptr &&
+                  MonsterSpawnRegistry::Instance().FindSpawn(3002) != nullptr &&
                   PortalRegistry::Instance().FindPortal(8003) != nullptr);
         std::string error;
         Check("WorldData: spawn registry validates against maps",

@@ -166,6 +166,11 @@ bool GameDataDocument::RemoveSelected() {
                               return v.lootTableId == sel.id;
                           }) > 0;
                 break;
+            case ObjectType::Chapter:
+                removed = std::erase_if(d.chapters, [&](const ChapterDefinition& v) {
+                              return v.chapterId == sel.id;
+                          }) > 0;
+                break;
             case ObjectType::None:
                 break;
         }
@@ -275,6 +280,17 @@ bool GameDataDocument::DuplicateSelected() {
                 }
                 break;
             }
+            case ObjectType::Chapter: {
+                const auto* src = FindChapter(sel.id);
+                if (src != nullptr) {
+                    ChapterDefinition copy = *src;
+                    copy.chapterId = SuggestChapterId();
+                    copy.title += " Copy";
+                    d.chapters.push_back(copy);
+                    duplicated = true;
+                }
+                break;
+            }
             case ObjectType::None:
                 break;
         }
@@ -361,6 +377,11 @@ std::uint32_t GameDataDocument::SuggestLootTableId() const {
                        [](const LootTableDefinition& v) { return v.lootTableId; }, 0);
 }
 
+std::uint32_t GameDataDocument::SuggestChapterId() const {
+    return SuggestFrom(m_data.chapters,
+                       [](const ChapterDefinition& v) { return v.chapterId; }, 0);
+}
+
 // ---------------------------------------------------------------------------
 // 查找
 // ---------------------------------------------------------------------------
@@ -431,6 +452,15 @@ const TeleportDefinition* GameDataDocument::FindTeleport(std::uint32_t id) const
 const LootTableDefinition* GameDataDocument::FindLootTable(std::uint32_t id) const {
     for (const auto& v : m_data.lootTables) {
         if (v.lootTableId == id) {
+            return &v;
+        }
+    }
+    return nullptr;
+}
+
+const ChapterDefinition* GameDataDocument::FindChapter(std::uint32_t id) const {
+    for (const auto& v : m_data.chapters) {
+        if (v.chapterId == id) {
             return &v;
         }
     }

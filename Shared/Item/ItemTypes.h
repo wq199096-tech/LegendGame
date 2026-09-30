@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -25,10 +25,14 @@ enum class EquipmentSlot : std::uint8_t {
     Armor = 2,
 };
 
-// 物品 definitionId（阶段18 固定三种，指令三）。
+// 物品 definitionId（阶段18 固定三种，指令三；阶段25 指令十四：新物品 3010+）。
 inline constexpr std::uint32_t kItemRustySwordId = 3001;
 inline constexpr std::uint32_t kItemClothArmorId = 3002;
 inline constexpr std::uint32_t kItemSlimeCoreId = 3003;
+inline constexpr std::uint32_t kItemBronzeSwordId = 3010;       // 阶段25 指令十三
+inline constexpr std::uint32_t kItemApprenticeStaffId = 3011;   // 阶段25 指令十三
+inline constexpr std::uint32_t kItemSpiritTalismanId = 3012;    // 阶段25 指令十三
+inline constexpr std::uint32_t kItemTravelerArmorId = 3013;     // 阶段25 指令十三
 
 // 背包容量（指令六：每角色 40 格）。
 inline constexpr std::size_t kInventorySlots = 40;

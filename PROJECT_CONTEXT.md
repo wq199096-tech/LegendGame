@@ -73,6 +73,15 @@
   PNG + Client 15s 冒烟入 CTest；1b43b61 起步，c9cac3f 功能基线；
   CI run 36673795651（9a45ddc）= success——CI 装 mesa-dist-win 26.2.3 软件 GL +
   GALLIUM_DRIVER=llvmpipe 跑 Client Visual Smoke）
+- 阶段25 First Playable Vertical Slice V0.25：第一章《异动的史莱姆》完整可玩循环
+  （新角色出生哨兵 (-1,-1) → 服务器权威 Map1 300,300；任务链 4001~4006；Boss 2001
+  Ancient Slime Guardian + loot_table_2001 + respawn 45s；新装备 3010~3013；正式 UI
+  LegendClientUi 库 + VisualRuntime 全套窗口（HUD V2/SkillBar/Tracker/对话/商店/背包/
+  角色面板/MiniMap/Toast/Banner/BossBar/LevelUp/Settings）；SafeZone metadata +
+  EntryProtection 2s；AudioRuntime SDL3 程序化合成 BGM/SFX；Loading 覆盖层；
+  测试 VerticalSliceChecks/UiModelChecks/ChapterOneChecks（真实生产数据 E2E）；
+  CI 新增 Vertical Slice runtime smoke 四进程链硬步骤；
+  dcbe5b0 起步，6afa4b0 checkpoint A；最终提交见 TRAE_RUN_STATE.json）
 
 ## 关键架构原则
 1. **100% 服务器权威**：Client 只表达意图（requestId + 最小参数），所有数值/状态/结果由服务器重新验证；
