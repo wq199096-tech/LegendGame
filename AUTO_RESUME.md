@@ -11,6 +11,8 @@
 - EditorTheme / EditorStrings、中文字体回退、DPI、自适应可拖动 IDE 布局、真实地图视觉、
   中文内容树与属性面板、资源/动画/BOSS/任务/章节/检查/运行状态均已接入。
 - 本地：8/8 exe、Editor world smoke、NetworkTests、AccountTests、WorldTests、CTest 全绿。
+- 远端：功能提交 `b7be2dc24731d5e91605389776c9785d3ed7b656`；Actions run
+  `36733983651` 全部 SUCCESS（含 8 exe / CTest / Runtime / Vertical Slice smoke）。
 - 恢复后先以 `TRAE_RUN_STATE.json` 与 Git HEAD 为准；无未完成编码任务，等待 Stage26 指令。
 
 ## 最终状态：Stage24 completed

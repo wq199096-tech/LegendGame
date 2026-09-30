@@ -24,6 +24,13 @@
   smoke 与运行日志验收。人工视觉仍建议在 125% DPI、1280×720、1920×1080 各复查一次。
 - Git / Actions：功能提交与 CI 结果见本文件末尾最新封板记录。
 
+## Stage25 Chinese Studio UI Patch 封板
+- 功能提交：**b7be2dc24731d5e91605389776c9785d3ed7b656**
+  `feat(editor): redesign studio with simplified chinese ui`
+- GitHub Actions：**run 36733983651 = success**
+- CI 明细：Configure CMake / Build all targets / Verify 8 executables /
+  CTest hard gate / Runtime gate / Vertical Slice runtime smoke 全部 SUCCESS。
+
 ## 当前阶段
 - **阶段25 —— First Playable Vertical Slice V0.25：已完成（completed）**
 - 起始 HEAD：**dcbe5b0e3e4b623e79a28452fac0d76a24edbe6d**（`docs(stage24): record ci run success and final shas`）
