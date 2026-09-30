@@ -91,12 +91,18 @@ void RunClientSmokeLogicChecks() {
     Check("ClientSmoke: client exited cleanly (exit code 0 within 90s)",
           waitResult == WAIT_OBJECT_0 && exitCode == 0);
 
+    // [Diag] 诊断行（CI 失败注解通道用）。
+    std::printf("[Diag] ClientSmoke waitResult=%lu exitCode=%lu\n",
+                static_cast<unsigned long>(waitResult), static_cast<unsigned long>(exitCode));
+
     // ---- 里程碑标记（日志）----
     const std::string log = ReadFileText(logPath);
     if (log.empty()) {
         Check("ClientSmoke: smoke log readable", false);
         return;
     }
+    std::printf("[Diag] ClientSmoke log size=%zu head=%.180s\n", log.size(),
+                log.c_str());
     Check("ClientSmoke: gl-context-ready", Contains(log, "[VisualSmoke] gl-context-ready"));
     Check("ClientSmoke: shader-compiled", Contains(log, "[VisualSmoke] shader-compiled"));
     Check("ClientSmoke: asset-manifest-loaded",

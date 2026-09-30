@@ -19,6 +19,26 @@ jobs:
       - name: Build (all targets)
         run: cmake --build build --config Debug --parallel
 
+      # 阶段24 指令四十七：Client 冒烟需要 OpenGL 3.3——GitHub Windows runner 只有
+      # GDI Generic 1.1，装 Mesa llvmpipe 软件渲染（环境配置步骤；门禁本身不弱化）。
+      - name: Install software OpenGL (Mesa llvmpipe) for client smoke
+        shell: pwsh
+        run: |
+          $ver = '26.2.3'
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$ver/mesa3d-$ver-release-msvc.7z"
+          $zip = "$env:RUNNER_TEMP/mesa.7z"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = '7z' }
+          & $sevenZip x $zip "-o$env:RUNNER_TEMP/mesa" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error 'mesa extract failed'; exit 1 }
+          $dst = 'build/bin/Debug'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/mesa/x64/opengl32.dll" $dst -Force
+          Copy-Item "$env:RUNNER_TEMP/mesa/x64/lib*.dll" $dst -Force
+          Get-ChildItem $dst -Filter *.dll | ForEach-Object { Write-Host $_.Name }
+          Write-Host 'MESA SOFTWARE GL INSTALLED'
+
       - name: Verify artifacts (8 executables)
         shell: pwsh
         run: |
