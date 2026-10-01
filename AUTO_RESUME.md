@@ -5,17 +5,23 @@
 > 然后执行 git status / git fetch origin / git pull --ff-only / git log -8 --oneline。
 > 禁止 git reset --hard / git clean -fd / checkout .（除非已证明安全）。
 
-## 最新状态：Stage26 Production Login & Character Lobby running（2026-10-01）
-- **Stage26 running**：把 LegendClient.exe 升级为正式玩家入口（启动画面→连接检查→
-  登录/注册→角色大厅→创建/删除/选择角色→进入世界加载→游戏）。开发分支
-  `stage26-production-client-entry`（基线 6f02d42）。
-- 硬性规则：默认启动绝不自动注册/登录/建角/进世界（AutoEnter 仅 CI/Smoke/开发，
-  LEGEND_CLIENT_AUTO_ENTER / LEGEND_CLIENT_VS_SMOKE 保留）；ClientFlowState
-  状态机集中管理；新 UI 全简体中文统一 UiTheme/LegendClientUi；角色名唯一
-  DB UNIQUE + Schema Migration（不破坏旧库）；每账号 4 角色上限服务器权威；
-  删除二次确认（重输角色名+归属验证）；PlayerFacingErrorCatalog 中文错误映射；
-  11 exe（8 正式 + 3 测试）不变；测试并入现有 3 套 CTest；完成后 PR + main CI
-  全绿再封板。完成标准 25 条见 CURRENT_STAGE.md 与阶段指令。
+## 最新状态：Stage26 Production Login & Character Lobby completed（2026-10-02）
+- **Stage26 completed（代码封板）**：LegendClient.exe 已升级为正式玩家入口——
+  ClientFlowState 状态机（Boot/Connecting/Login/Register/CharacterLobby/
+  CharacterCreate/EnteringWorld/InWorld/Disconnected/FatalError）+ FlowPages
+  全简体中文页面 + 大厅角色卡（动画立绘/造型一二三）+ 删除重输确认 +
+  PlayerFacingErrorCatalog + client_login.json（只存账号名）+ LeaveWorld 回大厅。
+  服务器：角色名 UTF-8 码点规则、visualId 持久化（Migration 6）、4 角色上限、
+  归属校验（全部服务器权威）。AutoEnter（LEGEND_CLIENT_AUTO_ENTER / VS_SMOKE）
+  保留；默认启动绝不自动注册/登录/建角/进世界；flow 在 AutoEnter 下纯观测。
+- 验证：WorldTests failures=0（Stage26FlowChecks 13/13 + ClientSmoke AutoEnter
+  链路未破坏）；GUI 人工验收 14 张截图 testlogs/stage26-ui-acceptance/；
+  服务器确认 `Character created name=界面英雄 visualId=2`。
+- Known Issues（非阻塞）：文本框运行时 CJK 字形部分帧不显示（视觉层）；
+  远程玩家按 classId 渲染（PlayerSpawn 无 visualId）。
+- 分支：`stage26-production-client-entry`（基线 6f02d42 → head 1c759cd，
+  提交链 ecbb957/d1c21f2/06bc206/a77e177/1c759cd）。下一步：PR → main CI
+  全绿 → merge → main 文档封板提交 → 等待 Stage27 指令。
 
 ## 历史：Stage25.6 Server Management GUI completed（2026-10-01）
 - 六服务器（Db/Log/Login/Character/World/Gateway）双击打开全简体中文 GUI 管理台

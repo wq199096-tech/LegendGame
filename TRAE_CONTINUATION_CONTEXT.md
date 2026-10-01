@@ -3,16 +3,24 @@
 > 新会话/续接第一步：读本文件 + PROJECT_CONTEXT.md + CURRENT_STAGE.md + ARCHITECTURE.md，
 > 然后执行 git status / git log -5 --oneline，确认一致后继续。
 
-## 当前续接状态（2026-10-01）
-- **Stage26 Production Login & Character Lobby V0.26（running）**；开发分支
-  `stage26-production-client-entry`（基线 6f02d42）。目标：LegendClient.exe 升级为
-  正式玩家入口（启动画面→连接检查→登录/注册→角色大厅→创建/删除/选择角色→
-  进入世界加载→游戏）。默认启动绝不自动注册/登录/建角/进世界（AutoEnter 仅
-  CI/Smoke/开发，env 保留）。客户端 ClientFlowState 状态机集中管理；全部新 UI
-  简体中文统一 UiTheme/LegendClientUi；角色名唯一 DB UNIQUE + Migration；
-  每账号 4 角色上限服务器权威；删除二次确认；PlayerFacingErrorCatalog 中文映射；
-  11 exe 不变，测试并入 3 套 CTest；完成后 PR + main CI 全绿再封板。
-  详见 CURRENT_STAGE.md 与阶段指令（42 条）。
+## 当前续接状态（2026-10-02）
+- **Stage26 Production Login & Character Lobby V0.26（completed，代码封板）**；
+  分支 `stage26-production-client-entry`（基线 6f02d42 → head 1c759cd）。
+  LegendClient.exe 已升级为正式玩家入口：ClientFlowState 状态机 + FlowPages
+  全中文页面（Boot→Connecting→Login/Register→Lobby→Create→EnteringWorld→
+  InWorld；Disconnected/FatalError）+ 大厅立绘/造型一二三 + 删除重输确认 +
+  PlayerFacingErrorCatalog + client_login.json（只存账号名）+ LeaveWorld 回大厅。
+  服务器：角色名 UTF-8 码点规则/visualId 持久化（Migration 6）/4 角色上限/
+  归属校验（全部服务器权威）。AutoEnter（LEGEND_CLIENT_AUTO_ENTER/VS_SMOKE）
+  保留，默认启动绝不自动登录/建角/进世界；flow 在 AutoEnter 下纯观测。
+- 验证：WorldTests failures=0（含 Stage26FlowChecks 13/13：纯逻辑 + 完整流程
+  E2E + 重启持久化 + 跨账号删除拒绝 + ClientSmoke AutoEnter 链路未破坏）；
+  GUI 人工验收 14 张截图 testlogs/stage26-ui-acceptance/（登录/注册/大厅/
+  创建/删除确认/进世界/断线，服务器确认"界面英雄"visualId=2 持久化）。
+- **Known Issues（非阻塞，见 CURRENT_STAGE.md）**：文本框运行时 CJK 字形
+  部分帧不显示（视觉层）；远程玩家按 classId 渲染（PlayerSpawn 无 visualId）。
+- 下一步：PR（stage26-production-client-entry → main）→ CI 全绿 → merge →
+  main CI 全绿 → main 文档封板提交 → 最终报告。等待 Stage27 指令。
 - **Stage25.6 Server Management GUI 已封板（completed）**：六服务器全简体中文
   GUI 管理台（SDL3+Dear ImGui 五页签+状态栏，默认无 CMD，--console 供 CI/开发，
   WM_CLOSE 优雅停机）；LegendServerAdminUi + Tools/UiCore 共享 UI 基建；
@@ -23,7 +31,6 @@
 - 现有 `LegendMapEditor.exe` = "传奇游戏开发工具 - LegendGame Studio"：
   中文主题/DPI/菜单/内容树/地图 Canvas/Asset Browser/Animation Preview/
   Quest Flow/BOSS/Chapter/Validation/Process Status/服务器中心。
-- 下一步：执行 Stage26 设计与实现（见 CURRENT_STAGE.md running 段）。
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
