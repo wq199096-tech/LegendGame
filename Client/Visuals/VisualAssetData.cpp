@@ -414,6 +414,16 @@ bool LoadVisualEntities(const std::string& filePath, VisualEntitySet& out, std::
             }
             entity.portraitAsset = portraitIt->get<std::string>();
         }
+        // 阶段26 指令十一：可选 tint（"#RRGGBB" 或 "#RRGGBBAA"，缺省白色）——
+        // 造型差异化着色（同一动画集不同外观色）。
+        const auto tintIt = e.find("tint");
+        if (tintIt != e.end()) {
+            if (!tintIt->is_string()) {
+                error = filePath + ": entity '" + entity.visualId + "': tint must be a string";
+                return false;
+            }
+            entity.tint = tintIt->get<std::string>();
+        }
         const auto animsIt = e.find("animations");
         if (animsIt == e.end() || !animsIt->is_object()) {
             error = filePath + ": entity '" + entity.visualId +

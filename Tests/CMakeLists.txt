@@ -69,6 +69,7 @@ add_executable(LegendWorldTests
     VerticalSliceChecks.cpp
     UiModelChecks.cpp
     ChapterOneChecks.cpp
+    LeaveWorldChecks.cpp
     FullServerTopologyCheck.cpp
     ../Tools/MapEditor/Source/WorldDocument.cpp
     ../Tools/MapEditor/Source/GameDataDocument.cpp

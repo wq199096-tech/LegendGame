@@ -230,6 +230,14 @@ void GatewaySession::MarkInWorld() {
     }
 }
 
+void GatewaySession::MarkLeftWorld() {
+    // 阶段26 指令十七：InWorld（或异常路径 CharacterSelected）回退 Authenticated。
+    if (m_state == GatewaySessionState::InWorld ||
+        m_state == GatewaySessionState::CharacterSelected) {
+        m_state = GatewaySessionState::Authenticated;
+    }
+}
+
 bool GatewaySession::CanRoute(std::uint16_t messageId) const {
     const auto id = static_cast<MessageId>(messageId);
     if (id == MessageId::RegisterRequest || id == MessageId::AccountLoginRequest ||

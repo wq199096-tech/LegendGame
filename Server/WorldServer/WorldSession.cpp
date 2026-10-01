@@ -147,6 +147,22 @@ bool WorldSession::HandlePostHandshake(const Packet& packet, std::string& error)
             // 阶段21 指令十九/三十三：PortalUse/Respawn 请求放行（全部验证链在
             // WorldServer 服务器权威逻辑）。
             return true;
+        case MessageId::LeaveWorldRequest: {
+            // 阶段26 指令十七：主动离开世界（仅 InWorld 接受；其它状态忽略=Protocol error）。
+            if (m_state != WorldSessionState::InWorld || m_hasPendingLeaveWorld) {
+                error = "LeaveWorldRequest in invalid state";
+                return false;
+            }
+            world::LeaveWorldRequestPayload req;
+            if (!legend::world::DecodeLeaveWorldRequest(packet.payload.data(), packet.payload.size(),
+                                                        req, error)) {
+                error = "malformed LeaveWorldRequest";
+                return false;
+            }
+            m_pendingLeaveWorld = packet;
+            m_hasPendingLeaveWorld = true;
+            return true;
+        }
         case MessageId::WorldDisconnectNotice: {
             // 阶段11 指令七十九：客户端主动退出世界
             world::WorldDisconnectNoticePayload notice;
@@ -174,6 +190,16 @@ bool WorldSession::TakePendingEnterWorld(Packet& out) {
     out = std::move(m_pendingEnterWorld);
     m_pendingEnterWorld = Packet{};
     m_hasPendingEnterWorld = false;
+    return true;
+}
+
+bool WorldSession::TakePendingLeaveWorld(Packet& out) {
+    if (!m_hasPendingLeaveWorld) {
+        return false;
+    }
+    out = std::move(m_pendingLeaveWorld);
+    m_pendingLeaveWorld = Packet{};
+    m_hasPendingLeaveWorld = false;
     return true;
 }
 

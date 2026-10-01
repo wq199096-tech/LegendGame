@@ -44,6 +44,10 @@ public:
     void MarkAuthenticated(std::uint64_t accountId);
     void MarkCharacterSelected(std::uint64_t characterId);
     void MarkInWorld();
+    // 阶段26 指令十七：主动离开世界（world 代理关闭且主连接存活）——回退
+    // InWorld/CharacterSelected -> Authenticated（SelectionTicket 已一次性消费，
+    // 重新进入世界必须重新 SelectCharacter 签发新 ticket）。
+    void MarkLeftWorld();
     bool CanRoute(std::uint16_t messageId) const;
 
     // 一次性取出待转发登录数据（GatewayServer 检测到 LoginPending 后调用；

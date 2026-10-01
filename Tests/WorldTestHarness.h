@@ -327,7 +327,10 @@ struct WorldTestClient {
 
     // 阶段17：事件枚举扩容（阶段16 末尾 30 个 + 成长 3 个 + 阶段18 8 个 +
     // 阶段19 任务 7 个 = 48，留余量到 64）。
-    static constexpr int kEventCapacity = 64;
+    // 阶段26 指令十七：LeaveWorld 事件插入后枚举最大值 = PlayerRespawnedEvent 65，
+    // 容量必须 > 最大枚举值（64 曾导致 recorded[64/65] 越界踩 counts，确定性崩溃），
+    // 扩到 96 并留后续客户端流程事件的余量。
+    static constexpr int kEventCapacity = 96;
     std::deque<WorldNetworkEvent> recorded[kEventCapacity];
     int counts[kEventCapacity] = {};
     // 阶段20：WorldNetworkEvent 因 NPC/Shop/Teleport payload 膨胀（~KB 级/事件），

@@ -84,6 +84,9 @@ struct WorldNetworkEvent {
         HandshakeFailed,
         EnterWorldSuccess,
         EnterWorldFailed,
+        // 阶段26 指令十七：主动离开世界（服务器已保存并移除玩家）。
+        LeaveWorldSuccess,
+        LeaveWorldFailed,
         PositionSnapshot,
         ProtocolError,
         // 阶段12 指令四十六：AOI 多玩家同步事件
@@ -322,6 +325,9 @@ public:
     }
 
     void SendEnterWorld(const std::string& selectionTicket);
+    // 阶段26 指令十七：主动离开世界（仅 WorldReady；收到 LeaveWorldResponse 后
+    // 本地断开 world 连接，Gateway 回退会话状态）。
+    void SendLeaveWorld();
     void SendMoveInput(std::uint32_t inputSequence, float directionX, float directionY,
                        float deltaTime);
     // 阶段14 指令五十九/六十一：Debug 攻击——只发"我想攻击谁"

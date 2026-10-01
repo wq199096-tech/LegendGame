@@ -45,6 +45,9 @@ enum class MessageId : std::uint16_t {
     EnterWorldRequest = 210,
     EnterWorldResponse = 211,
     WorldDisconnectNotice = 212,
+    // 阶段26 指令十七：主动离开世界回角色大厅（保存→移除→响应；区别于断线）。
+    LeaveWorldRequest = 213,
+    LeaveWorldResponse = 214,
     PlayerMoveInput = 220,
     PlayerPositionSnapshot = 221,
     // 阶段12 指令二十一：AOI 多玩家同步

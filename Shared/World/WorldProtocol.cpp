@@ -43,6 +43,40 @@ bool EncodeEnterWorldRequest(const EnterWorldRequestPayload& p, std::vector<std:
     });
 }
 
+// 阶段26 指令十七：主动离开世界（编解码）。
+bool EncodeLeaveWorldRequest(const LeaveWorldRequestPayload& p, std::vector<std::uint8_t>& out) {
+    return EncodePayload(out, [&](legend::network::ByteWriter& w) {
+        w.WriteUInt64(p.requestId);
+        return true;
+    });
+}
+
+bool DecodeLeaveWorldRequest(const std::uint8_t* data, std::size_t size,
+                             LeaveWorldRequestPayload& out, std::string& error) {
+    return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
+        out.requestId = r.ReadUInt64();
+    });
+}
+
+bool EncodeLeaveWorldResponse(const LeaveWorldResponsePayload& p, std::vector<std::uint8_t>& out) {
+    return EncodePayload(out, [&](legend::network::ByteWriter& w) {
+        w.WriteUInt64(p.requestId);
+        w.WriteBool(p.success);
+        w.WriteUInt16(p.errorCode);
+        return w.WriteString(p.message);
+    });
+}
+
+bool DecodeLeaveWorldResponse(const std::uint8_t* data, std::size_t size,
+                              LeaveWorldResponsePayload& out, std::string& error) {
+    return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
+        out.requestId = r.ReadUInt64();
+        out.success = r.ReadBool();
+        out.errorCode = r.ReadUInt16();
+        (void)(r.ReadString(out.message));
+    });
+}
+
 bool DecodeEnterWorldRequest(const std::uint8_t* data, std::size_t size,
                              EnterWorldRequestPayload& out, std::string& error) {
     return DecodePayload(data, size, error, [&](legend::network::ByteReader& r) {
