@@ -20,4 +20,8 @@ inline constexpr int kCurrentSchemaVersion = 5;
 // 旧库 -> 增量应用更高版本 Migration；版本比当前新 -> 失败（禁止降级覆盖）。
 bool InitializeSchema(Database& db, std::string& error);
 
+// Stage25.6：读取已应用的 Migration 版本（运行时查询 schema_version 单行）。
+// 只能在持有该 Database 连接的线程调用（DbServer 经 DbWorker Post）。
+bool ReadSchemaVersion(Database& db, int& outVersion, std::string& error);
+
 } // namespace legend::account

@@ -34,6 +34,9 @@ public:
     void Stop();
 
     std::uint64_t AllocateConnectionId();
+    // Stage25.6 服务器管理台：进程生命周期累计收发包数（连接关闭时并入，单调递增）
+    std::uint64_t PacketsReceived() const { return m_totalPacketsRx.load(std::memory_order_relaxed); }
+    std::uint64_t PacketsSent() const { return m_totalPacketsTx.load(std::memory_order_relaxed); }
 
 private:
     void DoAccept();
@@ -50,6 +53,8 @@ private:
     std::mutex m_connectionsMutex;
     std::map<std::uint64_t, TcpConnectionPtr> m_connections;
     std::atomic<bool> m_accepting{false};
+    std::atomic<std::uint64_t> m_totalPacketsRx{0}; // Stage25.6 管理台埋点
+    std::atomic<std::uint64_t> m_totalPacketsTx{0};
 };
 
 } // namespace legend::net

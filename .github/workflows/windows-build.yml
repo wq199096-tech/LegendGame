@@ -130,7 +130,8 @@ jobs:
           $processes = @()
           try {
             foreach ($name in @('LegendDbServer','LegendLogServer','LegendLoginServer','LegendCharacterServer','LegendWorldServer','LegendGateway')) {
-              $processes += Start-Process -FilePath "$bin/$name.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+              # Stage25.6：exe 改 GUI 子系统，CI 无人值守必须显式 --console
+              $processes += Start-Process -FilePath "$bin/$name.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
             }
             $ports = @(7500,7600,7100,7400,7200,7300)
             $deadline = (Get-Date).AddSeconds(30)
@@ -175,12 +176,12 @@ jobs:
           $env:LEGEND_CLIENT_VS_SMOKE = '1'
           $bin = 'build/bin/Debug'
           Remove-Item Logs/latest.log -ErrorAction SilentlyContinue
-          $db = Start-Process -FilePath "$bin/LegendDbServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
-          $logServer = Start-Process -FilePath "$bin/LegendLogServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
-          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
-          $character = Start-Process -FilePath "$bin/LegendCharacterServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
-          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
-          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+          $db = Start-Process -FilePath "$bin/LegendDbServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $logServer = Start-Process -FilePath "$bin/LegendLogServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $character = Start-Process -FilePath "$bin/LegendCharacterServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
           try {
             $ports = @(7500,7600,7100,7400,7200,7300)
             $readyDeadline = (Get-Date).AddSeconds(30)

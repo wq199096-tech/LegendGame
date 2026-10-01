@@ -92,21 +92,54 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# LegendServerAdminUi（Stage25.6）：六服务器共用 GUI 管理台框架。
+# SDL3 + Dear ImGui + EditorTheme（legend_ui_core），不依赖任何服务器业务库。
+# ---------------------------------------------------------------------------
+add_library(LegendServerAdminUi STATIC
+    AdminUi/LogCapture.cpp
+    AdminUi/ServerAdminApp.cpp
+    AdminUi/ServerMainRunner.cpp
+)
+target_include_directories(LegendServerAdminUi PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendServerAdminUi PUBLIC cxx_std_20)
+target_link_libraries(LegendServerAdminUi
+    PUBLIC
+        legend_ui_core
+        LegendServerCommon
+)
+if(MSVC)
+    target_compile_options(LegendServerAdminUi PRIVATE /utf-8)
+endif()
+
+# ---------------------------------------------------------------------------
 # 可执行文件
 # ---------------------------------------------------------------------------
 add_executable(LegendGateway
     ../Apps/GatewayMain.cpp
 )
-target_link_libraries(LegendGateway PRIVATE LegendGatewayCore)
+target_link_libraries(LegendGateway PRIVATE LegendGatewayCore LegendServerAdminUi)
+# Stage25.6：双击 exe 打开 GUI 管理窗口（无 CMD）；保留 main() 入口
+set_target_properties(LegendGateway PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(LegendGateway PRIVATE "/ENTRY:mainCRTStartup")
 
 if(MSVC)
     target_compile_options(LegendGateway PRIVATE /utf-8)
+    add_custom_command(TARGET LegendGateway POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:LegendGateway>
+            $<TARGET_FILE_DIR:LegendGateway>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Copying runtime DLLs next to LegendGateway.exe"
+    )
 endif()
 
 add_executable(LegendLoginServer
     ../Apps/LoginServerMain.cpp
 )
-target_link_libraries(LegendLoginServer PRIVATE LegendLoginCore)
+target_link_libraries(LegendLoginServer PRIVATE LegendLoginCore LegendServerAdminUi)
+# Stage25.6：双击 exe 打开 GUI 管理窗口（无 CMD）；保留 main() 入口
+set_target_properties(LegendLoginServer PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(LegendLoginServer PRIVATE "/ENTRY:mainCRTStartup")
 
 if(MSVC)
     target_compile_options(LegendLoginServer PRIVATE /utf-8)
@@ -199,10 +232,11 @@ if(MSVC)
     target_compile_options(LegendWorldCore PRIVATE /utf-8)
 endif()
 
-add_executable(LegendWorldServer
-    ../Apps/WorldServerMain.cpp
-)
-target_link_libraries(LegendWorldServer PRIVATE LegendWorldCore)
+add_executable(LegendWorldServer ../Apps/WorldServerMain.cpp)
+target_link_libraries(LegendWorldServer PRIVATE LegendWorldCore LegendServerAdminUi)
+# Stage25.6：双击 exe 打开 GUI 管理窗口（无 CMD）；保留 main() 入口
+set_target_properties(LegendWorldServer PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(LegendWorldServer PRIVATE "/ENTRY:mainCRTStartup")
 
 if(MSVC)
     target_compile_options(LegendWorldServer PRIVATE /utf-8)
@@ -224,7 +258,10 @@ target_compile_features(LegendDbCore PUBLIC cxx_std_20)
 target_link_libraries(LegendDbCore PUBLIC LegendAccountData LegendWorldData LegendNetworkTransport LegendServerCommon)
 
 add_executable(LegendDbServer ../Apps/DbServerMain.cpp)
-target_link_libraries(LegendDbServer PRIVATE LegendDbCore)
+target_link_libraries(LegendDbServer PRIVATE LegendDbCore LegendServerAdminUi)
+# Stage25.6：双击 exe 打开 GUI 管理窗口（无 CMD）；保留 main() 入口
+set_target_properties(LegendDbServer PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(LegendDbServer PRIVATE "/ENTRY:mainCRTStartup")
 
 add_library(LegendCharacterCore STATIC
     Character/CharacterServer.cpp
@@ -234,7 +271,10 @@ target_compile_features(LegendCharacterCore PUBLIC cxx_std_20)
 target_link_libraries(LegendCharacterCore PUBLIC LegendInternalClients LegendAccountData LegendNetworkTransport LegendServerCommon)
 
 add_executable(LegendCharacterServer ../Apps/CharacterServerMain.cpp)
-target_link_libraries(LegendCharacterServer PRIVATE LegendCharacterCore)
+target_link_libraries(LegendCharacterServer PRIVATE LegendCharacterCore LegendServerAdminUi)
+# Stage25.6：双击 exe 打开 GUI 管理窗口（无 CMD）；保留 main() 入口
+set_target_properties(LegendCharacterServer PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(LegendCharacterServer PRIVATE "/ENTRY:mainCRTStartup")
 
 add_library(LegendLogCore STATIC
     Log/LogServer.cpp
@@ -244,13 +284,16 @@ target_compile_features(LegendLogCore PUBLIC cxx_std_20)
 target_link_libraries(LegendLogCore PUBLIC LegendNetworkTransport LegendServerCommon nlohmann_json::nlohmann_json)
 
 add_executable(LegendLogServer ../Apps/LogServerMain.cpp)
-target_link_libraries(LegendLogServer PRIVATE LegendLogCore)
+target_link_libraries(LegendLogServer PRIVATE LegendLogCore LegendServerAdminUi)
+# Stage25.6：双击 exe 打开 GUI 管理窗口（无 CMD）；保留 main() 入口
+set_target_properties(LegendLogServer PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(LegendLogServer PRIVATE "/ENTRY:mainCRTStartup")
 
 if(MSVC)
     foreach(target LegendDbCore LegendDbServer LegendCharacterCore LegendCharacterServer LegendLogCore LegendLogServer)
         target_compile_options(${target} PRIVATE /utf-8)
     endforeach()
-    foreach(target LegendDbServer LegendCharacterServer)
+    foreach(target LegendDbServer LegendCharacterServer LegendLogServer)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_RUNTIME_DLLS:${target}>

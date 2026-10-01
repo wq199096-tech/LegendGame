@@ -11,6 +11,7 @@ namespace legend::debug {
 
 std::mutex Logger::s_mutex;
 std::ofstream Logger::s_file;
+Logger::Sink Logger::s_sink;
 
 namespace {
 
@@ -25,6 +26,16 @@ const char* LevelTag(LogLevel level) {
 }
 
 } // namespace
+
+void Logger::SetSink(Sink sink) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_sink = std::move(sink);
+}
+
+void Logger::ClearSink() {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_sink = nullptr;
+}
 
 void Logger::Init(const std::string& logDirectory) {
     std::lock_guard<std::mutex> lock(s_mutex);
@@ -71,6 +82,10 @@ void Logger::Write(LogLevel level, const std::string& message) {
     if (s_file.is_open()) {
         s_file << text;
         s_file.flush();
+    }
+
+    if (s_sink) {
+        s_sink(level, text);
     }
 }
 

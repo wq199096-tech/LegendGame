@@ -2,57 +2,21 @@
   "project": "LegendGame",
   "branch": "main",
   "stage": "25.5",
-  "status": "completed",
-  "currentTask": "",
-  "nextTask": "Wait for user Stage25.6 instruction",
-  "headSha": "be338e705a04f7fc6df6fd82b5933acd889806f1",
-  "lastCheckpointSha": "2d48702 (wip stage25.5 codex handoff checkpoint)",
-  "finalSha": "see feature commit feat(server): complete multi-service server architecture",
-  "buildStatus": "Stage25.5 Debug build PASS (11/11 executables; TRAE re-verified after World RPC migration)",
-  "networkTests": "PASS / 0 failures",
-  "accountTests": "PASS / 0 failures (DbServerChecks extended: world persistence RPC sequence)",
-  "worldTests": "PASS / 0 failures",
-  "runtimeSmoke": "Six-service topology PASS; seven-process Vertical Slice PASS (entered-world via World->DbServer RPC)",
-  "actionsRunId": "pending",
-  "actionsStatus": "CI running for feat(server) commit",
-  "resumeRequired": false,
-  "codexHandoff": true,
-  "codexHandoffReport": {
-    "takenOverAt": "2026-10-01T12:30:00+08:00",
-    "gitStateAtTakeover": "HEAD=be338e7 (origin/main), 35 modified files (+894/-104), 17 untracked paths; all Stage25.5 work uncommitted in working tree",
-    "completedByCodex": [
-      "Config/servers.json (6 services + persistence/heartbeat/rpc/security)",
-      "Shared/InternalProtocol (v1, ServiceHandshake/Ack, Heartbeat, Persistence/Character/Log messages, strict decode, 1MB cap)",
-      "Server/Db LegendDbServer (LegendDbCore, account/character persistence RPC)",
-      "Server/Character LegendCharacterServer (LegendCharacterCore, GetCharacterList/Create/Delete/Select + ticket)",
-      "Server/Log LegendLogServer (LegendLogCore, JSONL per-day/per-service)",
-      "Server/Common PersistenceClient + LogClient + ServerConfig (requestId/timeout/in-flight/auto-reconnect)",
-      "Gateway state machine Connected/Authenticated/CharacterSelected/InWorld + world proxy routing",
-      "LoginServer registration/login/session migrated to DbServer; schema v5 characters.record_version",
-      "Studio Launch Full Game order Db->Log->Login->Character->World->Gateway->Client + Process Status 7 services",
-      "CI: Verify 11 exe, Server topology smoke (6 services), Vertical Slice 7-process smoke",
-      "New tests: InternalProtocolChecks/CharacterServerChecks/DbServerChecks/LogServerChecks/ServerTopologyChecks/PersistenceRpcChecks/FullServerTopologyCheck",
-      "Apps: CharacterServerMain/DbServerMain/LogServerMain; Graceful shutdown + heartbeat wired"
-    ],
-    "partiallyCompleted": [
-      "WorldServer persistence RPC migration (PlayerSession dirty flags + PersistenceClient existed; DbServer world ops NOT implemented; WorldServer still on local DbWorker)"
-    ],
-    "notStarted": [
-      "World persistence RPC ops (protocol payloads, DbServer Execute cases, WorldServer dual-mode call sites)"
-    ],
-    "completedByTrae": [
-      "InternalProtocol DbOperation 19-32 (ItemInsertWrite/EquipItemWrite/UnequipItemWrite/QuestInsertWrite/QuestTurnInWrite/QuestAbandonWrite/QuestObjectiveWrite/QuestStateWrite/OfflineKillWrite/ShopBuyWrite/ShopSellWrite/SaveGoldWrite/AddRewardsWrite/LoadCharacterFull) + strict codecs in PersistenceMessages",
-      "Repository layer: InventoryRepository InsertOrMergeItem/RunShopBuyTransaction/RunShopSellTransaction + CharacterRepository SaveGold (new LegendWorldData static lib shared by WorldCore and DbCore)",
-      "DbServer Execute: all 10 missing world persistence ops incl. atomic transactions",
-      "WorldServer dual-mode (dbPort=0 legacy isolated tests / dbPort!=0 DbServer RPC): Start/Stop drain, EnterWorld 3-segment load chain, position/progression/gold/offline-reward helpers, pickup/equip/unequip/quest x5/shop buy+sell call sites; graceful shutdown via PersistenceClient::Drain",
-      "WorldServerMain: dbPort/serviceToken/rpcTimeout wired from Config/servers.json",
-      "Tests: DbServerChecks extended with real RPC world-op sequence (position/progression/gold/item insert+merge/equip/unequip/quest insert/objective/state/roundtrip/offline kill/shop buy+sell/rewards/turn-in/abandon/malformed reject); PersistenceRpcChecks extended with world codec roundtrips + truncation rejection",
-      "Fixed OfflineKillWrite semantics (false = no InProgress quest to advance, not an error)",
-      "Fixed MSVC argument-evaluation-order bug (lambda move init-capture emptied request payload before parameter copy)"
-    ]
-  },
-  "stage25ChineseStudioPatch": {
-    "status": "completed, pushed, CI success",
-    "finalSha": "b7be2dc24731d5e91605389776c9785d3ed7b656"
-  }
+  "status": "running",
+  "currentTask": "Fix full 7-process Vertical Slice runtime smoke",
+  "nextTask": "After Vertical Slice smoke green in CI: mark Stage25.5 completed",
+  "headSha": "a60f3ab42c2b663cd4abaa1d6b361426d745709d (fix commit)",
+  "lastCheckpointSha": "c7c4a76d8911c0a4d998430e60a7a3dceb3bb509 (feature commit)",
+  "finalSha": "pending (fix stage25.5 vertical slice smoke)",
+  "buildStatus": "CI Run #66: Build all targets PASS; Verify 8 formal + 3 test executables PASS",
+  "networkTests": "PASS (CTest hard gate green in CI)",
+  "accountTests": "PASS (CTest hard gate green in CI)",
+  "worldTests": "PASS (CTest hard gate green in CI)",
+  "runtimeSmoke": "Runtime gate PASS; Server topology smoke (6 services) PASS; Vertical Slice runtime smoke (full 7-process chain) FAILURE",
+  "actionsRunId": "36827770559",
+  "actionsStatus": "failure",
+  "resumeRequired": true,
+  "investigationScope": "Vertical Slice 7-process chain only: Db/Log/Login/Character/World/Gateway/Client start order, dependency readiness, ports, handshake, heartbeat, ticket, CharacterSelected, EnterWorld, World->DbServer load chain",
+  "constraints": "No architecture refactor; no touching verified Db/Character/Log/Gateway/PersistenceRPC/TopologySmoke; no long sleeps / continue-on-error / smoke removal / weaker assertions. Allowed: explicit ready signals, wait for service Ready + dependency Healthy, reliable retry, clearer logs, timeout diagnostics",
+  "codexHandoff": false
 }

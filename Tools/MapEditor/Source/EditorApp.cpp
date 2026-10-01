@@ -28,8 +28,8 @@
 #include "Engine/Map/MapTypes.h"
 #include "Engine/Render/GLApi.h"
 #include "Engine/Render/Texture.h"
-#include "Tools/MapEditor/Source/EditorStrings.h"
-#include "Tools/MapEditor/Source/EditorTheme.h"
+#include "Tools/UiCore/Source/EditorStrings.h"
+#include "Tools/UiCore/Source/EditorTheme.h"
 
 #include <filesystem>
 #include <set>
@@ -824,6 +824,9 @@ void LegendMapEditorApp::DrawUI() {
         if (m_showProcessStatus) {
             DrawProcessStatusWindow();
         }
+        if (m_showServerCenter) {
+            DrawServerCenterWindow(); // Stage25.6：服务器中心
+        }
         if (m_showAssetBrowser) {
             DrawAssetBrowserWindow();
         }
@@ -1064,6 +1067,7 @@ void LegendMapEditorApp::DrawMenuBar() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(strings::menu::Run)) {
+        if (ImGui::MenuItem("服务器中心")) m_showServerCenter = true; // Stage25.6
         if (ImGui::MenuItem("启动完整游戏")) LaunchFullGame();
         if (ImGui::MenuItem("停止本地游戏", nullptr, false, !m_processes.empty()))
             StopLocalGame();
@@ -2404,7 +2408,8 @@ void LegendMapEditorApp::LaunchWorldServer() {
 
 // 进程启动 helper：exe 与编辑器同目录；工作目录 = 仓库根（相对 Data/ 路径）。
 bool LegendMapEditorApp::LaunchEditorProcess(const char* name, const std::string& exeName,
-                                             const std::string& args) {
+                                             const std::string& args,
+                                             unsigned long creationFlags) {
     char exePath[MAX_PATH] = {};
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
     std::string exeDir = exePath;
@@ -2421,8 +2426,8 @@ bool LegendMapEditorApp::LaunchEditorProcess(const char* name, const std::string
     std::string cmdLine = "\"" + fullExe + "\"" + (args.empty() ? "" : " " + args);
     std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
     cmdBuf.push_back('\0');
-    const BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE, 0, nullptr,
-                                   workDir.c_str(), &si, &pi);
+    const BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
+                                   creationFlags, nullptr, workDir.c_str(), &si, &pi);
     EditorProcess proc;
     proc.name = name;
     if (ok) {
@@ -2440,48 +2445,211 @@ bool LegendMapEditorApp::LaunchEditorProcess(const char* name, const std::string
     return ok;
 }
 
+// Stage25.6 服务描述符：与 Server/AdminUi/ServerRoles.h 的固定窗口标题一致
+//（Studio 以 FindWindowW 定位管理窗口；顺序 = 需求 12：Db/Log/Login/Character/World/Gateway）。
+namespace {
+struct ServiceDescriptor {
+    const char* cnName;
+    const char* exe;
+    unsigned short port;
+    const wchar_t* windowTitle;
+};
+constexpr ServiceDescriptor kServiceDescriptors[6] = {
+    {"数据库服务器", "LegendDbServer.exe", 7500, L"LegendGame 数据库服务器 管理台"},
+    {"日志服务器", "LegendLogServer.exe", 7600, L"LegendGame 日志服务器 管理台"},
+    {"登录服务器", "LegendLoginServer.exe", 7100, L"LegendGame 登录服务器 管理台"},
+    {"角色服务器", "LegendCharacterServer.exe", 7400, L"LegendGame 角色服务器 管理台"},
+    {"世界服务器", "LegendWorldServer.exe", 7200, L"LegendGame 世界服务器 管理台"},
+    {"网关服务器", "LegendGateway.exe", 7300, L"LegendGame 网关服务器 管理台"},
+};
+
+// 按 PID 找进程的可见顶层主窗口（Client 等无固定标题的进程用）。
+HWND FindMainWindowByPid(DWORD pid) {
+    struct Ctx {
+        DWORD pid;
+        HWND hwnd;
+    } ctx{pid, nullptr};
+    EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+        auto* ctx = reinterpret_cast<Ctx*>(lp);
+        DWORD windowPid = 0;
+        GetWindowThreadProcessId(hwnd, &windowPid);
+        if (windowPid == ctx->pid && IsWindowVisible(hwnd) &&
+            GetWindow(hwnd, GW_OWNER) == nullptr) {
+            wchar_t title[64] = {};
+            GetWindowTextW(hwnd, title, 64);
+            if (title[0] != L'\0') {
+                ctx->hwnd = hwnd;
+                return FALSE;
+            }
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.hwnd;
+}
+} // namespace
+
 // Stage25.5 完整拓扑：Db -> Log -> Login -> Character -> World -> Gateway -> Client。
 void LegendMapEditorApp::LaunchFullGame() {
     m_worldMessage = "";
-    const std::string configArgs = "--config \"" + m_serverConfigPath + "\"";
-    bool allOk = LaunchEditorProcess("数据库服务器", "LegendDbServer.exe", configArgs) &&
-                 LaunchEditorProcess("日志服务器", "LegendLogServer.exe", configArgs);
+    // Stage25.6：六服务以 --hidden 启动（GUI 子系统，无 CMD 弹窗；管理窗口按需打开）。
+    bool allOk = LaunchService(0) && LaunchService(1); // Db -> Log
     if (allOk) std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    allOk = allOk && LaunchEditorProcess("登录服务器", "LegendLoginServer.exe", configArgs) &&
-             LaunchEditorProcess("角色服务器", "LegendCharacterServer.exe", configArgs) &&
-             LaunchEditorProcess("世界服务器", "LegendWorldServer.exe", configArgs) &&
-             LaunchEditorProcess("网关服务器", "LegendGateway.exe", configArgs);
+    allOk = allOk && LaunchService(2) && LaunchService(3) && LaunchService(4) &&
+            LaunchService(5); // Login -> Character -> World -> Gateway
     // Client 延迟 2s 启动（等内部握手与依赖重连就绪）。
     if (allOk) {
         std::thread([] { std::this_thread::sleep_for(std::chrono::milliseconds(2000)); }).join();
     }
-    allOk = allOk && LaunchEditorProcess("游戏客户端", "LegendClient.exe");
-    m_worldMessage = allOk ? "完整游戏已启动。"
+    constexpr unsigned long kCreateNoWindow = 0x08000000u; // CREATE_NO_WINDOW
+    allOk = allOk && LaunchEditorProcess("游戏客户端", "LegendClient.exe", "", kCreateNoWindow);
+    m_worldMessage = allOk ? "完整游戏已启动（服务器在服务器中心管理）。"
                            : "启动完整游戏失败：请检查日志并确认全部程序已构建。";
     m_worldMessageIsError = !allOk;
-    m_showProcessStatus = true;
+    m_showServerCenter = true; // Stage25.6：打开服务器中心
 }
 
-// 终止编辑器拉起的全部本地进程。
-void LegendMapEditorApp::StopLocalGame() {
-    int stopped = 0;
-    for (auto& proc : m_processes) {
-        if (proc.hProcess != nullptr) {
+// 服务器中心：按描述符启动单个服务（--hidden，GUI 管理窗口按需打开）。
+bool LegendMapEditorApp::LaunchService(int serviceIndex) {
+    if (serviceIndex < 0 || serviceIndex >= 6) {
+        return false;
+    }
+    const auto& svc = kServiceDescriptors[serviceIndex];
+    // 重复启动保护：同服务已在运行则跳过（真实防重，不是假按钮）
+    for (const auto& proc : m_processes) {
+        if (proc.serviceIndex == serviceIndex && proc.hProcess != nullptr) {
             DWORD exitCode = 0;
             if (GetExitCodeProcess(proc.hProcess, &exitCode) && exitCode == STILL_ACTIVE) {
-                TerminateProcess(proc.hProcess, 0);
-                WaitForSingleObject(proc.hProcess, 2000);
-                ++stopped;
+                m_worldMessage = std::string(svc.cnName) + " 已在运行（PID " +
+                                 std::to_string(proc.pid) + "）。";
+                m_worldMessageIsError = false;
+                return true;
             }
-            CloseHandle(proc.hProcess);
-            proc.hProcess = nullptr;
         }
     }
-    m_processes.clear();
-    m_worldMessage = stopped > 0 ? "已停止 " + std::to_string(stopped) + " 个本地进程。"
-                                 : "本地游戏已停止。";
+    const std::string args = "--config \"" + m_serverConfigPath + "\" --hidden";
+    const bool ok = LaunchEditorProcess(svc.cnName, svc.exe, args);
+    if (ok) {
+        m_processes.back().serviceIndex = serviceIndex;
+    }
+    return ok;
+}
+
+// 优雅停机：按固定标题/PID 找窗口发 WM_CLOSE（服务器执行 Graceful Shutdown）。
+// 绝不 TerminateProcess（需求 11）。
+void LegendMapEditorApp::StopServiceAt(int rowIndex) {
+    if (rowIndex < 0 || rowIndex >= static_cast<int>(m_processes.size())) {
+        return;
+    }
+    auto& proc = m_processes[rowIndex];
+    if (proc.hProcess == nullptr) {
+        return;
+    }
+    DWORD exitCode = 0;
+    if (GetExitCodeProcess(proc.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+        return; // 已退出
+    }
+    HWND hwnd = nullptr;
+    if (proc.serviceIndex >= 0) {
+        hwnd = ::FindWindowW(nullptr, kServiceDescriptors[proc.serviceIndex].windowTitle);
+    }
+    if (hwnd == nullptr) {
+        hwnd = FindMainWindowByPid(proc.pid);
+    }
+    if (hwnd != nullptr) {
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        proc.gracefulStopSent = true;
+        proc.stopSentAt = std::chrono::steady_clock::now();
+        LOG_INFO("Editor: graceful stop request sent to " + proc.name + " (pid " +
+                 std::to_string(proc.pid) + ")");
+        m_worldMessage = "已向 " + proc.name + " 发送优雅停机请求。";
+        m_worldMessageIsError = false;
+    } else {
+        m_worldMessage = proc.name + " 未找到可关闭的窗口（保留运行，未强制结束）。";
+        m_worldMessageIsError = true;
+        LOG_WARN("Editor: no window to close for " + proc.name);
+    }
+}
+
+// 打开对应服务器的管理窗口（--hidden 启动的服务按固定标题定位后显示）。
+void LegendMapEditorApp::OpenServiceWindow(int serviceIndex) {
+    if (serviceIndex < 0 || serviceIndex >= 6) {
+        return;
+    }
+    const auto& svc = kServiceDescriptors[serviceIndex];
+    HWND hwnd = ::FindWindowW(nullptr, svc.windowTitle);
+    if (hwnd != nullptr) {
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        m_worldMessage = std::string("已打开 ") + svc.cnName + " 管理窗口。";
+        m_worldMessageIsError = false;
+    } else {
+        m_worldMessage = std::string(svc.cnName) + " 管理窗口未找到（服务可能未运行）。";
+        m_worldMessageIsError = true;
+    }
+}
+
+// 停止全部服务器（逐个优雅停机，不 TerminateProcess）。
+void LegendMapEditorApp::StopAllServices() {
+    int requested = 0;
+    for (int i = static_cast<int>(m_processes.size()) - 1; i >= 0; --i) {
+        if (m_processes[i].serviceIndex >= 0) {
+            DWORD exitCode = 0;
+            if (m_processes[i].hProcess != nullptr &&
+                GetExitCodeProcess(m_processes[i].hProcess, &exitCode) &&
+                exitCode == STILL_ACTIVE) {
+                StopServiceAt(i);
+                ++requested;
+            }
+        }
+    }
+    if (requested == 0) {
+        m_worldMessage = "没有正在运行的服务器。";
+        m_worldMessageIsError = false;
+    }
+}
+
+// 回收已退出进程的句柄并移除行（状态由 LOG 记录）。
+void LegendMapEditorApp::ReapFinishedProcesses() {
+    for (int i = static_cast<int>(m_processes.size()) - 1; i >= 0; --i) {
+        auto& proc = m_processes[i];
+        if (proc.launchFailed) {
+            proc.launchFailed = false; // 失败行展示一轮后清掉（下次启动刷新）
+            continue;
+        }
+        if (proc.hProcess == nullptr) {
+            m_processes.erase(m_processes.begin() + i);
+            continue;
+        }
+        DWORD exitCode = 0;
+        if (GetExitCodeProcess(proc.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+            CloseHandle(proc.hProcess);
+            LOG_INFO("Editor: process " + proc.name + " exited (code " +
+                     std::to_string(exitCode) + ")");
+            m_processes.erase(m_processes.begin() + i);
+        }
+    }
+}
+
+// 停止编辑器拉起的全部本地进程——Stage25.6：全部优雅停机（WM_CLOSE），
+// 绝不 TerminateProcess；进程退出由 ReapFinishedProcesses 回收。
+void LegendMapEditorApp::StopLocalGame() {
+    int requested = 0;
+    for (int i = static_cast<int>(m_processes.size()) - 1; i >= 0; --i) {
+        auto& proc = m_processes[i];
+        if (proc.hProcess == nullptr) {
+            continue;
+        }
+        DWORD exitCode = 0;
+        if (GetExitCodeProcess(proc.hProcess, &exitCode) && exitCode == STILL_ACTIVE) {
+            StopServiceAt(i);
+            ++requested;
+        }
+    }
+    m_worldMessage = requested > 0
+                         ? "已向 " + std::to_string(requested) + " 个本地进程发送优雅停机请求。"
+                         : "本地游戏已停止。";
     m_worldMessageIsError = false;
-    LOG_INFO("Editor: StopLocalGame stopped=" + std::to_string(stopped));
+    LOG_INFO("Editor: StopLocalGame graceful requests=" + std::to_string(requested));
 }
 
 // World + Game + Assets 全量校验（Console 汇总 + 状态条）。
@@ -3025,6 +3193,7 @@ void LegendMapEditorApp::DrawBossEditorWindow() {
 
 // ---- Process Status：编辑器拉起的本地进程一览 ----
 void LegendMapEditorApp::DrawProcessStatusWindow() {
+    ReapFinishedProcesses();
     if (!ImGui::Begin("运行状态", &m_showProcessStatus)) {
         ImGui::End();
         return;
@@ -3081,6 +3250,156 @@ void LegendMapEditorApp::DrawProcessStatusWindow() {
             }
         }
         ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
+// ---- Server Center（Stage25.6）：集中管理 Db/Log/Login/Character/World/Gateway。
+// 启动全部/停止全部/单独启停/查看状态/打开对应管理窗口——每个按钮都是真实现。
+void LegendMapEditorApp::DrawServerCenterWindow() {
+    ReapFinishedProcesses();
+    if (!ImGui::Begin("服务器中心", &m_showServerCenter)) {
+        ImGui::End();
+        return;
+    }
+
+    // 查找某服务的进程行（m_processes 下标；-1 = 未启动）
+    auto findProcessRow = [this](int serviceIndex) -> int {
+        for (int i = 0; i < static_cast<int>(m_processes.size()); ++i) {
+            if (m_processes[i].serviceIndex == serviceIndex) {
+                return i;
+            }
+        }
+        return -1;
+    };
+    auto isAlive = [this](int row) -> bool {
+        if (row < 0 || m_processes[row].hProcess == nullptr) {
+            return false;
+        }
+        DWORD exitCode = 0;
+        return GetExitCodeProcess(m_processes[row].hProcess, &exitCode) &&
+               exitCode == STILL_ACTIVE;
+    };
+
+    // 顶部操作条（需求 12/14：一键启停全部）
+    if (ImGui::Button("启动全部服务器")) {
+        bool ok = LaunchService(0) && LaunchService(1); // Db -> Log
+        if (ok) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        ok = ok && LaunchService(2) && LaunchService(3) && LaunchService(4) && LaunchService(5);
+        m_worldMessage = ok ? "已启动全部服务器（隐藏窗口，可逐个打开管理窗口）。"
+                            : "部分服务器启动失败，请查看日志。";
+        m_worldMessageIsError = !ok;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("停止全部服务器")) {
+        StopAllServices();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("启动客户端")) {
+        constexpr unsigned long kCreateNoWindow = 0x08000000u; // CREATE_NO_WINDOW
+        const bool ok =
+            LaunchEditorProcess("游戏客户端", "LegendClient.exe", "", kCreateNoWindow);
+        if (!ok) {
+            m_worldMessage = "启动客户端失败，请确认已构建 LegendClient.exe。";
+            m_worldMessageIsError = true;
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("配置: %s", m_serverConfigPath.c_str());
+    ImGui::Separator();
+
+    // 服务表（顺序 = 需求 12：Db/Log/Login/Character/World/Gateway）
+    if (ImGui::BeginTable("##serverCenter", 5,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+        ImGui::TableSetupColumn("服务", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("端口", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn("PID", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("状态", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 280.0f);
+        ImGui::TableHeadersRow();
+        for (int i = 0; i < 6; ++i) {
+            const auto& svc = kServiceDescriptors[i];
+            const int row = findProcessRow(i);
+            const bool alive = isAlive(row);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(svc.cnName);
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", svc.port);
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", row >= 0 && alive
+                                  ? std::to_string(m_processes[row].pid).c_str()
+                                  : "-");
+            ImGui::TableNextColumn();
+            if (row >= 0 && m_processes[row].launchFailed) {
+                ImGui::TextColored(legend::editor::theme::Error(), "启动失败");
+            } else if (alive) {
+                if (row >= 0 && m_processes[row].gracefulStopSent) {
+                    const double elapsed = std::chrono::duration<double>(
+                                               std::chrono::steady_clock::now() -
+                                               m_processes[row].stopSentAt)
+                                               .count();
+                    if (elapsed > 8.0) {
+                        ImGui::TextColored(legend::editor::theme::Error(),
+                                           "未响应优雅停机（保留运行）");
+                    } else {
+                        ImGui::TextColored(legend::editor::theme::Warning(), "优雅停止中…");
+                    }
+                } else {
+                    ImGui::TextColored(legend::editor::theme::Success(), "运行中");
+                }
+            } else {
+                ImGui::TextDisabled("未启动");
+            }
+            ImGui::TableNextColumn();
+            ImGui::PushID(i);
+            if (!alive) {
+                if (ImGui::Button("启动")) {
+                    LaunchService(i);
+                }
+            } else {
+                if (ImGui::Button("停止")) {
+                    StopServiceAt(row);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("打开管理窗口")) {
+                    OpenServiceWindow(i);
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    // 客户端行（非服务器：无管理窗口）
+    const int clientRow = [this]() -> int {
+        for (int i = 0; i < static_cast<int>(m_processes.size()); ++i) {
+            if (m_processes[i].serviceIndex < 0) {
+                return i;
+            }
+        }
+        return -1;
+    }();
+    const bool clientAlive = isAlive(clientRow);
+    ImGui::Separator();
+    ImGui::Text("游戏客户端");
+    ImGui::SameLine(180.0f);
+    if (clientAlive) {
+        ImGui::TextColored(legend::editor::theme::Success(), "运行中 (PID %u)",
+                           m_processes[clientRow].pid);
+    } else {
+        ImGui::TextDisabled("未启动");
+    }
+    ImGui::SameLine();
+    if (!clientAlive) {
+        if (ImGui::Button("启动客户端##row")) {
+            constexpr unsigned long kCreateNoWindow = 0x08000000u;
+            LaunchEditorProcess("游戏客户端", "LegendClient.exe", "", kCreateNoWindow);
+        }
+    } else if (ImGui::Button("停止客户端##row")) {
+        StopServiceAt(clientRow);
     }
     ImGui::End();
 }

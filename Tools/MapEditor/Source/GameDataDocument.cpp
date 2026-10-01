@@ -1,5 +1,5 @@
 #include "Tools/MapEditor/Source/GameDataDocument.h"
-#include "Tools/MapEditor/Source/EditorStrings.h"
+#include "Tools/UiCore/Source/EditorStrings.h"
 
 #include <algorithm>
 

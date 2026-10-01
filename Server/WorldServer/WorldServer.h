@@ -157,6 +157,27 @@ public:
 
     explicit WorldServer(legend::net::NetworkService& service);
 
+    // Stage25.6 服务器管理台：World 只读统计快照（GUI 线程 Collect 时拷贝）
+    struct WorldStatsSnapshot {
+        std::size_t playerCount = 0;        // 在线玩家
+        std::size_t map1Players = 0;        // Map1 人数
+        std::size_t map2Players = 0;        // Map2 人数
+        std::size_t map3Players = 0;        // Map3 人数
+        std::size_t monsterCount = 0;       // 怪物数量
+        std::size_t npcCount = 0;           // NPC 数量
+        std::size_t portalCount = 0;        // 传送门数量
+        std::size_t dropCount = 0;          // 掉落数量
+        std::size_t castingPlayers = 0;     // 施法中玩家
+        std::uint64_t snapshotTickCount = 0; // 100ms 世界同步 tick 次数
+        double tickAvgMs = 0.0;             // tick 平均耗时
+        double tickMaxMs = 0.0;             // tick 最大耗时
+        std::uint64_t packetsReceived = 0;
+        std::uint64_t packetsSent = 0;
+        bool dbAvailable = false;           // DbServer/Persistence 状态
+        bool dbDegraded = false;            // Persistence 降级
+    };
+    WorldStatsSnapshot CollectStats() const;
+
     bool Start(std::string& error);
     void Stop();
     Config& GetConfig() { return m_config; }
@@ -710,6 +731,11 @@ private:
 
     std::uint64_t m_nextRequestId = 1; // 指令七十三：单调增长
     Hooks m_hooks;
+
+    // Stage25.6 管理台埋点：100ms 世界同步 tick 耗时（io 线程写，GUI 线程读）
+    std::atomic<std::uint64_t> m_snapshotTickCount{0};
+    std::atomic<std::uint64_t> m_snapshotTickTotalUs{0};
+    std::atomic<std::uint64_t> m_snapshotTickMaxUs{0};
 };
 
 } // namespace legend::world

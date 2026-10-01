@@ -134,6 +134,7 @@ void TcpConnection::ReadPayload() {
 }
 
 void TcpConnection::DispatchPacket() {
+    m_packetsReceived.fetch_add(1, std::memory_order_relaxed);
     if (m_onPacket) {
         m_onPacket(m_packet);
     }
@@ -160,6 +161,7 @@ void TcpConnection::WriteNext() {
                               self->Fail(ec);
                               return;
                           }
+                          self->m_packetsSent.fetch_add(1, std::memory_order_relaxed);
                           self->m_writeQueue.pop_front();
                           if (self->m_closeAfterFlush && self->m_writeQueue.empty()) {
                               self->Fail(std::error_code{}); // flush 完成

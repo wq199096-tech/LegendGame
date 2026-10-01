@@ -1,4 +1,50 @@
-# CURRENT_STAGE — Stage25.5 Server Architecture Completion V0.255
+# CURRENT_STAGE — Stage25.6 Server Management GUI V0.256
+
+## Stage25.6（2026-10-01）
+
+- 状态：**implemented（本地验证通过，待人工 GUI 视觉验收 + CI）**。
+  按用户要求：完成前不报告"服务器PC可视化完成"。
+- 交付内容（用户 15 条硬性要求逐项落实）：
+  - **统一 Admin UI 框架**：新静态库 `LegendServerAdminUi`（Server/AdminUi/）——
+    ServerAdminApp（SDL3+Dear ImGui+EditorTheme，概览/连接/性能/日志/配置五页签+状态栏，
+    全简体中文）、ServerMainRunner（统一入口/参数预扫描/GUI+worker 双线程/优雅停机）、
+    LogCapture（Logger sink→4096 行环形缓冲→实时日志面板：级别过滤/搜索/暂停滚动/清空）。
+  - **UI 基建共享**：legend_imgui + EditorTheme/EditorStrings 抽取至 `Tools/UiCore`，
+    Studio 与六服务器共链（一套主题/中文字体链/DPI，零重复实现）。
+  - **六个服务器 exe**：`WIN32_EXECUTABLE + /ENTRY:mainCRTStartup`——双击打开
+    「LegendGame <服务中文名> 管理台」GUI 窗口（无 CMD）；`--console` 开发/CI 模式
+    （保留 asio signal_set，AttachConsole/AllocConsole 兜底）；`--hidden` 隐藏窗口
+    （Studio 服务器中心启动用）。关窗=WM_CLOSE→Graceful Shutdown，绝不 TerminateProcess。
+  - **每服专属指标**（CollectStats 快照，GUI 线程 500ms 拉取，原子计数）：
+    Login(网关连接/认证成功失败/Session 创建/Ticket 三计数/Db 状态)、
+    Character(角色增删列表选择计数/Ticket/Db 状态)、Gateway(状态机分层
+    Connected→InWorld 计数/收发包/Login+Character+World 状态)、
+    World(在线玩家/Map1-3 人数/怪物/NPC/掉落/Tick avg+max ms/Persistence Degraded/Db/Log)、
+    Db(SQLite 状态/DB 路径/DbWorker/查询/写入/事务/失败/Queue 长度/运行时 Migration 版本)、
+    Log(接收/写入/Queue/丢弃/当前文件/文件大小/fallback 状态)。
+  - **埋点**：Logger::SetSink；TcpConnection/TcpServer 收发包计数（关闭并入，单调）；
+    PersistenceClient 请求统计+连续失败 Degraded 判定；DbWorker QueueLength/IsRunning；
+    TicketStore 计数；World 100ms tick 计时；DbServer 运行时 ReadSchemaVersion（公开 API）。
+  - **Studio 服务器中心**：运行菜单新增「服务器中心」——集中显示 Db/Log/Login/Character/
+    World/Gateway（端口/PID/状态/操作列），启动全部/停止全部/单独启停/打开对应管理窗口
+    （FindWindowW 固定标题）/启动客户端，全部按钮真实接线；重复启动防护、优雅停机状态
+    （优雅停止中…/未响应）。「启动完整游戏」改为 --hidden 静默拉起六服务 +
+    CREATE_NO_WINDOW 隐藏客户端控制台（不再弹 CMD）；StopLocalGame 删除 TerminateProcess，
+    全部改 EnumWindows/FindWindowW + WM_CLOSE 优雅停机。
+  - **CI**：两处 smoke 六进程 ArgumentList 追加 `--console`（GUI 子系统无人值守兼容）。
+- 本地验证：
+  - Debug 构建 **11/11 exe** 全绿（含六服务器 GUI 子系统入口）。
+  - 3 套 CTest 串行干净运行 **全 PASS 0 failures**（Network/Account/World；
+    注：并行多实例会因测试端口 7100-7600 争用产生假失败，须串行）。
+  - Gateway GUI 试点：双击等价启动→窗口出现/无 CMD→7300 就绪→WM_CLOSE→exit 0+
+    latest.log「Shutting down」；DbServer --hidden 试点：MainWindowHandle=0/7500 就绪/
+    隐藏窗口 WM_CLOSE→exit 0+「graceful shutdown」；6 服务 --console 拓扑冒烟通过。
+- 待办（不阻塞代码封板）：人工 GUI 视觉验收清单（五页签数据/日志过滤搜索暂停清空/
+  服务器中心启停全链）；git 提交与 GitHub Actions CI（本机无 git）。
+
+---
+
+## 历史：Stage25.5 Server Architecture Completion V0.255
 
 ## Stage25.5（2026-10-01）— feature-complete, CI stabilization in progress
 

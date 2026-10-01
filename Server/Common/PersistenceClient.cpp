@@ -53,6 +53,9 @@ std::uint64_t PersistenceClient::AsyncRequest(DbOperation operation,
                                               std::uint64_t expectedVersion) {
     const auto requestId = m_nextRequestId.fetch_add(1);
     if (!m_available.load() || !m_connection) {
+        m_requestsTotal.fetch_add(1, std::memory_order_relaxed);
+        m_requestsFailed.fetch_add(1, std::memory_order_relaxed);
+        m_consecutiveFailures.fetch_add(1, std::memory_order_relaxed);
         DbResponse response{requestId, InternalErrorCode::DatabaseUnavailable, 0,
                             "database service unavailable", {}};
         m_service.Post([callback = std::move(callback), response = std::move(response)]() mutable {
@@ -64,6 +67,9 @@ std::uint64_t PersistenceClient::AsyncRequest(DbOperation operation,
     Packet packet;
     packet.header.messageId = static_cast<std::uint16_t>(MessageId::InternalDbRequest);
     if (!EncodeDbRequest(request, packet.payload)) {
+        m_requestsTotal.fetch_add(1, std::memory_order_relaxed);
+        m_requestsFailed.fetch_add(1, std::memory_order_relaxed);
+        m_consecutiveFailures.fetch_add(1, std::memory_order_relaxed);
         DbResponse response{requestId, InternalErrorCode::InvalidRequest, 0,
                             "cannot encode database request", {}};
         m_service.Post([callback = std::move(callback), response = std::move(response)]() mutable {
@@ -138,6 +144,14 @@ void PersistenceClient::OnPacket(const Packet& packet) {
         callback = std::move(it->second.callback);
         m_pending.erase(it);
     }
+    // Stage25.6 管理台埋点：请求完成成败与连续失败计数
+    m_requestsTotal.fetch_add(1, std::memory_order_relaxed);
+    if (response.errorCode == InternalErrorCode::Ok) {
+        m_consecutiveFailures.store(0, std::memory_order_relaxed);
+    } else {
+        m_requestsFailed.fetch_add(1, std::memory_order_relaxed);
+        m_consecutiveFailures.fetch_add(1, std::memory_order_relaxed);
+    }
     if (callback) callback(std::move(response));
 }
 
@@ -182,6 +196,10 @@ void PersistenceClient::Tick() {
                 DbResponse response{it->first, InternalErrorCode::Timeout, 0,
                                     "database request timeout", {}};
                 expired.emplace_back(std::move(it->second.callback), std::move(response));
+                // Stage25.6 管理台埋点：超时计入失败
+                m_requestsTotal.fetch_add(1, std::memory_order_relaxed);
+                m_requestsFailed.fetch_add(1, std::memory_order_relaxed);
+                m_consecutiveFailures.fetch_add(1, std::memory_order_relaxed);
                 it = m_pending.erase(it);
             } else ++it;
         }
@@ -205,6 +223,12 @@ void PersistenceClient::FailAll(InternalErrorCode code, const std::string& messa
         for (auto& [id, item] : m_pending)
             pending.emplace_back(std::move(item.callback), DbResponse{id, code, 0, message, {}});
         m_pending.clear();
+    }
+    if (!pending.empty()) {
+        // Stage25.6 管理台埋点：批量失败（断连/停机）计入
+        m_requestsTotal.fetch_add(pending.size(), std::memory_order_relaxed);
+        m_requestsFailed.fetch_add(pending.size(), std::memory_order_relaxed);
+        m_consecutiveFailures.fetch_add(1, std::memory_order_relaxed);
     }
     for (auto& item : pending) if (item.first) item.first(std::move(item.second));
 }

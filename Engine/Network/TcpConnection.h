@@ -48,6 +48,9 @@ public:
     bool IsConnected() const { return m_connected.load(); }
     std::uint64_t Id() const { return m_id; }
     std::string RemoteEndpoint() const;
+    // Stage25.6 服务器管理台：连接级收发包计数（完整帧口径）
+    std::uint64_t PacketsReceived() const { return m_packetsReceived.load(std::memory_order_relaxed); }
+    std::uint64_t PacketsSent() const { return m_packetsSent.load(std::memory_order_relaxed); }
 
 private:
     void ReadHeader();
@@ -76,6 +79,8 @@ private:
     bool m_closeAfterFlush = false;       // 写队列清空后关闭
     std::uint32_t m_sendSequence = 0;      // 指令二十：1,2,3...
     std::uint32_t m_lastReceivedSequence = 0; // 指令七十三
+    std::atomic<std::uint64_t> m_packetsReceived{0}; // Stage25.6 管理台埋点
+    std::atomic<std::uint64_t> m_packetsSent{0};
 };
 
 using TcpConnectionPtr = std::shared_ptr<TcpConnection>;

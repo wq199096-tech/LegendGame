@@ -95,6 +95,30 @@ std::size_t GatewayServer::ClientCount() const {
     return m_sessions.size();
 }
 
+GatewayStatsSnapshot GatewayServer::CollectStats() const {
+    GatewayStatsSnapshot stats;
+    std::lock_guard<std::mutex> lock(m_mapsMutex);
+    stats.clientCount = m_sessions.size();
+    stats.pendingLoginCount = m_pendingLogins.size();
+    stats.worldProxyCount = m_worldProxies.size();
+    for (const auto& [id, session] : m_sessions) {
+        switch (session->State()) {
+            case GatewaySessionState::Connected:          ++stats.stateConnected; break;
+            case GatewaySessionState::HandshakeCompleted: ++stats.stateHandshakeCompleted; break;
+            case GatewaySessionState::LoginPending:       ++stats.stateLoginPending; break;
+            case GatewaySessionState::Authenticated:      ++stats.stateAuthenticated; break;
+            case GatewaySessionState::CharacterSelected:  ++stats.stateCharacterSelected; break;
+            case GatewaySessionState::InWorld:            ++stats.stateInWorld; break;
+            case GatewaySessionState::Closing:            ++stats.stateClosing; break;
+        }
+    }
+    if (m_server) {
+        stats.packetsReceived = m_server->PacketsReceived();
+        stats.packetsSent = m_server->PacketsSent();
+    }
+    return stats;
+}
+
 void GatewayServer::OnClientAccepted(net::TcpConnectionPtr connection) {
     const std::uint64_t id = connection->Id();
     LOG_INFO("[Gateway] Client #" + std::to_string(id) + " connected.");

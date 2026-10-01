@@ -31,9 +31,28 @@ public:
     };
     explicit CharacterServer(legend::net::NetworkService& service);
     Config& GetConfig() { return m_config; }
+
+    // Stage25.6 服务器管理台：Character 只读统计快照（GUI 线程 Collect 时拷贝）
+    struct CharacterStatsSnapshot {
+        std::size_t connectionCount = 0;   // 当前连接（Gateway 链路）
+        std::uint64_t listRequests = 0;    // 角色列表请求
+        std::uint64_t createRequests = 0;  // 创建请求
+        std::uint64_t createSuccess = 0;   // 创建成功
+        std::uint64_t deleteRequests = 0;  // 删除请求
+        std::uint64_t deleteSuccess = 0;   // 删除成功
+        std::uint64_t selectRequests = 0;  // 当前选择请求
+        std::uint64_t ticketsIssued = 0;   // SelectionTicket 签发
+        std::uint64_t ticketsConsumed = 0; // SelectionTicket 消费
+        std::uint64_t packetsReceived = 0;
+        std::uint64_t packetsSent = 0;
+        bool dbAvailable = false;          // DbServer 状态
+    };
+    CharacterStatsSnapshot CollectStats() const;
+
     bool Start(std::string& error);
     void Stop();
     bool IsPersistenceAvailable() const;
+    bool IsLogConnected() const { return m_log ? m_log->IsAvailable() : false; }
     std::size_t ConnectionCount() const;
 
 private:
@@ -61,6 +80,14 @@ private:
     mutable std::mutex m_mutex;
     std::map<std::uint64_t, Link> m_links;
     std::atomic<bool> m_stopped{true};
+
+    // Stage25.6 管理台埋点（io/RPC 线程写，GUI 线程读）
+    std::atomic<std::uint64_t> m_listRequests{0};
+    std::atomic<std::uint64_t> m_createRequests{0};
+    std::atomic<std::uint64_t> m_createSuccess{0};
+    std::atomic<std::uint64_t> m_deleteRequests{0};
+    std::atomic<std::uint64_t> m_deleteSuccess{0};
+    std::atomic<std::uint64_t> m_selectRequests{0};
 };
 
 } // namespace legend::character

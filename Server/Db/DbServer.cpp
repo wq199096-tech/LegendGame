@@ -23,7 +23,40 @@ InternalErrorCode MapAccountError(legend::account::AccountErrorCode code) {
         case A::CharacterNotOwned: return InternalErrorCode::CharacterOwnershipMismatch;
         case A::SessionInvalid: return InternalErrorCode::NotAuthenticated;
         case A::DatabaseError: return InternalErrorCode::DatabaseUnavailable;
+        case A::InvalidCredentials: return InternalErrorCode::InvalidCredentials;
         default: return InternalErrorCode::InvalidRequest;
+    }
+}
+
+// Stage25.6 管理台：操作分类（读 / 写 / 原子事务）
+bool IsReadOperation(DbOperation op) {
+    switch (op) {
+        case DbOperation::LoadAccount:
+        case DbOperation::LoadCharacterList:
+        case DbOperation::LoadCharacterState:
+        case DbOperation::LoadCharacterFull:
+        case DbOperation::LoadInventory:
+        case DbOperation::LoadQuestState:
+        case DbOperation::LoadEquipment:
+        case DbOperation::LoadPosition:
+        case DbOperation::LoadProgression:
+        case DbOperation::ValidateSession:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsAtomicTransaction(DbOperation op) {
+    switch (op) {
+        case DbOperation::EquipItemWrite:
+        case DbOperation::UnequipItemWrite:
+        case DbOperation::QuestTurnInWrite:
+        case DbOperation::ShopBuyWrite:
+        case DbOperation::ShopSellWrite:
+            return true;
+        default:
+            return false;
     }
 }
 }
@@ -43,6 +76,13 @@ bool DbServer::Start(std::string& error) {
         m_database.Close(); m_stopped.store(true); return false;
     }
     m_worker.Start();
+    // Stage25.6 管理台：DB 线程读取运行时 Migration 版本（连接仅限 DB 线程使用）
+    m_worker.Post([self = shared_from_this()] {
+        int version = 0; std::string versionError;
+        if (legend::account::ReadSchemaVersion(self->m_database, version, versionError)) {
+            self->m_schemaVersion.store(version, std::memory_order_relaxed);
+        }
+    });
     if (!m_server->Listen(m_config.listenPort, error)) {
         m_worker.Stop(); m_database.Close(); m_stopped.store(true); return false;
     }
@@ -119,6 +159,18 @@ void DbServer::HandleRequest(std::uint64_t connectionId, DbRequest request) {
     auto self = shared_from_this();
     m_worker.Post([self, connectionId, request = std::move(request)]() mutable {
         auto response = self->Execute(request);
+        // Stage25.6 管理台埋点：读/写/事务/失败分类计数（DB 线程内，原子）
+        if (IsReadOperation(request.operation)) {
+            self->m_queries.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            self->m_writes.fetch_add(1, std::memory_order_relaxed);
+            if (IsAtomicTransaction(request.operation)) {
+                self->m_transactions.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        if (response.errorCode != InternalErrorCode::Ok) {
+            self->m_failures.fetch_add(1, std::memory_order_relaxed);
+        }
         self->m_service.Post([self, connectionId, response = std::move(response)]() mutable {
             Packet packet; packet.header.messageId = static_cast<std::uint16_t>(MessageId::InternalDbResponse);
             if (EncodeDbResponse(response, packet.payload)) self->Send(connectionId, packet);
@@ -508,6 +560,26 @@ void DbServer::Send(std::uint64_t connectionId, const Packet& packet) {
     { std::lock_guard<std::mutex> lock(m_mutex); const auto it = m_links.find(connectionId);
       if (it != m_links.end()) connection = it->second.connection; }
     if (connection) connection->Send(packet);
+}
+
+// Stage25.6 服务器管理台：Db 只读统计快照（GUI 线程每 500ms 调用）。
+DbServer::DbStatsSnapshot DbServer::CollectStats() const {
+    DbStatsSnapshot stats;
+    stats.connectionCount = ConnectionCount();
+    stats.dbOpen = m_database.IsOpen();
+    stats.workerRunning = m_worker.IsRunning();
+    stats.queries = m_queries.load(std::memory_order_relaxed);
+    stats.writes = m_writes.load(std::memory_order_relaxed);
+    stats.transactions = m_transactions.load(std::memory_order_relaxed);
+    stats.failures = m_failures.load(std::memory_order_relaxed);
+    stats.queueLength = m_worker.QueueLength();
+    stats.schemaVersion = m_schemaVersion.load(std::memory_order_relaxed);
+    stats.databasePath = m_config.databasePath;
+    if (m_server) {
+        stats.packetsReceived = m_server->PacketsReceived();
+        stats.packetsSent = m_server->PacketsSent();
+    }
+    return stats;
 }
 
 } // namespace legend::db

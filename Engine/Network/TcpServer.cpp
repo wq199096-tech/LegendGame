@@ -72,7 +72,12 @@ std::uint64_t TcpServer::AllocateConnectionId() {
 
 void TcpServer::RemoveConnection(std::uint64_t id) {
     std::lock_guard<std::mutex> lock(m_connectionsMutex);
-    m_connections.erase(id);
+    // Stage25.6：连接关闭时把该连接的收发包计数并入服务端累计（保证总量单调）
+    if (auto it = m_connections.find(id); it != m_connections.end()) {
+        m_totalPacketsRx.fetch_add(it->second->PacketsReceived(), std::memory_order_relaxed);
+        m_totalPacketsTx.fetch_add(it->second->PacketsSent(), std::memory_order_relaxed);
+        m_connections.erase(it);
+    }
 }
 
 void TcpServer::Stop() {
@@ -90,6 +95,9 @@ void TcpServer::Stop() {
         connections.swap(m_connections);
     }
     for (auto& [id, connection] : connections) {
+        // Stage25.6：Stop 时同样并入收发包计数
+        m_totalPacketsRx.fetch_add(connection->PacketsReceived(), std::memory_order_relaxed);
+        m_totalPacketsTx.fetch_add(connection->PacketsSent(), std::memory_order_relaxed);
         // 阶段9.3 UAF 修复：先经 strand 摘除连接全部回调再关闭——
         // Server（LoginServer/GatewayServer）销毁后，挂起的 Fail 不得再
         // 触达已释放的 TcpServer（RemoveConnection heap-use-after-free）
