@@ -7,6 +7,7 @@ void InputManager::BeginFrame() {
     float y = 0.0f;
     SDL_GetMouseState(&x, &y);
     m_mousePosition = {x, y};
+    m_frameTextInput.clear();
 }
 
 void InputManager::ProcessEvent(const SDL_Event& event) {
@@ -21,6 +22,13 @@ void InputManager::ProcessEvent(const SDL_Event& event) {
         case SDL_EVENT_KEY_UP:
             m_keyDown[event.key.scancode] = false;
             m_keyReleased[event.key.scancode] = true;
+            break;
+
+        case SDL_EVENT_TEXT_INPUT:
+            // Stage26 指令三十一：文本会话开启时透传 IME 提交文本（登录/角色名）。
+            if (m_textInputDepth > 0 && event.text.text != nullptr && event.text.text[0] != '\0') {
+                m_frameTextInput.emplace_back(event.text.text);
+            }
             break;
 
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -70,6 +78,28 @@ bool InputManager::IsMouseButtonPressed(Uint8 button) const {
 
 bool InputManager::IsMouseButtonReleased(Uint8 button) const {
     return button >= 1 && button < kMouseButtonCount && m_mouseReleased[button];
+}
+
+void InputManager::BeginTextInput() {
+    ++m_textInputDepth;
+    if (m_textInputDepth == 1) {
+        // SDL3：文本输入按窗口开启（主窗口拥有键盘焦点）。
+        if (SDL_Window* window = SDL_GetKeyboardFocus()) {
+            SDL_StartTextInput(window);
+        }
+    }
+}
+
+void InputManager::EndTextInput() {
+    if (m_textInputDepth > 0) {
+        --m_textInputDepth;
+        if (m_textInputDepth == 0) {
+            if (SDL_Window* window = SDL_GetKeyboardFocus()) {
+                SDL_StopTextInput(window);
+            }
+            m_frameTextInput.clear();
+        }
+    }
 }
 
 } // namespace legend::input

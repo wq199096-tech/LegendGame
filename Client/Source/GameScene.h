@@ -22,6 +22,9 @@ namespace legend::client {
 class ClientNetworkController; // 阶段9：网络控制器（GameScene 只调 Update，指令六）
 class VisualRuntime;           // 阶段24：视觉运行时（真实资源渲染门面）
 }
+namespace legend::flow {
+class ClientFlowController; // Stage26：玩家流程状态机（登录/大厅/进世界）
+}
 
 class GameScene final : public legend::scene::Scene {
 public:
@@ -229,6 +232,7 @@ private:
     legend::map::MapRenderer m_mapRenderer;
     std::unique_ptr<PlayerCharacter> m_player;
     std::unique_ptr<legend::client::ClientNetworkController> m_networkController; // 阶段9：懒构造
+    std::unique_ptr<legend::flow::ClientFlowController> m_flow; // Stage26：懒构造（指令十二）
     PlayerController m_playerController;
     legend::entity::CharacterController m_characterController;
     legend::render::CharacterRenderer m_characterRenderer;

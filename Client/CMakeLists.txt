@@ -7,6 +7,8 @@ add_library(LegendClientAccount STATIC
     Network/GameNetworkClient.cpp
     Account/AccountClientController.cpp
     Account/CharacterSelectionController.cpp
+    Flow/ClientFlowController.cpp
+    Flow/ClientLoginStore.cpp
     WorldNetwork/WorldNetworkClient.cpp
     WorldNetwork/WorldClientController.cpp
     WorldNetwork/ClientQuestModel.cpp
@@ -24,6 +26,7 @@ target_link_libraries(LegendClientAccount
     PUBLIC
         LegendNetworkTransport
         LegendServerCommon
+        LegendClientUi # Stage26：FlowUiModel/造型目录/错误文案（纯数据层）
 )
 if(MSVC)
     target_compile_options(LegendClientAccount PRIVATE /utf-8)
@@ -56,6 +59,9 @@ add_library(LegendClientUi STATIC
     Ui/UiModels.cpp
     Ui/ItemDisplayCatalog.cpp
     Ui/ChapterDisplayCatalog.cpp
+    Ui/PlayerFacingErrorCatalog.cpp
+    Ui/CharacterVisualCatalog.cpp
+    Ui/FlowUiModel.cpp
 )
 target_include_directories(LegendClientUi PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendClientUi PUBLIC cxx_std_20)
@@ -76,6 +82,7 @@ add_executable(LegendClient
     Audio/AudioRuntime.cpp
     Visuals/Font.cpp
     Visuals/VisualRuntime.cpp
+    Visuals/FlowPages.cpp
     Source/ProgressionChecks.cpp
     Source/EquipmentChecks.cpp
     Source/SkillChecks.cpp

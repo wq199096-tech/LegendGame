@@ -47,6 +47,10 @@ namespace legend::resource {
 class ResourceManager;
 }
 
+namespace legend::flow {
+struct FlowUiModel;
+}
+
 namespace legend::client {
 
 class WorldClientController;
@@ -89,6 +93,22 @@ public:
     // ---- 阶段25 指令五十三/五十四：World 连接期间 Loading 覆盖层（不黑屏，轻提示）----
     void RenderLoading(float viewportWidth, float viewportHeight);
 
+    // ---- Stage26 指令二十一/二十二：玩家流程页（Boot/Connecting/Login/Register/
+    //      Lobby/Create/EnteringWorld/Disconnected/FatalError；实现于 FlowPages.cpp）。
+    //      GameScene::Render 早退分支调用；动作经 DrainUiRequests 回 GameScene。----
+    void RenderFlowPages(const flow::FlowUiModel& model, float viewportWidth,
+                         float viewportHeight);
+    // Stage26 指令二十七：角色大厅立绘（identity 相机 + 手工 EntityVisual；
+    // 实现/状态在 FlowPages.cpp）。
+    void RenderCharacterPortrait(const std::string& visualId, const math::Vector2& topLeft,
+                                 float width, float height);
+    // Stage26 指令十一：本地玩家进世界用大厅选中的造型渲染（覆盖 classId 推导）。
+    void SetLocalPlayerVisualOverride(std::uint16_t visualId);
+    // 流程页/立绘渲染需要的 uiBatch/text 访问（FlowPages.cpp 内部使用为主）。
+    legend::render::SpriteBatch& UiBatch() { return m_uiBatch; }
+    TextRenderer& Text() { return m_text; }
+    bool TextReady() const { return m_text.IsReady(); }
+
     // 本地玩家视觉位置（相机跟随；服务器位置 1-exp(-12dt) 平滑，>300 snap）。
     float LocalVisualX() const { return m_localVisualX; }
     float LocalVisualY() const { return m_localVisualY; }
@@ -119,12 +139,15 @@ public:
             UnequipSlot,      // equipmentSlot (1=Weapon 2=Armor)
             WindowFullscreen, // 切换全屏（GameScene 执行）
             WindowResolution, // index = 分辨率档位
+            FlowUi,           // Stage26：流程页动作（flowAction = FlowUiAction::Kind）
         };
         Kind kind = Kind::DialogueOption;
         int index = 0;
         std::uint32_t definitionId = 0;
         std::uint64_t instanceId = 0;
         std::uint8_t equipmentSlot = 0;
+        // Stage26：流程页动作/焦点/选型（index 复用：字段 id / 角色下标 / visualId-1）。
+        std::uint8_t flowAction = 0; // FlowUiAction::Kind
     };
     std::vector<UiRequest> DrainUiRequests();
     // 鼠标状态（GameScene 每帧喂入；窗口点击交互用）。
@@ -295,6 +318,7 @@ private:
     std::uint64_t m_localCharacterId = 0;
     std::string m_localName;
     int m_localClassId = 0;
+    std::uint16_t m_localVisualOverride = 0; // Stage26：大厅造型覆盖（0=不覆盖）
     float m_localVisualX = 0.0f;
     float m_localVisualY = 0.0f;
     float m_localLastServerX = 0.0f;
@@ -309,6 +333,11 @@ private:
     Stats m_stats{};
     int m_drawCallBase = 0;
     int m_uiDrawCallBase = 0;
+
+    // ---- Stage26：流程页状态（FlowPages.cpp 使用）----
+    EntityVisual m_portraitVisual;          // 大厅立绘（单一实例；visualId 变化时重建）
+    std::string m_portraitVisualId;         // 当前立绘实体名（空=未初始化）
+    float m_portraitLastMs = 0.0f;          // 立绘动画推进（墙钟）
 };
 
 } // namespace legend::client

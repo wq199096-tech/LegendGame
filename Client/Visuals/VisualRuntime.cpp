@@ -1,5 +1,6 @@
 #include "Client/Visuals/VisualRuntime.h"
 
+#include "Client/Ui/CharacterVisualCatalog.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/WorldClientController.h"
@@ -667,11 +668,18 @@ void VisualRuntime::Update(const WorldClientController& world, float deltaTime) 
         auto& local = EnsureVisual(m_playerVisuals, world.CharacterId(),
                                    EntityKind::LocalPlayer, std::string());
         if (local.visualId.empty()) {
-            const int classId = m_localClassId != 0 ? m_localClassId : 1;
-            const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(classId);
-            if (def != nullptr) {
-                local.visualId = def->visualId;
+            // Stage26 指令十一：大厅选中的造型优先（服务器持久化 visualId）；
+            // 无覆盖时回退 classId 推导（AutoEnter/旧链路）。
+            if (m_localVisualOverride != 0) {
+                local.visualId = legend::ui::CharacterVisualEntityName(m_localVisualOverride);
                 ApplyEntityDefinition(local);
+            } else {
+                const int classId = m_localClassId != 0 ? m_localClassId : 1;
+                const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(classId);
+                if (def != nullptr) {
+                    local.visualId = def->visualId;
+                    ApplyEntityDefinition(local);
+                }
             }
         }
         // 方向：服务器位置差分

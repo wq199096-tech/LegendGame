@@ -1,6 +1,8 @@
 #include "Client/Source/GameScene.h"
 
+#include "Client/Flow/ClientFlowController.h"
 #include "Client/Network/ClientNetworkController.h"
+#include "Client/Ui/FlowUiModel.h"
 #include "Client/Visuals/VisualRuntime.h"
 
 #include <SDL3/SDL.h>
@@ -481,6 +483,131 @@ void GameScene::Update(float deltaTime) {
     }
     m_networkController->Update(input, deltaTime);
 
+    // ---- Stage26 指令十二/十三：玩家流程状态机（登录/大厅；InWorld 后纯收尾）----
+    if (m_flow == nullptr) {
+        m_flow = std::make_unique<legend::flow::ClientFlowController>(
+            m_networkController->Client(), m_networkController->Account(),
+            m_networkController->World(), m_networkController->CharacterSelection());
+        // AutoEnter（CI/Smoke）模式下流程只观测，不主动连接/登录/拉列表（指令八）。
+        m_flow->SetObserverOnly(m_networkController->AutoEnterEnabled());
+    }
+    m_flow->Update(deltaTime);
+    {
+        auto& flow27 = *m_flow;
+        const bool inWorld = flow27.State() == legend::flow::ClientFlowState::InWorld;
+        // 本地玩家造型覆盖（大厅选中的 visualId -> 进世界渲染；指令十一）。
+        if (m_visualRuntime != nullptr && m_networkController->Account().HasSelectedCharacter()) {
+            m_visualRuntime->SetLocalPlayerVisualOverride(
+                m_networkController->Account().SelectedCharacter().visualId);
+        }
+        if (!inWorld) {
+            // 文本输入会话（流程页：账号/密码/角色名；SDL 文本事件透传）。
+            if (!input.IsTextInputActive()) {
+                input.BeginTextInput();
+            }
+            flow27.FeedTextInput(input.FrameTextInput(),
+                                 input.IsKeyPressed(SDL_SCANCODE_BACKSPACE));
+            // Enter 提交。
+            if (input.IsKeyPressed(SDL_SCANCODE_RETURN) ||
+                input.IsKeyPressed(SDL_SCANCODE_KP_ENTER)) {
+                switch (flow27.State()) {
+                    case legend::flow::ClientFlowState::Login:
+                        flow27.RequestLogin();
+                        break;
+                    case legend::flow::ClientFlowState::Register:
+                        flow27.RequestRegister();
+                        break;
+                    case legend::flow::ClientFlowState::CharacterCreate:
+                        flow27.RequestSubmitCreate();
+                        break;
+                    case legend::flow::ClientFlowState::CharacterLobby:
+                        if (flow27.Model().deleteConfirmOpen) {
+                            flow27.RequestConfirmDelete();
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+            // Esc 收编（指令三十五）：流程页 Esc = 返回上级/关闭确认框；
+            // 游戏内 Esc 仍走下方 WorldReady 分支的 Settings 切换。
+            if (input.IsKeyPressed(SDL_SCANCODE_ESCAPE)) {
+                flow27.HandleEsc();
+            }
+            // 流程页 UI 动作分发（渲染层上一帧收集；与阶段25 DrainUiRequests 同模式）。
+            if (m_visualRuntime != nullptr) {
+                for (const auto& req : m_visualRuntime->DrainUiRequests()) {
+                    using K = legend::client::VisualRuntime::UiRequest::Kind;
+                    if (req.kind != K::FlowUi) {
+                        continue; // 流程页期间不消费世界 UI 请求
+                    }
+                    switch (static_cast<legend::flow::FlowUiAction::Kind>(req.flowAction)) {
+                        case legend::flow::FlowUiAction::Kind::RetryConnect:
+                            flow27.RequestRetryConnect();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::SubmitLogin:
+                            flow27.RequestLogin();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::GoRegister:
+                            flow27.RequestOpenRegister();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::SubmitRegister:
+                            flow27.RequestRegister();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::CancelRegister:
+                            flow27.RequestCancelRegister();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::EnterWorld:
+                            flow27.RequestEnterWorld(req.index);
+                            break;
+                        case legend::flow::FlowUiAction::Kind::OpenCreate:
+                            flow27.RequestOpenCreate();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::StartDelete:
+                            flow27.RequestStartDelete(req.index);
+                            break;
+                        case legend::flow::FlowUiAction::Kind::ConfirmDelete:
+                            flow27.RequestConfirmDelete();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::CancelDelete:
+                            flow27.RequestCancelDelete();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::SubmitCreate:
+                            flow27.RequestSubmitCreate();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::CancelCreate:
+                            flow27.RequestCancelCreate();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::ReturnToLogin:
+                            flow27.RequestReturnToLogin();
+                            break;
+                        case legend::flow::FlowUiAction::Kind::FocusField:
+                            flow27.RequestFocusField(
+                                static_cast<legend::flow::FlowField>(req.index));
+                            break;
+                        case legend::flow::FlowUiAction::Kind::SelectVisual:
+                            flow27.Model().newVisualId =
+                                static_cast<std::uint16_t>(req.index + 1);
+                            break;
+                        case legend::flow::FlowUiAction::Kind::SelectCharacter:
+                            flow27.RequestSelectCharacter(req.index);
+                            break;
+                        case legend::flow::FlowUiAction::Kind::None:
+                            break;
+                    }
+                }
+            }
+        } else if (input.IsTextInputActive()) {
+            input.EndTextInput();
+        }
+    }
+    // 流程页鼠标喂入（非 InWorld 时 WorldReady 分支不会执行；渲染层命中测试用）。
+    if (m_visualRuntime != nullptr && m_flow != nullptr &&
+        m_flow->State() != legend::flow::ClientFlowState::InWorld) {
+        m_visualRuntime->SetMouseState(input.GetMousePosition().x, input.GetMousePosition().y,
+                                       input.IsMouseButtonPressed(1));
+    }
+
     // ---- 阶段24：F10 热重载（指令三十四；Dev AutoLogin 已改 Ctrl+F10）----
     if (input.IsKeyPressed(SDL_SCANCODE_F10) && m_visualRuntime) {
         m_visualRuntime->ReloadAssets();
@@ -960,6 +1087,15 @@ void GameScene::Render(legend::render::Renderer& renderer, legend::render::Camer
     int viewportW = 1;
     int viewportH = 1;
     renderer.QueryViewportSize(viewportW, viewportH);
+
+    // ---- Stage26 指令二十一：玩家流程页全接管（非 InWorld 一律渲染流程页）----
+    // Boot/Connecting/Login/Register/Lobby/Create/EnteringWorld/Disconnected。
+    if (m_visualRuntime && m_visualRuntime->IsReady() && m_flow != nullptr &&
+        m_flow->State() != legend::flow::ClientFlowState::InWorld) {
+        m_visualRuntime->RenderFlowPages(m_flow->Model(), static_cast<float>(viewportW),
+                                         static_cast<float>(viewportH));
+        return;
+    }
 
     // ---- 阶段24：在线模式 → Visual Runtime 全接管（默认画面走真实资源渲染）----
     // 渲染顺序：Ground → Decoration → Y排序世界实体（含 Object 层）→ Foreground →
