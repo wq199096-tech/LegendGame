@@ -93,9 +93,12 @@ private:
         legend::client::AccountFlowState::Disconnected;
     legend::client::WorldFlowState m_prevWorldState = legend::client::WorldFlowState::Disconnected;
 
-    // 注册/创建页面的"已提交"观测位（区分页面停留与服务器往返完成）。
+    // 注册/创建页面的"已发出请求"标记（本机响应可能快于一帧，
+    // 状态边沿会被漏采——以请求发出为准）。
     bool m_sawRegistering = false;
+    bool m_registerRequested = false;
     bool m_sawCreating = false;
+    bool m_createRequested = false;
 };
 
 } // namespace legend::flow

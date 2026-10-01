@@ -35,6 +35,9 @@ public:
     // ---- Stage26 指令三十一：文本输入（登录/注册/角色名；SDL 文本事件透传）----
     // 开启后 SDL 开始派发 SDL_EVENT_TEXT_INPUT（Windows IME 中文输入可用）；
     // 嵌套计数允许页面/调试窗口共存。
+    // 目标窗口必须显式注入（Engine 初始化时）——SDL_StartTextInput 需要窗口，
+    // 依赖 GetKeyboardFocus 会在首帧焦点未建立时静默失效。
+    void SetTargetWindow(SDL_Window* window) { m_targetWindow = window; }
     void BeginTextInput();
     void EndTextInput();
     bool IsTextInputActive() const { return m_textInputDepth > 0; }
@@ -57,6 +60,7 @@ private:
 
     int m_textInputDepth = 0;
     std::vector<std::string> m_frameTextInput;
+    SDL_Window* m_targetWindow = nullptr;
 };
 
 } // namespace legend::input

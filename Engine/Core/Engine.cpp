@@ -29,6 +29,8 @@ bool Engine::Initialize(const std::string& windowTitle, int windowWidth, int win
         debug::Logger::Shutdown();
         return false;
     }
+    // Stage26：文本输入会话的目标窗口（登录/角色名输入；InputManager 自身不持窗口）。
+    m_input.SetTargetWindow(m_window.GetHandle());
 
     if (!m_renderer.Initialize(m_window.GetHandle())) {
         LOG_ERROR("Engine initialization failed: could not initialize renderer.");

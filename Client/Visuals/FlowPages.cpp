@@ -339,10 +339,11 @@ void VisualRuntime::RenderFlowPages(const legend::flow::FlowUiModel& model, floa
                 }
                 if (hasCharacter) {
                     const auto& character = model.characters[static_cast<std::size_t>(i)];
-                    // 立绘（identity 相机 + 实体 idle 动画）。
+                    // 立绘（identity 相机 + 实体 idle 动画；像素坐标 = ref*scale）。
                     RenderCharacterPortrait(
                         ui::CharacterVisualEntityName(character.visualId),
-                        {card.x, card.y}, card.w, card.h - 96.0f);
+                        {card.x * scale, card.y * scale}, card.w * scale,
+                        (card.h - 96.0f) * scale);
                     drawText({card.x + card.w * 0.5f, card.y + card.h - 84.0f},
                              character.name, 20.0f, theme.textPrimary, true);
                     drawText({card.x + card.w * 0.5f, card.y + card.h - 52.0f},
@@ -468,7 +469,8 @@ void VisualRuntime::RenderFlowPages(const legend::flow::FlowUiModel& model, floa
                 }
                 RenderCharacterPortrait(ui::CharacterVisualEntityName(
                                             static_cast<std::uint16_t>(visual)),
-                                        {card.x, card.y}, card.w, card.h - 40.0f);
+                                        {card.x * scale, card.y * scale}, card.w * scale,
+                                        (card.h - 40.0f) * scale);
                 drawText({card.x + card.w * 0.5f, card.y + card.h - 24.0f},
                          ui::CharacterVisualDisplayName(static_cast<std::uint16_t>(visual)),
                          16.0f, selected ? theme.textGold : theme.textDim, true);

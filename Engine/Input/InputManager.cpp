@@ -1,5 +1,7 @@
 #include "Engine/Input/InputManager.h"
 
+#include "Engine/Debug/Logger.h"
+
 namespace legend::input {
 
 void InputManager::BeginFrame() {
@@ -28,6 +30,8 @@ void InputManager::ProcessEvent(const SDL_Event& event) {
             // Stage26 指令三十一：文本会话开启时透传 IME 提交文本（登录/角色名）。
             if (m_textInputDepth > 0 && event.text.text != nullptr && event.text.text[0] != '\0') {
                 m_frameTextInput.emplace_back(event.text.text);
+                LOG_INFO("[TextInput] frame text received (depth=" +
+                         std::to_string(m_textInputDepth) + ")");
             }
             break;
 
@@ -83,9 +87,14 @@ bool InputManager::IsMouseButtonReleased(Uint8 button) const {
 void InputManager::BeginTextInput() {
     ++m_textInputDepth;
     if (m_textInputDepth == 1) {
-        // SDL3：文本输入按窗口开启（主窗口拥有键盘焦点）。
-        if (SDL_Window* window = SDL_GetKeyboardFocus()) {
+        // SDL3：文本输入按窗口开启（优先注入的主窗口，回退键盘焦点窗口）。
+        SDL_Window* window = m_targetWindow != nullptr ? m_targetWindow : SDL_GetKeyboardFocus();
+        if (window != nullptr) {
             SDL_StartTextInput(window);
+            LOG_INFO("[TextInput] session started (active=" +
+                     std::string(SDL_TextInputActive(window) ? "1" : "0") + ")");
+        } else {
+            LOG_WARN("[TextInput] start skipped: no target window");
         }
     }
 }
@@ -94,7 +103,8 @@ void InputManager::EndTextInput() {
     if (m_textInputDepth > 0) {
         --m_textInputDepth;
         if (m_textInputDepth == 0) {
-            if (SDL_Window* window = SDL_GetKeyboardFocus()) {
+            SDL_Window* window = m_targetWindow != nullptr ? m_targetWindow : SDL_GetKeyboardFocus();
+            if (window != nullptr) {
                 SDL_StopTextInput(window);
             }
             m_frameTextInput.clear();

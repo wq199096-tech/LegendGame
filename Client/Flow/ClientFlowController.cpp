@@ -134,6 +134,8 @@ void ClientFlowController::DeriveState() {
                     m_account.SendCharacterList(m_account.SessionToken());
                 }
                 m_model.loginUserName = m_model.accountName; // 大厅顶部显示
+                // 持久化账号名（仅账号名；密码/Token 绝不落盘，指令三十）。
+                ClientLoginStore::SaveLastAccountName(m_model.accountName);
                 // 登录成功：清内存中的密码（不保留明文）。
                 m_model.password.clear();
                 GoState(ClientFlowState::CharacterLobby);
@@ -144,14 +146,17 @@ void ClientFlowController::DeriveState() {
             break;
         }
         case ClientFlowState::Register: {
-            // 页面停留期 account 一直是 Unauthenticated（不能以此弹回）；
-            // 只在观测到 Registering 后回到 Unauthenticated 才判定"注册往返完成"。
+            // 页面停留期 account 一直是 Unauthenticated（不能以此弹回）。
+            // 本机服务器响应可能快于一帧（Registering 状态无帧可观测），
+            // 回落判定用"已发出注册请求"标记而非状态边沿。
             if (account == AccountFlowState::Registering) {
                 m_sawRegistering = true;
             }
-            if (m_sawRegistering && account == AccountFlowState::Unauthenticated) {
+            if ((m_sawRegistering || m_registerRequested) &&
+                account == AccountFlowState::Unauthenticated) {
                 // 注册成功（或失败）：回登录页，账号名带入，错误码随带展示。
                 m_sawRegistering = false;
+                m_registerRequested = false;
                 MarkError();
                 m_model.accountName = m_model.regAccount;
                 m_model.regPassword.clear();
@@ -180,16 +185,17 @@ void ClientFlowController::DeriveState() {
             break;
         }
         case ClientFlowState::CharacterCreate: {
-            // 页面停留期 account 一直是 CharacterListReady（不能以此弹回）；
-            // 只在观测到 CreatingCharacter 后回落才判定"创建往返完成"。
+            // 页面停留期 account 一直是 CharacterListReady（不能以此弹回）。
+            // 本机响应可能快于一帧——用"已发出创建请求"标记判定往返完成。
             if (account == AccountFlowState::CreatingCharacter) {
                 m_sawCreating = true;
             }
-            if (m_sawCreating &&
+            if ((m_sawCreating || m_createRequested) &&
                 (account == AccountFlowState::CharacterListReady ||
                  account == AccountFlowState::Authenticated)) {
                 // 创建完成（或失败）：带结果回大厅。
                 m_sawCreating = false;
+                m_createRequested = false;
                 MarkError();
                 GoState(ClientFlowState::CharacterLobby);
             } else if (IsNetDown(net)) {
@@ -349,6 +355,7 @@ void ClientFlowController::RequestRegister() {
     }
     m_model.lastErrorCode = 0;
     m_model.lastErrorMessage.clear();
+    m_registerRequested = true; // 回落标记（响应可能快于一帧）
     m_account.SendRegister(m_model.regAccount, m_model.regPassword);
 }
 
@@ -404,6 +411,7 @@ void ClientFlowController::RequestSubmitCreate() {
     }
     m_model.lastErrorCode = 0;
     m_model.lastErrorMessage.clear();
+    m_createRequested = true; // 回落标记（响应可能快于一帧）
     // classId 固定 1（Stage26 造型语义：visualId 决定外观实体）。
     m_account.SendCreateCharacter(m_account.SessionToken(), m_model.newName, 1, 1, visualId);
 }
@@ -555,6 +563,14 @@ void ClientFlowController::FeedTextInput(const std::vector<std::string>& utf8Chu
     }
     for (const auto& chunk : utf8Chunks) {
         FlowTextAppend(*target, chunk, maxCodepoints);
+        std::string hex;
+        for (unsigned char c : chunk) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%02X ", c);
+            hex += buf;
+        }
+        LOG_INFO("[Flow] text feed chunk=[" + hex + "] total_len=" +
+                 std::to_string(target->size()));
     }
 }
 
