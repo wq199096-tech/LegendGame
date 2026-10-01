@@ -158,6 +158,18 @@ jobs:
       - name: Vertical Slice runtime smoke (full 7-process chain)
         shell: pwsh
         run: |
+          # 失败诊断：dump 客户端与各服务器日志尾部（不改变任何断言强度）
+          function Dump-SmokeLogs([string]$reason) {
+            Write-Host "==== VsSmoke failure diagnostics: $reason ===="
+            foreach ($f in @('Logs/latest.log','Logs/Gateway/latest.log','Logs/World/latest.log','Logs/Character/latest.log','Logs/Login/latest.log','Logs/Db/latest.log','Logs/Log/latest.log')) {
+              if (Test-Path $f) {
+                Write-Host "---- $f (last 30 lines) ----"
+                Get-Content $f -Tail 30 | ForEach-Object { Write-Host $_ }
+              } else {
+                Write-Host "---- $f : MISSING ----"
+              }
+            }
+          }
           $env:GALLIUM_DRIVER = 'llvmpipe'
           $env:LEGEND_CLIENT_AUTO_ENTER = '1'
           $env:LEGEND_CLIENT_VS_SMOKE = '1'
@@ -180,28 +192,35 @@ jobs:
               }
               if (-not $ready) { Start-Sleep -Milliseconds 250 }
             } until ($ready -or (Get-Date) -ge $readyDeadline)
-            if (-not $ready) { Write-Error 'Full topology readiness failed'; exit 1 }
+            if (-not $ready) {
+              Dump-SmokeLogs 'full topology readiness timeout (30s)'
+              Write-Error 'Full topology readiness failed'; exit 1
+            }
             $client = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
             $deadline = (Get-Date).AddSeconds(150)
             while ((Get-Date) -lt $deadline -and -not $client.HasExited) {
               Start-Sleep -Seconds 5
             }
             if (-not $client.HasExited) {
+              Dump-SmokeLogs 'client did not exit within 150s budget'
               Stop-Process -Id $client.Id -Force
               Write-Error 'VsSmoke client did not exit within budget'
               exit 1
             }
             if ($client.ExitCode -ne 0) {
+              Dump-SmokeLogs "client exited with code $($client.ExitCode)"
               Write-Error "VsSmoke client exit code $($client.ExitCode)"
               exit 1
             }
             $log = Get-Content Logs/latest.log -Raw -ErrorAction SilentlyContinue
-            if (-not $log) { Write-Error 'VsSmoke: log missing'; exit 1 }
+            if (-not $log) { Dump-SmokeLogs 'client log missing'; Write-Error 'VsSmoke: log missing'; exit 1 }
             if ($log -notmatch '\[VsSmoke\] entered-world') {
+              Dump-SmokeLogs 'entered-world marker missing (auto login -> world ready failed)'
               Write-Error 'VsSmoke entered-world marker missing (auto login -> world ready failed)'
               exit 1
             }
             if ($log -notmatch '\[VsSmoke\] pass') {
+              Dump-SmokeLogs 'pass marker missing (30s alive clean quit)'
               Write-Error 'VsSmoke pass marker missing (30s alive clean quit)'
               exit 1
             }

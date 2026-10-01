@@ -181,12 +181,39 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
     UpdateWorldMoveInput(input, deltaTime);
 }
 
+// Stage25.5 CI stabilization：墙钟节流（原实现每帧 -1/60 为帧率依赖——
+// llvmpipe 软渲染 2~5 FPS 下每个 0.5s 冷却实际耗时 10~30 墙秒，30s 冒烟窗口
+// 内走不完 登录→选角→进世界 链，[VsSmoke] entered-world 标记永不出现）。
+void ClientNetworkController::AutoEnterWait(float seconds) {
+    m_autoEnterReadyAt = std::chrono::steady_clock::now() +
+                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                             std::chrono::duration<float>(seconds));
+}
+
+bool ClientNetworkController::AutoEnterGate() const {
+    return std::chrono::steady_clock::now() >= m_autoEnterReadyAt;
+}
+
+// 瞬时错误（依赖服务尚未 Healthy / Db 冷启动 / RPC 超时）→ 可重试；
+// 业务性拒绝（凭证/名字/所有权等）不重试，避免无意义循环。
+bool ClientNetworkController::IsRetryableAccountCode(std::uint16_t code) {
+    switch (static_cast<legend::account::AccountErrorCode>(code)) {
+        case legend::account::AccountErrorCode::DatabaseError:
+        case legend::account::AccountErrorCode::InternalError:
+        case legend::account::AccountErrorCode::RequestPending:
+        case legend::account::AccountErrorCode::RequestTimeout:
+        case legend::account::AccountErrorCode::ServiceUnavailable:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void ClientNetworkController::UpdateAutoEnter() {
     if (!m_autoEnter) {
         return;
     }
-    if (m_autoEnterCooldown > 0.0f) {
-        m_autoEnterCooldown -= 1.0f / 60.0f; // 近似节流（仅开发链路）
+    if (!AutoEnterGate()) {
         return;
     }
     // 0) 尚未连接 Gateway → 先发起连接（等价 F9；失败不阻塞主循环）。
@@ -195,10 +222,12 @@ void ClientNetworkController::UpdateAutoEnter() {
         LOG_INFO("[AutoEnter] connecting to gateway " + m_client->GetConfig().gatewayHost + ":" +
                  std::to_string(m_client->GetConfig().gatewayPort) + ".");
         m_client->Connect(m_client->GetConfig().gatewayHost, m_client->GetConfig().gatewayPort);
-        m_autoEnterCooldown = 1.0f;
+        AutoEnterWait(1.0f);
         return;
     }
     // 1) Gateway 就绪且未认证 → 走 F10 同款开发账号登录。
+    //    瞬时失败（CharacterServer/DbServer 尚未 Healthy）退避后重试——
+    //    原实现一次性标志位死锁，CI 冷启动时链路中断。
     if (m_client->State() == NetworkState::Ready &&
         m_account.State() == AccountFlowState::Unauthenticated) {
         if (!m_autoEnterLoggedIn) {
@@ -206,11 +235,29 @@ void ClientNetworkController::UpdateAutoEnter() {
             m_devLoginStage = DevLoginStage::LoggingIn;
             m_account.SendAccountLogin(kDevUsername, kDevPassword);
             m_autoEnterLoggedIn = true;
-            m_autoEnterCooldown = 0.5f;
+            AutoEnterWait(0.5f);
+        } else if (IsRetryableAccountCode(m_account.LastErrorCode())) {
+            LOG_WARN("[AutoEnter] login failed transiently (code=" +
+                     std::to_string(m_account.LastErrorCode()) + " " + m_account.LastError() +
+                     "); retrying after backoff.");
+            m_autoEnterLoggedIn = false;
+            AutoEnterWait(2.0f);
         }
         return;
     }
-    // 2) 角色列表就绪：无角色则创建 Warrior，有角色选第一个。
+    // 1b) 登录成功但角色列表瞬时失败（控制器已回到 Authenticated）→ 重新拉列表。
+    //     原实现列表请求只在登录成功瞬间发一次，失败即死锁。
+    if (m_client->State() == NetworkState::Ready &&
+        m_account.State() == AccountFlowState::Authenticated &&
+        m_autoEnterLoggedIn && IsRetryableAccountCode(m_account.LastErrorCode())) {
+        LOG_WARN("[AutoEnter] character list failed transiently (code=" +
+                 std::to_string(m_account.LastErrorCode()) + " " + m_account.LastError() +
+                 "); re-requesting list.");
+        m_account.SendCharacterList(m_account.SessionToken());
+        AutoEnterWait(2.0f);
+        return;
+    }
+    // 2) 角色列表就绪：无角色则创建 Warrior，有角色选第一个；瞬时失败退避重试。
     if (m_account.State() == AccountFlowState::CharacterListReady &&
         !m_account.HasSelectedCharacter()) {
         if (m_account.Characters().empty()) {
@@ -219,14 +266,28 @@ void ClientNetworkController::UpdateAutoEnter() {
                 // gender 从 1 开始（0 = 非法，服务器拒绝）。
                 m_account.SendCreateCharacter(m_account.SessionToken(), "Hero", 1, 1);
                 m_autoEnterCreated = true;
-                m_autoEnterCooldown = 0.5f;
+                ++m_autoEnterCreateAttempts;
+                AutoEnterWait(0.5f);
+            } else if (IsRetryableAccountCode(m_account.LastErrorCode()) &&
+                       m_autoEnterCreateAttempts < kAutoEnterMaxCreateAttempts) {
+                LOG_WARN("[AutoEnter] create failed transiently (code=" +
+                         std::to_string(m_account.LastErrorCode()) + " " + m_account.LastError() +
+                         "); retrying (attempt " + std::to_string(m_autoEnterCreateAttempts + 1) +
+                         "/" + std::to_string(kAutoEnterMaxCreateAttempts) + ").");
+                m_autoEnterCreated = false;
+                AutoEnterWait(2.0f);
+            } else if (!IsRetryableAccountCode(m_account.LastErrorCode())) {
+                LOG_ERROR("[AutoEnter] create failed permanently (code=" +
+                          std::to_string(m_account.LastErrorCode()) + " " + m_account.LastError() +
+                          "); auto-enter stopped.");
+                m_autoEnter = false;
             }
         } else {
             const auto& character = m_account.Characters().front();
             LOG_INFO("[AutoEnter] selecting character " +
                      std::to_string(character.characterId) + ".");
             m_characterSelection.RequestSelect(m_account, character.characterId);
-            m_autoEnterCooldown = 0.5f;
+            AutoEnterWait(0.5f);
         }
     }
 }
@@ -239,6 +300,18 @@ void ClientNetworkController::UpdateWorldFlow() {
         if (!m_account.SelectionTicket().empty()) {
             m_world.EnterWorldWithTicket(m_account.SelectionTicket());
         }
+    }
+    // Stage25.5 CI stabilization：进世界失败（World 链路未就绪 / ticket 校验失败等）
+    // 原实现停在 Failed 死等——重新选角换新 ticket 重试（服务器权威重验；ticket 一次性，
+    // 必须换新票）。瞬失败自愈，业务性失败由服务器再次拒绝并可观察。
+    if (accountState == AccountFlowState::CharacterSelected &&
+        m_prevAccountState == AccountFlowState::CharacterSelected &&
+        m_world.State() == WorldFlowState::Failed && AutoEnterGate()) {
+        LOG_WARN("[AutoEnter] enter-world failed (code=" +
+                 std::to_string(m_world.LastErrorCode()) + " " + m_world.LastError() +
+                 "); re-selecting character for a fresh ticket.");
+        AutoEnterWait(2.0f);
+        m_characterSelection.RequestSelect(m_account, m_account.SelectedCharacterId());
     }
     if (accountState != AccountFlowState::CharacterSelected &&
         m_prevAccountState == AccountFlowState::CharacterSelected) {
@@ -284,11 +357,18 @@ void ClientNetworkController::UpdateDevAutoLogin(float) {
     }
     if (m_devLoginStage == DevLoginStage::LoggingIn &&
         m_account.State() == AccountFlowState::Unauthenticated) {
-        // 登录失败 -> 尝试注册一次再登录（开发账号不存在时自动创建）
         const std::uint16_t code = m_account.LastErrorCode();
-        if (code == static_cast<std::uint16_t>(legend::account::AccountErrorCode::InvalidCredentials)) {
-            LOG_INFO("[Account] Dev account missing; registering (F10).");
+        // Stage25.5 CI 稳定化：全新数据库中开发账号不存在，而登录失败错误码经
+        // DbServer->CharacterServer 两层映射后有损退化为 InternalError，导致原先
+        // 仅认 InvalidCredentials 的注册回退永不触发。统一对这两种"账号缺失"形态
+        // 做注册回退；有界（每会话最多注册一次），杜绝 注册<->登录 死循环。
+        const bool needRegister =
+            code == static_cast<std::uint16_t>(legend::account::AccountErrorCode::InvalidCredentials) ||
+            code == static_cast<std::uint16_t>(legend::account::AccountErrorCode::InternalError);
+        if (needRegister && !m_devRegisterAttempted) {
+            LOG_INFO("[Account] Dev account missing; registering (auto).");
             m_devLoginStage = DevLoginStage::Registering;
+            m_devRegisterAttempted = true;
             m_account.SendRegister(kDevUsername, kDevPassword);
             return;
         }

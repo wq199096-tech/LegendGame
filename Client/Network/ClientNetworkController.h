@@ -7,6 +7,7 @@
 
 #include "Engine/Input/InputManager.h"
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -50,6 +51,12 @@ private:
     void UpdateWorldMoveInput(legend::input::InputManager& input, float deltaTime);
     // 阶段24：LEGEND_CLIENT_AUTO_ENTER=1 自动进世界（登录→建角/选角→EnterWorld）。
     void UpdateAutoEnter();
+    // Stage25.5 CI stabilization：AutoEnter 墙钟节流（原实现每帧 -1/60 为帧率依赖，
+    // llvmpipe 软渲染低 FPS 下 30s 冒烟窗口内走不完链路；墙钟在任意帧率下行为一致）。
+    void AutoEnterWait(float seconds);
+    bool AutoEnterGate() const;
+    // 瞬时错误（依赖服务未 Healthy / Db 冷启动 / RPC 超时）→ 可重试；业务性拒绝不重试。
+    static bool IsRetryableAccountCode(std::uint16_t code);
 
     std::shared_ptr<GameNetworkClient> m_client = std::make_shared<GameNetworkClient>();
     AccountClientController m_account{*m_client};
@@ -63,14 +70,17 @@ private:
     // F10 开发自动登录（指令六十一：注册 -> 登录；仅测试环境便捷用）
     enum class DevLoginStage { Idle, Registering, LoggingIn, Done };
     DevLoginStage m_devLoginStage = DevLoginStage::Idle;
+    bool m_devRegisterAttempted = false; // Stage25.5：注册回退有界（每会话最多一次）
     static constexpr const char* kDevUsername = "dev_user";
     static constexpr const char* kDevPassword = "DevPass123!";
 
     // 阶段24：自动进世界（LEGEND_CLIENT_AUTO_ENTER=1；本地视觉冒烟链路）
     bool m_autoEnter = false;
-    float m_autoEnterCooldown = 0.0f;
+    std::chrono::steady_clock::time_point m_autoEnterReadyAt{}; // 墙钟节流（非帧率）
     bool m_autoEnterCreated = false;   // 已尝试建角（防重复提交）
+    int m_autoEnterCreateAttempts = 0; // 建角重试计数（瞬时失败有界重试）
     bool m_autoEnterLoggedIn = false;  // 已触发登录
+    static constexpr int kAutoEnterMaxCreateAttempts = 5;
 };
 
 } // namespace legend::client

@@ -1,8 +1,23 @@
 # CURRENT_STAGE — Stage25.5 Server Architecture Completion V0.255
 
-## Stage25.5（2026-10-01，封板）
+## Stage25.5（2026-10-01）— feature-complete, CI stabilization in progress
 
-- 状态：**completed**；不进入 Stage25.6/Stage26。
+- 状态：**feature-complete, CI stabilization in progress**（CI Run #66 =
+  36827770559 FAILURE：仅 Vertical Slice runtime smoke (full 7-process chain)
+  失败；其余 Configure/Build/Verify 11 exe/CTest/Runtime gate/Topology smoke 全绿）。
+  Vertical Slice 全绿之前不得标记 completed；不进入 Stage25.6/Stage26。
+- 稳定化修复（仅动失败链路，不重构已通过的 Db/Character/Log/Gateway/
+  Persistence RPC/Topology smoke）：
+  - Client AutoEnter 墙钟节流：原实现每帧 -1/60 为帧率依赖，CI llvmpipe 软渲染
+    2~5 FPS 下 30s 冒烟窗口内走不完 登录→选角→进世界 链（entered-world 标记
+    永不出现）。改为 steady_clock 墙钟，任意帧率行为一致。
+  - Client AutoEnter 瞬时失败重试：登录/拉列表/建角遇可重试错误
+    （DatabaseError/InternalError/RequestPending/RequestTimeout/ServiceUnavailable，
+    即依赖服务尚未 Healthy）退避 2s 重试（建角有界 5 次），替换原一次性标志位死锁。
+  - Client 进世界失败重试：EnterWorld 失败（ticket 一次性作废）→ 重新选角换新
+    ticket 重试，替换原 Failed 态死等。
+  - CI Vertical Slice 步骤失败诊断：任何失败路径 dump 客户端+六服务日志尾部 30 行
+    （不改变断言强度/不加 sleep/不 continue-on-error）。
 - 正式进程 8 个：LegendClient / LegendMapEditor(Studio) / LegendLoginServer /
   LegendCharacterServer / LegendGateway / LegendWorldServer / LegendDbServer /
   LegendLogServer；开发测试程序 3 个；总构建 exe **11 个**。

@@ -513,8 +513,8 @@ void GameScene::Update(float deltaTime) {
                      m_networkController->World().MapModel().CurrentMapName());
         }
         if (SDL_GetTicks() - m_vsSmokeStartMs >= 30000) {
-            LOG_INFO("[VsSmoke] pass — client alive 30s (world-ready=%d), quitting cleanly.",
-                     m_vsSmokeWorldReadyLogged ? 1 : 0);
+            LOG_INFO("[VsSmoke] pass — client alive 30s (world-ready=" +
+                     std::to_string(m_vsSmokeWorldReadyLogged ? 1 : 0) + "), quitting cleanly.");
             legend::Engine::Get().Quit();
         }
     }
