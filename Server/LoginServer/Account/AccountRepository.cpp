@@ -490,6 +490,25 @@ RepositoryResult<int> AddProgressionRewards(Database& db, std::uint64_t characte
     return RepositoryResult<int>{true, 1};
 }
 
+// 阶段25.5：金币扣费/入账落库（单 UPDATE；record_version 递增保持并发纪律）。
+RepositoryResult<int> SaveGold(Database& db, std::uint64_t characterId, std::int64_t gold) {
+    std::string error;
+    Statement stmt;
+    if (!stmt.Prepare(db.Handle(),
+                      "UPDATE characters SET gold = ?, record_version = record_version + 1 "
+                      "WHERE id = ?;",
+                      error)) {
+        return MapSqlError<int>("SaveGold prepare", error);
+    }
+    stmt.BindInt64(1, gold);
+    stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+    stmt.Step(error);
+    if (!error.empty()) {
+        return MapSqlError<int>("SaveGold step", error);
+    }
+    return RepositoryResult<int>{true, 1};
+}
+
 } // namespace CharacterRepository
 
 } // namespace legend::account

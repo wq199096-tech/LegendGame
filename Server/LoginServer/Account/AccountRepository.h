@@ -116,6 +116,8 @@ RepositoryResult<int> SaveProgression(Database& db, std::uint64_t characterId,
 // 返回更新后的 level/exp/gold（同一 UPDATE 内 RETURNING 语义用读改写事务实现）。
 RepositoryResult<int> AddProgressionRewards(Database& db, std::uint64_t characterId,
                                             std::int64_t expDelta, std::int64_t goldDelta);
+// 阶段25.5：金币扣费/入账落库（Portal/Respawn/NPC Teleport/Shop 共用）。
+RepositoryResult<int> SaveGold(Database& db, std::uint64_t characterId, std::int64_t gold);
 
 } // namespace CharacterRepository
 

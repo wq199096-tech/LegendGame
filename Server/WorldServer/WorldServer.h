@@ -3,6 +3,7 @@
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpClient.h"
 #include "Engine/Network/TcpServer.h"
+#include "Server/Common/PersistenceClient.h"
 #include "Server/LoginServer/Account/AccountRepository.h"
 #include "Server/LoginServer/Account/Database/Database.h"
 #include "Server/LoginServer/Account/DbWorker.h"
@@ -141,6 +142,12 @@ public:
         // 阶段23 23.22：Game 数据目录（items/monsters/skills/statuses/quests/
         // shops/teleports/loot_tables JSON）；策略与 worldDataDir 一致。
         std::string gameDataDir = "Data/Game";
+        // 阶段25.5：DbServer RPC 持久化（dbPort=0 保留 legacy 本地 DB——隔离测试用；
+        // 正式部署经 servers.json 指向 DbServer，World io 线程零 SQLite）。
+        std::string dbHost = "127.0.0.1";
+        std::uint16_t dbPort = 0;
+        std::string serviceToken;
+        std::chrono::milliseconds dbTimeout{5000};
     };
 
     struct Hooks {
@@ -462,6 +469,41 @@ private:
         std::chrono::steady_clock::time_point createdAt{std::chrono::steady_clock::now()};
     };
 
+    // 阶段25.5：EnterWorld 加载结果（legacy DB 任务与 RPC 链共用同一应用逻辑）。
+    struct EnterWorldLoadResult {
+        bool characterOk = false; // 角色行已加载且未删除（归属校验在 Apply 内）
+        std::string error;
+        legend::account::CharacterRow row;
+        std::vector<legend::world::InventoryRepository::InventoryRow> itemRows;
+        std::vector<legend::world::QuestRepository::QuestRow> questRows;
+        std::vector<legend::world::QuestRepository::ObjectiveRow> questObjectiveRows;
+    };
+    // 阶段25.5：进世界加载应用（io 线程；替代原 HandleConsumeResponse 内联体）。
+    void ApplyEnterWorldLoad(std::uint64_t connectionId, std::uint64_t requestId,
+                             std::uint64_t accountId, std::uint64_t characterId,
+                             const EnterWorldLoadResult& load);
+    bool UsingRpcPersistence() const { return m_config.dbPort != 0; }
+    // 阶段25.5：成长/金币/离线奖励落库（legacy DbWorker 与 DbServer RPC 双模式共用入口）。
+    void PersistProgression(std::uint64_t characterId, std::uint32_t level, std::int64_t exp,
+                            std::int64_t gold);
+    void PersistGold(std::uint64_t characterId, std::int64_t gold);
+    void PersistOfflineReward(std::uint64_t characterId, std::int64_t expDelta,
+                              std::int64_t goldDelta);
+    // 阶段25.5：任务持久化（legacy DbWorker 与 DbServer RPC 双模式共用入口）。
+    void PersistQuestInsert(std::uint64_t characterId, QuestId questId, std::uint8_t state,
+                            std::int64_t acceptedAt,
+                            const std::vector<std::uint32_t>& objectiveIds);
+    void PersistQuestTurnIn(const QuestRepository::TurnInTransaction& tx,
+                            const std::function<void(bool ok, std::uint64_t itemInstanceId,
+                                                     const std::string& error)>& onDone);
+    void PersistQuestAbandon(std::uint64_t characterId, QuestId questId, std::int64_t nowUnix);
+    void PersistQuestObjective(std::uint64_t characterId, QuestId questId,
+                               std::uint32_t objectiveId, std::uint32_t progress);
+    void PersistQuestState(std::uint64_t characterId, QuestId questId, std::uint8_t state,
+                           std::int64_t timestamp, bool setTurnedInAt);
+    void PersistOfflineKill(std::uint64_t characterId,
+                            const std::vector<QuestRepository::KillCandidate>& candidates);
+
     // Client 连接（io 线程）
     void OnClientAccepted(legend::net::TcpConnectionPtr connection);
     void OnClientPacket(std::uint64_t connectionId, const legend::network::Packet& packet);
@@ -648,8 +690,10 @@ private:
     MapTransitionService m_mapTransition; // 指令二十三/二十四：统一地图切换
 
     // 阶段11 指令二十五：World 独立 DB Worker（网络线程禁止直接 SQLite IO）
+    // 阶段25.5：dbPort!=0 时改用 DbServer RPC（m_persistence），m_database/m_dbWorker 不启用。
     legend::account::Database m_database;
     legend::account::DbWorker m_dbWorker;
+    std::shared_ptr<legend::server::PersistenceClient> m_persistence;
 
     asio::steady_timer m_reconnectTimer;
     asio::steady_timer m_ticketTimer;

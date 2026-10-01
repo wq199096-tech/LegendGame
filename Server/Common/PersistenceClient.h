@@ -35,6 +35,8 @@ public:
     PersistenceClient(legend::net::NetworkService& service, Config config);
     void Start();
     void Stop();
+    // 阶段25.5：Graceful Shutdown——阻塞等待在途请求清零（或超时）；Stop 前调用。
+    void Drain(std::chrono::milliseconds timeout);
     std::uint64_t AsyncRequest(legend::internal::DbOperation operation,
                                std::vector<std::uint8_t> payload, Callback callback,
                                std::uint64_t expectedVersion = 0);

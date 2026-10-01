@@ -25,6 +25,14 @@ int main(int argc, char** argv) {
         config.loginPort=legend::server::FindService(topology,"character")->port;
         config.databasePath=topology.databasePath;
         config.positionSaveIntervalSeconds=topology.saveIntervalSeconds;
+        // 阶段25.5：持久化统一走 DbServer RPC（World io 线程零 SQLite）。
+        if (const auto* db = legend::server::FindService(topology, "db")) {
+            config.dbHost = db->host;
+            config.dbPort = db->port;
+            config.databasePath = topology.databasePath;
+        }
+        config.serviceToken = topology.sharedSecret;
+        config.dbTimeout = std::chrono::milliseconds(topology.rpcTimeoutMilliseconds);
     }
 
     for (int i = 1; i < argc; ++i) {
@@ -36,6 +44,13 @@ int main(int argc, char** argv) {
             config.loginHost=legend::server::FindService(topology,"character")->host;
             config.loginPort=legend::server::FindService(topology,"character")->port;
             config.databasePath=topology.databasePath;config.positionSaveIntervalSeconds=topology.saveIntervalSeconds;
+            // 阶段25.5：持久化统一走 DbServer RPC（World io 线程零 SQLite）。
+            if (const auto* db = legend::server::FindService(topology, "db")) {
+                config.dbHost = db->host;
+                config.dbPort = db->port;
+            }
+            config.serviceToken = topology.sharedSecret;
+            config.dbTimeout = std::chrono::milliseconds(topology.rpcTimeoutMilliseconds);
         } else if (arg == "--port" && i + 1 < argc) {
             config.listenPort = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         } else if (arg == "--login-port" && i + 1 < argc) {

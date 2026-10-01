@@ -121,6 +121,22 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# LegendWorldData：World 域 Repository（背包/装备/任务持久化）。
+# 阶段25.5：LegendWorldCore（legacy 本地 DB 路径）与 LegendDbCore（RPC 事务执行）
+# 共用同一仓库层——禁止两套 SQL 实现。
+# ---------------------------------------------------------------------------
+add_library(LegendWorldData STATIC
+    WorldServer/Item/InventoryRepository.cpp
+    WorldServer/Quest/QuestRepository.cpp
+)
+target_include_directories(LegendWorldData PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendWorldData PUBLIC cxx_std_20)
+target_link_libraries(LegendWorldData PUBLIC LegendAccountData)
+if(MSVC)
+    target_compile_options(LegendWorldData PRIVATE /utf-8)
+endif()
+
+# ---------------------------------------------------------------------------
 # LegendWorldCore / LegendWorldServer：世界服务（阶段11 指令一/六十一）
 # 纯 Console，不链接 SDL/OpenGL/Renderer/GameScene（指令一百零九）。
 # ---------------------------------------------------------------------------
@@ -149,7 +165,6 @@ add_library(LegendWorldCore STATIC
     WorldServer/Item/DropRoller.cpp
     WorldServer/Item/WorldItemDrop.cpp
     WorldServer/Item/InventoryContainer.cpp
-    WorldServer/Item/InventoryRepository.cpp
     WorldServer/Monster/MonsterRespawnManager.cpp
     WorldServer/Monster/MonsterSpawnRegistry.cpp
     WorldServer/Monster/MonsterDefinitionRegistry.cpp
@@ -157,7 +172,6 @@ add_library(LegendWorldCore STATIC
     WorldServer/Quest/PlayerQuestContainer.cpp
     WorldServer/Quest/QuestRegistry.cpp
     WorldServer/Quest/QuestService.cpp
-    WorldServer/Quest/QuestRepository.cpp
     WorldServer/Npc/NpcRegistry.cpp
     WorldServer/Npc/NpcManager.cpp
     WorldServer/Npc/NpcSpatialGrid.cpp
@@ -178,6 +192,7 @@ target_link_libraries(LegendWorldCore
         LegendNetworkTransport
         LegendServerCommon
         LegendAccountData
+        LegendWorldData
         LegendInternalClients
 )
 if(MSVC)
@@ -206,7 +221,7 @@ add_library(LegendDbCore STATIC
 )
 target_include_directories(LegendDbCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendDbCore PUBLIC cxx_std_20)
-target_link_libraries(LegendDbCore PUBLIC LegendAccountData LegendNetworkTransport LegendServerCommon)
+target_link_libraries(LegendDbCore PUBLIC LegendAccountData LegendWorldData LegendNetworkTransport LegendServerCommon)
 
 add_executable(LegendDbServer ../Apps/DbServerMain.cpp)
 target_link_libraries(LegendDbServer PRIVATE LegendDbCore)

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Server/LoginServer/Account/Database/Database.h"
 
@@ -47,6 +47,38 @@ public:
     static bool UpdateQuantity(AccountDatabase& db, std::uint64_t instanceId, std::uint32_t quantity);
     // 删除实例（装备替换不删除——旧装备回背包；仅测试清理用）。
     static bool DeleteItem(AccountDatabase& db, std::uint64_t instanceId);
+
+    // 阶段25.5：拾取/入包统一入口（Insert 新堆叠 或 Merge 覆盖数量）。
+    // 返回持久 instanceId（Merge 返回 mergeInstanceId；失败返回 0）。
+    static std::uint64_t InsertOrMergeItem(AccountDatabase& db, std::uint64_t characterId,
+                                           std::uint32_t definitionId, std::uint32_t quantity,
+                                           std::int64_t slotIndex, std::int64_t createdAt,
+                                           bool mergedIntoStack, std::uint64_t mergeInstanceId,
+                                           std::uint32_t mergeQuantity);
+
+    // 阶段25.5：商店原子事务（SQL 从 WorldServer DbWorker 任务抽入——DbServer RPC
+    // 与 legacy 路径共用同一实现，指令四十六/五十四：Gold 与 Inventory 一次提交）。
+    struct ShopBuyTransaction {
+        std::uint64_t characterId = 0;
+        std::int64_t newGold = 0;
+        std::uint32_t itemDefinitionId = 0;
+        std::uint32_t quantity = 0;
+        std::int64_t bagSlotIndex = 0;
+        bool mergedIntoStack = false;
+        std::uint64_t mergeInstanceId = 0;
+        std::uint32_t mergeQuantity = 0;
+    };
+    static bool RunShopBuyTransaction(AccountDatabase& db, const ShopBuyTransaction& tx,
+                                      std::uint64_t& outNewInstanceId, std::string& error);
+    struct ShopSellTransaction {
+        std::uint64_t characterId = 0;
+        std::int64_t newGold = 0;
+        std::uint64_t instanceId = 0;
+        std::uint32_t quantity = 0;
+        bool wholeStack = false;
+    };
+    static bool RunShopSellTransaction(AccountDatabase& db, const ShopSellTransaction& tx,
+                                       std::string& error);
 
     // Equip 事务：新装备 slot_index -> 装备码；被替换旧装备 -> 释放出的背包槽；
     // character_equipment UPSERT。全部成功才提交（指令三十三/五十五）。

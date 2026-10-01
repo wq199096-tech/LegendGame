@@ -59,7 +59,7 @@ bool IsValidServiceType(ServiceType value) {
 }
 
 bool IsValidDbOperation(DbOperation value) {
-    return value >= DbOperation::LoadAccount && value <= DbOperation::ValidateSession;
+    return value >= DbOperation::LoadAccount && value <= DbOperation::LoadCharacterFull;
 }
 
 bool IsValidLogEventType(LogEventType value) {

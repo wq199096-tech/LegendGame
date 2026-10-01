@@ -125,7 +125,14 @@ LoginServer / CharacterServer / WorldServer --> LogServer 7600 --> Logs/Services
 - CharacterServer 独占角色列表/创建/删除/选择及 Ticket 签发，WorldServer 只消费 Ticket。
 - 内部协议版本独立为 1，含 ServiceType/InstanceId 握手、requestId、统一错误码、Heartbeat、严格解码和 1 MiB 上限。
 - `Config/servers.json` 是本地服务拓扑单一入口；默认端口 7100/7200/7300/7400/7500/7600。
-- World 的历史 Repository 仍保留在同一进程作为旧测试夹具；后续持久化操作通过 Db RPC 渐进收口，禁止新增 World 侧 SQL。
+- **阶段25.5：World 持久化全部经 DbServer RPC 收口**——进世界三段加载
+  （LoadCharacterFull → LoadInventory → LoadQuestState，单连接 FIFO 保序）与全部写操作
+  （位置/成长/金币/拾取/装备/卸下/任务接取-推进-提交-弃置/离线推进/商店买卖）通过
+  共享 `PersistenceClient` 执行，事务（Equip/Unequip/TurnIn/ShopBuy/ShopSell）在 DbServer
+  DB Worker 内原子提交；World io 线程零 SQLite。dbPort=0 的 legacy 本地 DB 路径仅为
+  隔离测试保留（WorldTestHarness 单测夹具），同一 Repository 层两路共用，禁止新增
+  World 侧 SQL。DbServer 不可用时 World 进入 Persistence Degraded（写失败回滚内存并
+  ERROR 日志，下个周期重试；进世界加载失败明确拒绝）。
 
 ## 数据库 Schema（当前 v5）
 - accounts / characters(+gold) / sessions / inventory_items / character_equipment /

@@ -1,4 +1,4 @@
-﻿#include "Server/WorldServer/Item/InventoryRepository.h"
+#include "Server/WorldServer/Item/InventoryRepository.h"
 
 #include "Engine/Debug/Logger.h"
 
@@ -224,6 +224,113 @@ bool InventoryRepository::LoadEquipment(Database& db, std::uint64_t characterId,
         out.push_back(binding);
     }
     return error.empty();
+}
+
+// ---------------------------------------------------------------------------
+// 阶段25.5：商店/入包事务（DbServer RPC 与 World legacy 路径共用实现）。
+// ---------------------------------------------------------------------------
+std::uint64_t InventoryRepository::InsertOrMergeItem(Database& db, std::uint64_t characterId,
+                                                     std::uint32_t definitionId,
+                                                     std::uint32_t quantity,
+                                                     std::int64_t slotIndex, std::int64_t createdAt,
+                                                     bool mergedIntoStack,
+                                                     std::uint64_t mergeInstanceId,
+                                                     std::uint32_t mergeQuantity) {
+    if (mergedIntoStack) {
+        return mergeInstanceId != 0 && UpdateQuantity(db, mergeInstanceId, mergeQuantity)
+                   ? mergeInstanceId
+                   : 0;
+    }
+    return InsertItem(db, characterId, definitionId, quantity, slotIndex, createdAt);
+}
+
+bool InventoryRepository::RunShopBuyTransaction(Database& db, const ShopBuyTransaction& tx,
+                                                std::uint64_t& outNewInstanceId,
+                                                std::string& error) {
+    outNewInstanceId = 0;
+    // BEGIN -> Gold 扣除 -> Inventory 写入 -> COMMIT（指令四十六原子性）。
+    if (!db.Execute("BEGIN IMMEDIATE;", error)) {
+        return false;
+    }
+    {
+        Statement stmt;
+        if (!stmt.Prepare(db.Handle(),
+                          "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
+            db.Execute("ROLLBACK;", error);
+            return false;
+        }
+        stmt.BindInt64(1, tx.newGold);
+        stmt.BindInt64(2, static_cast<std::int64_t>(tx.characterId));
+        stmt.Step(error);
+        if (!error.empty()) {
+            db.Execute("ROLLBACK;", error);
+            return false;
+        }
+    }
+    const std::uint64_t newInstanceId =
+        InsertOrMergeItem(db, tx.characterId, tx.itemDefinitionId, tx.quantity, tx.bagSlotIndex,
+                          legend::account::UnixNow(), tx.mergedIntoStack, tx.mergeInstanceId,
+                          tx.mergeQuantity);
+    if (newInstanceId == 0) {
+        db.Execute("ROLLBACK;", error);
+        return false;
+    }
+    if (!db.Execute("COMMIT;", error)) {
+        db.Execute("ROLLBACK;", error);
+        return false;
+    }
+    outNewInstanceId = newInstanceId;
+    return true;
+}
+
+bool InventoryRepository::RunShopSellTransaction(Database& db, const ShopSellTransaction& tx,
+                                                 std::string& error) {
+    // BEGIN -> Gold 增加 -> Inventory 扣除 -> COMMIT（指令五十四原子性）。
+    if (!db.Execute("BEGIN IMMEDIATE;", error)) {
+        return false;
+    }
+    {
+        Statement stmt;
+        if (!stmt.Prepare(db.Handle(),
+                          "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
+            db.Execute("ROLLBACK;", error);
+            return false;
+        }
+        stmt.BindInt64(1, tx.newGold);
+        stmt.BindInt64(2, static_cast<std::int64_t>(tx.characterId));
+        stmt.Step(error);
+        if (!error.empty()) {
+            db.Execute("ROLLBACK;", error);
+            return false;
+        }
+    }
+    {
+        bool ok = false;
+        if (tx.wholeStack) {
+            ok = DeleteItem(db, tx.instanceId);
+        } else {
+            Statement stmt;
+            ok = stmt.Prepare(db.Handle(),
+                              "UPDATE inventory_items SET quantity = quantity - ? "
+                              "WHERE instance_id = ?;",
+                              error);
+            if (ok) {
+                stmt.BindInt64(1, static_cast<std::int64_t>(tx.quantity));
+                stmt.BindInt64(2, static_cast<std::int64_t>(tx.instanceId));
+                stmt.Step(error);
+                ok = error.empty();
+            }
+        }
+        if (!ok) {
+            db.Execute("ROLLBACK;", error);
+            return false;
+        }
+    }
+    if (!db.Execute("COMMIT;", error)) {
+        db.Execute("ROLLBACK;", error);
+        return false;
+    }
+    return true;
 }
 
 } // namespace legend::world

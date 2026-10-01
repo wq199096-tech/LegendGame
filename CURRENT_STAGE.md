@@ -1,23 +1,37 @@
 # CURRENT_STAGE — Stage25.5 Server Architecture Completion V0.255
 
-## Stage25.5（2026-10-01）
+## Stage25.5（2026-10-01，封板）
 
-- 状态：running；不进入 Stage25.6/Stage26。
-- 新增正式进程：LegendCharacterServer、LegendDbServer、LegendLogServer；正式程序共 8 个，
-  开发测试程序 3 个，总构建 exe 11 个。
-- 新增 `Config/servers.json`、`Shared/InternalProtocol`、共享 `PersistenceClient`/`LogClient`；
-  内部协议含身份握手、Heartbeat、requestId、超时、严格解码、统一错误码和自动重连。
-- Gateway 7300 统一承接账号与世界频道，账号路由 Login/Character，世界流量使用 per-client
-  后端连接代理到 WorldServer；状态机覆盖 Connected/Authenticated/CharacterSelected/InWorld。
-- 正式 LoginServer 的注册/登录/Session 已迁至 DbServer；CharacterServer 的角色四流程均经
-  DbServer，并负责 Ticket；LogServer 输出按日、按服务 JSONL，Login/Character/World 接入异步 LogClient。
-- Schema v5 增加 `characters.record_version`，旧库由事务 Migration 自动升级；配置验证覆盖缺失服务、
-  重复端口、非法 host/port、Heartbeat 与保存周期。
-- Studio Launch Full Game 顺序更新为 Db → Log → Login → Character → World → Gateway → Client，
-  并显示配置路径与七进程状态。
-- 当前验证：完整 Debug 构建通过；NetworkTests、AccountTests 通过；本地六服务 20 秒拓扑 Smoke
-  通过；七进程客户端 Vertical Slice 通过。WorldTests 的唯一新增失败（CTest 工作目录下相对配置路径）
-  已修复，待最终全套复跑后封板。
+- 状态：**completed**；不进入 Stage25.6/Stage26。
+- 正式进程 8 个：LegendClient / LegendMapEditor(Studio) / LegendLoginServer /
+  LegendCharacterServer / LegendGateway / LegendWorldServer / LegendDbServer /
+  LegendLogServer；开发测试程序 3 个；总构建 exe **11 个**。
+- CODEX 接管（handoff）：Config/servers.json、Shared/InternalProtocol v1、
+  PersistenceClient/LogClient/ServerConfig、Db/Character/Log 三服务与 11 exe CI、
+  Gateway 状态机、Login/Character 迁移、Studio 七进程启动均已由 CODEX 完成（未提交）。
+  TRAE 接管后先以 `wip(stage25.5): preserve codex server architecture work`
+  Checkpoint（2d48702）保护成果，再补完全部剩余工作。
+- **TRAE 补完：World 持久化 RPC 迁移**——
+  - DbOperation 19~32（ItemInsert/EquipItem/UnequipItem/QuestInsert/QuestTurnIn/
+    QuestAbandon/QuestObjective/QuestState/OfflineKill/ShopBuy/ShopSell/SaveGold/
+    AddRewards/LoadCharacterFull）+ PersistenceMessages 严格编解码；
+  - DbServer Execute 补齐全部世界持久化操作（原子事务在 Db DB Worker 内执行）；
+  - 新 LegendWorldData 静态库：InventoryRepository（InsertOrMergeItem/
+    ShopBuy/ShopSell 事务）+ QuestRepository，WorldCore 与 DbCore 共用（无两套 SQL）；
+  - WorldServer 双模式（dbPort=0 legacy 隔离测试 / dbPort!=0 DbServer RPC）：
+    进世界三段加载链（LoadCharacterFull→LoadInventory→LoadQuestState，FIFO 保序）、
+    位置/成长/金币/离线奖励、拾取/装备/卸下、任务接取/推进/提交/弃置/离线击杀、
+    商店买卖全部双模式收口；Stop 时 PersistenceClient::Drain（≤5s）等待在途存档；
+  - DbServer 不可用 → Persistence Degraded：写失败回滚内存 + ERROR 日志 + 周期重试，
+    进世界加载失败明确拒绝（不静默丢存档）。
+- 修复：OfflineKillWrite 语义（false=无可推进任务，非错误）；MSVC 参数求值顺序
+  陷阱（lambda move init-capture 先于参数拷贝 → 空 RPC 载荷，改为拷贝捕获）。
+- 测试：仍 3 套 CTest；DbServerChecks 扩展真实 RPC 世界操作全序列
+  （位置/成长/金币/物品插入+堆叠/装备/卸下/任务四流程/离线推进/商店买卖/turn-in/
+  abandon/畸形请求拒绝）；PersistenceRpcChecks 扩展 World 编解码 roundtrip + 截断拒绝。
+- 本地最终验证：完整 Debug 构建 11/11 exe；NetworkTests / AccountTests / WorldTests
+  **全 PASS 0 failures**；六服务拓扑 Smoke 通过；七进程 Vertical Slice Smoke
+  （entered-world 经 World→DbServer RPC）通过。
 
 ---
 

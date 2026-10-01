@@ -5,11 +5,15 @@
 > 然后执行 git status / git fetch origin / git pull --ff-only / git log -8 --oneline。
 > 禁止 git reset --hard / git clean -fd / checkout .（除非已证明安全）。
 
-## 最新状态：Stage25.5 Server Architecture Completion running（2026-10-01）
-- 当前工作区正在完成六服务架构：Db/Log/Login/Character/World/Gateway + Client；不要丢弃未提交改动。
-- 已验证 11 exe Debug 构建、Network/Account Tests、六服务 Topology Smoke、七进程 Vertical Slice；
-  下一步是全量 CTest 最终复跑、更新 completed 状态、提交/push 并确认 Actions。
-- 不进入 Stage25.6 或 Stage26。
+## 最新状态：Stage25.5 Server Architecture Completion completed（2026-10-01）
+- **Stage25.5 completed**：六服务架构（Db/Log/Login/Character/World/Gateway + Client）、
+  InternalProtocol v1、共享 PersistenceClient/LogClient、Gateway 四态状态机、
+  11 exe CI、World 持久化全部经 DbServer RPC 收口（TRAE 补完 CODEX 未竟部分）。
+- 接管 Checkpoint：`2d48702 wip(stage25.5): preserve codex server architecture work`；
+  最终功能提交：`feat(server): complete multi-service server architecture`（见 git log）。
+- 本地验证：11/11 exe、CTest 三套件 0 failures、六服务拓扑 Smoke、
+  七进程 Vertical Slice Smoke（entered-world 经 World→DbServer RPC）全通过。
+- **不进入 Stage25.6 或 Stage26；等待用户指令。**
 
 ## 历史：Stage25 Chinese Studio UI Patch completed（2026-09-30）
 - 本补丁在原 `LegendMapEditor.exe` 内完成 LegendGame Studio 简体中文专业 UI 重构；

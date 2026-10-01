@@ -4,18 +4,16 @@
 > 然后执行 git status / git log -5 --oneline，确认一致后继续。
 
 ## 当前续接状态（2026-10-01）
-- **Stage25.5 Server Architecture Completion 正在收尾**；不进入 Stage25.6/Stage26。
-- 工作区包含六服务正式拓扑、内部协议、Db/Log 客户端、Gateway 世界代理、Studio 七进程启动、
-  11 exe CI 与新增测试。继续时先检查 `TRAE_RUN_STATE.json` 和未提交 diff。
-- 本地已通过完整 Debug build、Network/Account Tests、六服务 Topology Smoke 与七进程 Vertical Slice；
-  WorldTests 配置相对路径问题已修复，仍需最终全量复跑、提交、push、Actions。
+- **Stage25.5 Server Architecture Completion 已封板（completed）**；不进入 Stage25.6/Stage26。
+- 六服务正式拓扑、内部协议 v1、Db/Log 客户端、Gateway 世界代理、Studio 七进程启动、
+  11 exe CI 与新增测试全部就位；**World 持久化已经 DbServer RPC 收口**（TRAE 补完）：
+  进世界三段加载链 + 位置/成长/金币/拾取/装备/任务/商店全部 RPC 化，事务在 DbServer 内原子提交。
+- 本地最终验证：11/11 exe、CTest 三套件 0 failures、六服务拓扑 Smoke、七进程 Vertical Slice。
 - Stage25 Chinese Studio UI Patch 已完成并作为本阶段基线，不修改 Stage26 玩法。
-- 现有 `LegendMapEditor.exe` 已升级为“传奇游戏开发工具 - LegendGame Studio”：中文主题、
+- 现有 `LegendMapEditor.exe` 已升级为"传奇游戏开发工具 - LegendGame Studio"：中文主题、
   中文系统字体+DPI、中文菜单/工具栏/内容树/Inspector/底部面板、真实地图视觉 Canvas、
   Asset Browser/Animation Preview/Quest Flow/BOSS/Chapter/Validation/Process 中文 UI。
-- 本地完整 build、8 exe、三套 CTest、Editor world smoke 均通过；功能提交
-  `b7be2dc24731d5e91605389776c9785d3ed7b656`，Actions run `36733983651` success。
-- 下一步：停止，等待用户明确 Stage26 指令。
+- 下一步：停止，等待用户明确 Stage25.6 指令。
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）

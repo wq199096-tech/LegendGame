@@ -4,6 +4,7 @@
 #include "Shared/Network/MessageId.h"
 
 #include <algorithm>
+#include <thread>
 
 namespace legend::server {
 
@@ -32,6 +33,13 @@ void PersistenceClient::Stop() {
     m_connection.reset();
     m_available.store(false);
     FailAll(InternalErrorCode::ServiceUnavailable, "persistence client stopped");
+}
+
+void PersistenceClient::Drain(std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (InFlightCount() > 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 std::size_t PersistenceClient::InFlightCount() const {

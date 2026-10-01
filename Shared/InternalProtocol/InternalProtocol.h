@@ -60,6 +60,21 @@ enum class DbOperation : std::uint16_t {
     LoadProgression = 16,
     SaveProgression = 17,
     ValidateSession = 18,
+    // 阶段25.5：World 持久化 RPC（事务在 DbServer 内执行；World io 线程零 SQLite）。
+    ItemInsertWrite = 19,      // 拾取/入包（Insert 新堆叠 或 Merge 既有堆叠）
+    EquipItemWrite = 20,       // 装备原子事务（背包 -> character_equipment）
+    UnequipItemWrite = 21,     // 卸下原子事务（character_equipment -> 背包）
+    QuestInsertWrite = 22,     // 接取 UPSERT（state/时间戳重置 + 目标进度清零重建）
+    QuestTurnInWrite = 23,     // TurnIn 原子事务（任务 Completed + 成长 + 奖励物品）
+    QuestAbandonWrite = 24,    // 弃置（state=Abandoned + 进度清零）
+    QuestObjectiveWrite = 25,  // 目标进度更新
+    QuestStateWrite = 26,      // 任务状态更新（ReadyToTurnIn 等）
+    OfflineKillWrite = 27,     // 离线 killer Kill 目标推进
+    ShopBuyWrite = 28,         // 商店购买原子事务（Gold 扣除 + Inventory 写入）
+    ShopSellWrite = 29,        // 商店出售原子事务（Inventory 扣除 + Gold 增加）
+    SaveGoldWrite = 30,        // 金币扣费/入账（Portal/Respawn/NPC Teleport）
+    AddRewardsWrite = 31,      // 离线 killer 奖励累加（角色已删除边界保底）
+    LoadCharacterFull = 32,    // EnterWorld 全量角色行（含 map/pos/exp/gold/deleted）
 };
 
 enum class LogEventType : std::uint16_t {

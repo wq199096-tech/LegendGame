@@ -17,6 +17,7 @@
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/GameData/GameDataJson.h"
+#include "Shared/InternalProtocol/PersistenceMessages.h"
 #include "Shared/Monster/MonsterProtocol.h"
 #include "Shared/Monster/MonsterSpawnDefinition.h"
 #include "Shared/Monster/MonsterTypes.h"
@@ -84,12 +85,25 @@ WorldServer::WorldServer(net::NetworkService& service)
 bool WorldServer::Start(std::string& error) {
     // 阶段11 指令二十二/二十五：WorldServer 直接打开同一 SQLite（WAL 由
     // Database::Open 统一开启）；Schema 幂等初始化（World 先于 Login 启动也可）。
+    // 阶段25.5：正式部署（dbPort!=0）改走 DbServer RPC——DB 文件归 DbServer 所有，
+    // World io 线程零 SQLite；dbPort==0 保留 legacy 本地 DB（隔离测试）。
     std::error_code fsError;
     const std::filesystem::path dbPath(m_config.databasePath);
     if (dbPath.has_parent_path()) {
         std::filesystem::create_directories(dbPath.parent_path(), fsError);
     }
-    if (!m_database.Open(m_config.databasePath, error)) {
+    if (m_config.dbPort != 0) {
+        legend::server::PersistenceClient::Config persistence;
+        persistence.host = m_config.dbHost;
+        persistence.port = m_config.dbPort;
+        persistence.serviceType = legend::internal::ServiceType::WorldServer;
+        persistence.instanceId = "world-persistence";
+        persistence.serviceToken = m_config.serviceToken;
+        persistence.requestTimeout = m_config.dbTimeout;
+        m_persistence = std::make_shared<legend::server::PersistenceClient>(m_service,
+                                                                           persistence);
+        m_persistence->Start();
+    } else if (!m_database.Open(m_config.databasePath, error)) {
         error = "world database open failed: " + error;
         return false;
     }
@@ -200,10 +214,13 @@ bool WorldServer::Start(std::string& error) {
                       static_cast<unsigned long long>(dataHash));
         LOG_INFO(hashLine);
     }
-    if (!legend::account::InitializeSchema(m_database, error)) {
-        error = "world database schema init failed: " + error;
-        m_database.Close();
-        return false;
+    if (m_config.dbPort == 0) {
+        // legacy 本地 DB：Schema 幂等初始化（RPC 模式 Schema 由 DbServer 负责）。
+        if (!legend::account::InitializeSchema(m_database, error)) {
+            error = "world database schema init failed: " + error;
+            m_database.Close();
+            return false;
+        }
     }
     // 阶段19 指令十二：启动时校验任务定义（questId/objectiveId 唯一、前置存在、
     // requiredCount>0、奖励 Item 存在 ItemRegistry）。
@@ -237,10 +254,14 @@ bool WorldServer::Start(std::string& error) {
     }
     SpawnInitialPortals();
     SpawnInitialNpcs();
-    m_dbWorker.Start();
-    if (!m_server->Listen(m_config.listenPort, error)) {
-        m_dbWorker.Stop();
-        m_database.Close();
+    if (m_config.dbPort == 0) {
+        m_dbWorker.Start();
+        if (!m_server->Listen(m_config.listenPort, error)) {
+            m_dbWorker.Stop();
+            m_database.Close();
+            return false;
+        }
+    } else if (!m_server->Listen(m_config.listenPort, error)) {
         return false;
     }
     m_server->StartAccepting([this](net::TcpConnectionPtr connection) {
@@ -320,7 +341,13 @@ void WorldServer::Stop() {
         SavePlayerPositionNow(player->CharacterId(), player->MapId(), player->PositionX(),
                               player->PositionY());
     }
-    m_dbWorker.Stop(); // 等待全部保存任务完成（指令一百一十二）
+    if (m_persistence) {
+        // 阶段25.5：Graceful Shutdown——等待在途持久化 RPC 完成后再断开（防丢存档）。
+        m_persistence->Drain(std::chrono::milliseconds(5000));
+        m_persistence->Stop();
+        m_persistence.reset();
+    }
+    m_dbWorker.Stop(); // 等待全部保存任务完成（指令一百一十二；RPC 模式未启动直接返回）
     m_database.Close();
 }
 
@@ -663,31 +690,150 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
         return;
     }
 
-    // 阶段11 指令二十一/二十二：DB Worker 加载角色（网络线程禁止 SQLite IO）。
+    // 阶段11 指令二十一/二十二：加载角色（网络线程禁止 SQLite IO）。
+    // 阶段25.5：RPC 模式 = LoadCharacterFull → LoadInventory → LoadQuestState 链式
+    // 请求（单连接 FIFO 保序）；legacy 模式 = 单个 DB 任务。应用逻辑共用
+    // ApplyEnterWorldLoad（io 线程）。
     session->SetState(WorldSessionState::LoadingCharacter);
     auto self = shared_from_this();
     const std::uint64_t connectionId = session->ConnectionId();
     const std::uint64_t requestId = response.requestId;
     const std::uint64_t accountId = response.accountId;
     const std::uint64_t characterId = response.characterId;
-    m_dbWorker.Post([self, connectionId, requestId, accountId, characterId]() {
+    const auto applyLoad = [self, connectionId, requestId, accountId, characterId](
+                               EnterWorldLoadResult load) {
+        self->m_service.Post([self, connectionId, requestId, accountId, characterId,
+                              load = std::move(load)]() mutable {
+            if (self->m_stopped.load()) {
+                return;
+            }
+            self->ApplyEnterWorldLoad(connectionId, requestId, accountId, characterId, load);
+        });
+    };
+    if (m_persistence) {
+        std::vector<std::uint8_t> queryPayload;
+        legend::internal::EncodeCharacterIdQuery({characterId}, queryPayload);
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::LoadCharacterFull, queryPayload,
+            [self, applyLoad, accountId, characterId,
+             queryPayload](
+                const legend::internal::DbResponse& rowResponse) mutable {
+                EnterWorldLoadResult load;
+                legend::internal::WorldCharacterRow rpcRow;
+                std::string decodeError;
+                load.characterOk =
+                    rowResponse.errorCode == legend::internal::InternalErrorCode::Ok &&
+                    legend::internal::DecodeWorldCharacterRow(
+                        rowResponse.payload.data(), rowResponse.payload.size(), rpcRow,
+                        decodeError) &&
+                    !rpcRow.deleted;
+                if (rowResponse.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    load.error = rowResponse.message;
+                } else if (!decodeError.empty()) {
+                    load.error = decodeError;
+                }
+                if (load.characterOk) {
+                    load.row.id = rpcRow.id;
+                    load.row.accountId = rpcRow.accountId;
+                    load.row.name = rpcRow.name;
+                    load.row.classId = rpcRow.classId;
+                    load.row.gender = rpcRow.gender;
+                    load.row.level = rpcRow.level;
+                    load.row.exp = rpcRow.exp;
+                    load.row.gold = rpcRow.gold;
+                    load.row.mapId = rpcRow.mapId;
+                    load.row.positionX = rpcRow.positionX;
+                    load.row.positionY = rpcRow.positionY;
+                }
+                // 第二段：持久化背包（角色有效才加载；失败清空——与 legacy 语义一致）。
+                self->m_persistence->AsyncRequest(
+                    legend::internal::DbOperation::LoadInventory, queryPayload,
+                    [self, applyLoad, characterId, load = std::move(load),
+                     queryPayload](const legend::internal::DbResponse& itemResponse) mutable {
+                        if (load.characterOk) {
+                            legend::internal::WorldInventoryList items;
+                            std::string itemError;
+                            if (itemResponse.errorCode ==
+                                    legend::internal::InternalErrorCode::Ok &&
+                                legend::internal::DecodeWorldInventoryList(
+                                    itemResponse.payload.data(), itemResponse.payload.size(),
+                                    items, itemError)) {
+                                load.itemRows.reserve(items.items.size());
+                                for (const auto& item : items.items) {
+                                    load.itemRows.push_back({item.instanceId, item.definitionId,
+                                                             item.quantity, item.slotIndex,
+                                                             item.createdAt});
+                                }
+                            } else {
+                                LOG_ERROR("[Inventory] load failed for #" +
+                                          std::to_string(characterId) + ": " + itemError);
+                                load.itemRows.clear();
+                            }
+                        }
+                        // 第三段：持久化任务状态。
+                        self->m_persistence->AsyncRequest(
+                            legend::internal::DbOperation::LoadQuestState, queryPayload,
+                            [self, applyLoad, characterId,
+                             load = std::move(load)](
+                                const legend::internal::DbResponse& questResponse) mutable {
+                                if (load.characterOk) {
+                                    legend::internal::WorldQuestStateList quests;
+                                    std::string questError;
+                                    if (questResponse.errorCode ==
+                                            legend::internal::InternalErrorCode::Ok &&
+                                        legend::internal::DecodeWorldQuestStateList(
+                                            questResponse.payload.data(),
+                                            questResponse.payload.size(), quests, questError)) {
+                                        load.questRows.reserve(quests.quests.size());
+                                        for (const auto& quest : quests.quests) {
+                                            load.questRows.push_back(
+                                                {quest.questId, quest.state, quest.acceptedAt,
+                                                 quest.completedAt, quest.turnedInAt});
+                                        }
+                                        load.questObjectiveRows.reserve(quests.objectives.size());
+                                        for (const auto& objective : quests.objectives) {
+                                            load.questObjectiveRows.push_back(
+                                                {objective.questId, objective.objectiveId,
+                                                 objective.progress});
+                                        }
+                                    } else {
+                                        LOG_ERROR("[Quest] load failed for #" +
+                                                  std::to_string(characterId) + ": " +
+                                                  questError);
+                                        load.questRows.clear();
+                                        load.questObjectiveRows.clear();
+                                    }
+                                }
+                                applyLoad(std::move(load));
+                            });
+                    });
+            });
+        return;
+    }
+    m_dbWorker.Post([self, connectionId, requestId, accountId, characterId, applyLoad]() {
+        EnterWorldLoadResult load;
         auto found = CharacterRepository::FindCharacterById(self->m_database, characterId);
         // 阶段18 指令二十八：同一 DB 任务加载持久化背包（装备从 slot_index 码还原）。
-        std::vector<InventoryRepository::InventoryRow> itemRows;
-        std::string itemLoadError;
         if (found.success && found.value.has_value() && !found.value->deleted) {
+            load.row = *found.value;
+            load.characterOk = true;
+            std::vector<InventoryRepository::InventoryRow> itemRows;
+            std::string itemLoadError;
             if (!InventoryRepository::LoadInventory(self->m_database, characterId, itemRows,
                                                     itemLoadError)) {
                 LOG_ERROR("[Inventory] load failed for #" + std::to_string(characterId) + ": " +
                           itemLoadError);
                 itemRows.clear();
             }
+            load.itemRows = std::move(itemRows);
+        } else if (!found.success) {
+            load.error = found.errorMessage;
         }
         // 阶段19 指令六十八：同一 DB 任务加载持久化任务状态（不能只靠进程内存）。
-        std::vector<QuestRepository::QuestRow> questRows;
-        std::vector<QuestRepository::ObjectiveRow> questObjectiveRows;
-        std::string questLoadError;
-        if (found.success && found.value.has_value() && !found.value->deleted) {
+        if (load.characterOk) {
+            std::vector<QuestRepository::QuestRow> questRows;
+            std::vector<QuestRepository::ObjectiveRow> questObjectiveRows;
+            std::string questLoadError;
             if (!QuestRepository::LoadCharacterQuests(self->m_database, characterId, questRows,
                                                       questObjectiveRows, questLoadError)) {
                 LOG_ERROR("[Quest] load failed for #" + std::to_string(characterId) + ": " +
@@ -695,133 +841,135 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
                 questRows.clear();
                 questObjectiveRows.clear();
             }
+            load.questRows = std::move(questRows);
+            load.questObjectiveRows = std::move(questObjectiveRows);
         }
-        // 结果 post 回 io 线程（self 保活，Stop 时 m_stopped 丢弃）
-        self->m_service.Post([self, connectionId, requestId, accountId, characterId, found,
-                              itemRows, questRows, questObjectiveRows]() {
-            if (self->m_stopped.load()) {
-                return;
-            }
-            std::shared_ptr<WorldSession> session;
-            {
-                std::lock_guard<std::mutex> lock(self->m_sessionsMutex);
-                auto sit = self->m_sessions.find(connectionId);
-                if (sit != self->m_sessions.end()) {
-                    session = sit->second;
-                }
-            }
-            if (!session || session->State() != WorldSessionState::LoadingCharacter) {
-                return; // 指令一百零五：Client 已断开/状态漂移 -> 丢弃
-            }
-            // 指令七十一：Ticket 绑定 accountId + characterId，缺一不可。
-            if (!found.success || !found.value.has_value() || found.value->deleted ||
-                found.value->accountId != accountId ||
-                found.value->id != characterId) {
-                LOG_WARN("[World] Character load failed (characterId=" +
-                         std::to_string(characterId) + ")");
-                self->SendEnterWorldError(connectionId, requestId,
-                                          WorldErrorCode::CharacterNotFound,
-                                          "character not found");
-                session->SetState(WorldSessionState::WaitingEnterWorld);
-                return;
-            }
-            const legend::account::CharacterRow row = *found.value;
-            // 阶段21 指令二十九：无效 mapId/越界位置自动修正 Map1 300,300 并重新持久化。
-            std::uint16_t mapId = row.mapId;
-            float x = row.positionX;
-            float y = row.positionY;
-            const MapDefinition* map = MapRegistry::Instance().FindMap(mapId);
-            if (map == nullptr) {
-                mapId = kTownMapId;
-                map = MapRegistry::Instance().FindMap(mapId);
-                LOG_WARN("[World] invalid persisted map " + std::to_string(row.mapId) +
-                         " -> corrected to " + std::to_string(mapId));
-            }
-            // 阶段25 指令四：新角色出生检查（服务器权威）——未出生哨兵(-1,-1) ->
-            // 该地图出生点（Map1 = 300,300），落地后立即持久化；Client 不做任何修正。
-            const bool newCharacter = (row.positionX < 0.0 || row.positionY < 0.0);
-            if (newCharacter) {
-                x = map->spawnX;
-                y = map->spawnY;
-                LOG_INFO("[World] new character spawn map=" + std::to_string(mapId) + " at " +
-                         std::to_string(x) + "," + std::to_string(y));
-            } else if (!map->InBounds(x, y)) {
-                x = map->spawnX; // 指令二十九：越界 -> 该地图出生点
-                y = map->spawnY;
-                LOG_WARN("[World] out-of-bounds persisted position corrected map=" +
-                         std::to_string(mapId));
-            }
-            auto player = std::make_shared<PlayerSession>(connectionId, accountId, characterId,
-                                                          row.name, row.classId, row.gender,
-                                                          row.level, mapId, x, y);
-            if (row.mapId != mapId || row.positionX != x || row.positionY != y) {
-                // 修正后的位置立即重新持久化（不能静默保留非法值）。
-                self->SavePlayerPositionNow(characterId, mapId, x, y);
-            }
-            // 阶段17 指令二：加载持久化成长数据（level 已进构造；exp/gold 服务器权威）。
-            player->SetProgression(row.exp, row.gold);
-            // 指令二十九/一百零七：同角色重复上线拒绝。
-            if (!self->m_players.TryAddPlayer(player)) {
-                LOG_WARN("[World] EnterWorld rejected (character already online) character=" +
-                         row.name);
-                self->SendEnterWorldError(connectionId, requestId,
-                                          WorldErrorCode::CharacterAlreadyOnline,
-                                          "character already online");
-                session->SetState(WorldSessionState::WaitingEnterWorld);
-                return;
-            }
-            if (!self->m_mapManager.AddPlayer(player)) {
-                self->m_players.RemoveByConnection(connectionId);
-                self->SendEnterWorldError(connectionId, requestId, WorldErrorCode::InternalError,
-                                          "map add failed");
-                session->SetState(WorldSessionState::WaitingEnterWorld);
-                return;
-            }
-            // 阶段12 指令十二：进入 WorldManager/MapManager/SpatialGrid。
-            self->m_spatialGrid.AddPlayer(player);
-            session->SetState(WorldSessionState::InWorld);
-            self->SendEnterWorldSuccess(connectionId, requestId, player);
-            // 阶段18 指令二十八：应用持久化背包/装备（Snapshot 在进场后下发）。
-            self->ApplyLoadedItems(player, itemRows);
-            // 阶段19 指令六十八：应用持久化任务状态（先于初始校验与 Snapshot）。
-            self->ApplyLoadedQuests(player, questRows, questObjectiveRows);
-            // 阶段21 指令二十七：进入世界下发 MapSnapshot（地图基础信息，只发本人）。
-            {
-                MapSnapshotPayload mapSnapshot;
-                mapSnapshot.mapId = map->mapId;
-                mapSnapshot.mapName = map->name;
-                mapSnapshot.minX = map->minX;
-                mapSnapshot.minY = map->minY;
-                mapSnapshot.maxX = map->maxX;
-                mapSnapshot.maxY = map->maxY;
-                mapSnapshot.spawnX = map->spawnX;
-                mapSnapshot.spawnY = map->spawnY;
-                mapSnapshot.respawnX = map->respawnX;
-                mapSnapshot.respawnY = map->respawnY;
-                mapSnapshot.serverTime = ServerTimeMs();
-                Packet mapPacket;
-                mapPacket.header.messageId = static_cast<std::uint16_t>(MessageId::MapSnapshot);
-                if (EncodeMapSnapshot(mapSnapshot, mapPacket.payload)) {
-                    self->SendPacketToPlayer(player, mapPacket);
-                }
-            }
-            // 阶段12 指令十八：进入世界初始可见性（双向 Spawn）。
-            self->InitializePlayerVisibility(player);
-            LOG_INFO("[World] Player entered character=" + row.name + " (#" +
-                     std::to_string(characterId) + ") map=" + std::to_string(mapId));
-            // 阶段17 指令十五：进入世界立即下发本人 ProgressionSnapshot。
-            self->SendProgressionSnapshot(player);
-            // 阶段18 指令二十八：进入世界下发完整背包/装备 Snapshot（Client 只是镜像）。
-            self->SendInventorySnapshot(player);
-            self->SendEquipmentSnapshot(player);
-            // 阶段19 指令四十五：进入世界下发 QuestSnapshot（全部 InProgress/
-            // ReadyToTurnIn/Completed）；重登后离线推进结果经此恢复（指令六十三）。
-            self->SendQuestSnapshot(player);
-            if (self->m_hooks.onPlayerChanged) {
-                self->m_hooks.onPlayerChanged(characterId, true);
-            }
-        });
+        applyLoad(std::move(load));
     });
+}
+
+// 阶段25.5：进世界加载应用（io 线程；legacy 与 RPC 共用）。
+void WorldServer::ApplyEnterWorldLoad(std::uint64_t connectionId, std::uint64_t requestId,
+                                      std::uint64_t accountId, std::uint64_t characterId,
+                                      const EnterWorldLoadResult& load) {
+    std::shared_ptr<WorldSession> session;
+    {
+        std::lock_guard<std::mutex> lock(m_sessionsMutex);
+        auto sit = m_sessions.find(connectionId);
+        if (sit != m_sessions.end()) {
+            session = sit->second;
+        }
+    }
+    if (!session || session->State() != WorldSessionState::LoadingCharacter) {
+        return; // 指令一百零五：Client 已断开/状态漂移 -> 丢弃
+    }
+    // 指令七十一：Ticket 绑定 accountId + characterId，缺一不可。
+    if (!load.characterOk || load.row.accountId != accountId || load.row.id != characterId) {
+        LOG_WARN("[World] Character load failed (characterId=" + std::to_string(characterId) +
+                 " accountId=" + std::to_string(accountId) + " ok=" +
+                 (load.characterOk ? "1" : "0") + " rowAccount=" +
+                 std::to_string(load.row.accountId) + " rowId=" +
+                 std::to_string(load.row.id) + " detail=" + load.error + ")");
+        SendEnterWorldError(connectionId, requestId, WorldErrorCode::CharacterNotFound,
+                            "character not found");
+        session->SetState(WorldSessionState::WaitingEnterWorld);
+        return;
+    }
+    const legend::account::CharacterRow row = load.row;
+    // 阶段21 指令二十九：无效 mapId/越界位置自动修正 Map1 300,300 并重新持久化。
+    std::uint16_t mapId = row.mapId;
+    float x = static_cast<float>(row.positionX);
+    float y = static_cast<float>(row.positionY);
+    const MapDefinition* map = MapRegistry::Instance().FindMap(mapId);
+    if (map == nullptr) {
+        mapId = kTownMapId;
+        map = MapRegistry::Instance().FindMap(mapId);
+        LOG_WARN("[World] invalid persisted map " + std::to_string(row.mapId) +
+                 " -> corrected to " + std::to_string(mapId));
+    }
+    // 阶段25 指令四：新角色出生检查（服务器权威）——未出生哨兵(-1,-1) ->
+    // 该地图出生点（Map1 = 300,300），落地后立即持久化；Client 不做任何修正。
+    const bool newCharacter = (row.positionX < 0.0 || row.positionY < 0.0);
+    if (newCharacter) {
+        x = map->spawnX;
+        y = map->spawnY;
+        LOG_INFO("[World] new character spawn map=" + std::to_string(mapId) + " at " +
+                 std::to_string(x) + "," + std::to_string(y));
+    } else if (!map->InBounds(x, y)) {
+        x = map->spawnX; // 指令二十九：越界 -> 该地图出生点
+        y = map->spawnY;
+        LOG_WARN("[World] out-of-bounds persisted position corrected map=" +
+                 std::to_string(mapId));
+    }
+    auto player = std::make_shared<PlayerSession>(connectionId, accountId, characterId,
+                                                  row.name, row.classId, row.gender,
+                                                  row.level, mapId, x, y);
+    if (row.mapId != mapId || row.positionX != x || row.positionY != y) {
+        // 修正后的位置立即重新持久化（不能静默保留非法值）。
+        SavePlayerPositionNow(characterId, mapId, x, y);
+    }
+    // 阶段17 指令二：加载持久化成长数据（level 已进构造；exp/gold 服务器权威）。
+    player->SetProgression(row.exp, row.gold);
+    // 指令二十九/一百零七：同角色重复上线拒绝。
+    if (!m_players.TryAddPlayer(player)) {
+        LOG_WARN("[World] EnterWorld rejected (character already online) character=" +
+                 row.name);
+        SendEnterWorldError(connectionId, requestId,
+                            WorldErrorCode::CharacterAlreadyOnline,
+                            "character already online");
+        session->SetState(WorldSessionState::WaitingEnterWorld);
+        return;
+    }
+    if (!m_mapManager.AddPlayer(player)) {
+        m_players.RemoveByConnection(connectionId);
+        SendEnterWorldError(connectionId, requestId, WorldErrorCode::InternalError,
+                            "map add failed");
+        session->SetState(WorldSessionState::WaitingEnterWorld);
+        return;
+    }
+    // 阶段12 指令十二：进入 WorldManager/MapManager/SpatialGrid。
+    m_spatialGrid.AddPlayer(player);
+    session->SetState(WorldSessionState::InWorld);
+    SendEnterWorldSuccess(connectionId, requestId, player);
+    // 阶段18 指令二十八：应用持久化背包/装备（Snapshot 在进场后下发）。
+    ApplyLoadedItems(player, load.itemRows);
+    // 阶段19 指令六十八：应用持久化任务状态（先于初始校验与 Snapshot）。
+    ApplyLoadedQuests(player, load.questRows, load.questObjectiveRows);
+    // 阶段21 指令二十七：进入世界下发 MapSnapshot（地图基础信息，只发本人）。
+    {
+        MapSnapshotPayload mapSnapshot;
+        mapSnapshot.mapId = map->mapId;
+        mapSnapshot.mapName = map->name;
+        mapSnapshot.minX = map->minX;
+        mapSnapshot.minY = map->minY;
+        mapSnapshot.maxX = map->maxX;
+        mapSnapshot.maxY = map->maxY;
+        mapSnapshot.spawnX = map->spawnX;
+        mapSnapshot.spawnY = map->spawnY;
+        mapSnapshot.respawnX = map->respawnX;
+        mapSnapshot.respawnY = map->respawnY;
+        mapSnapshot.serverTime = ServerTimeMs();
+        Packet mapPacket;
+        mapPacket.header.messageId = static_cast<std::uint16_t>(MessageId::MapSnapshot);
+        if (EncodeMapSnapshot(mapSnapshot, mapPacket.payload)) {
+            SendPacketToPlayer(player, mapPacket);
+        }
+    }
+    // 阶段12 指令十八：进入世界初始可见性（双向 Spawn）。
+    InitializePlayerVisibility(player);
+    LOG_INFO("[World] Player entered character=" + row.name + " (#" +
+             std::to_string(characterId) + ") map=" + std::to_string(mapId));
+    // 阶段17 指令十五：进入世界立即下发本人 ProgressionSnapshot。
+    SendProgressionSnapshot(player);
+    // 阶段18 指令二十八：进入世界下发完整背包/装备 Snapshot（Client 只是镜像）。
+    SendInventorySnapshot(player);
+    SendEquipmentSnapshot(player);
+    // 阶段19 指令四十五：进入世界下发 QuestSnapshot（全部 InProgress/
+    // ReadyToTurnIn/Completed）；重登后离线推进结果经此恢复（指令六十三）。
+    SendQuestSnapshot(player);
+    if (m_hooks.onPlayerChanged) {
+        m_hooks.onPlayerChanged(characterId, true);
+    }
 }
 
 void WorldServer::SendEnterWorldError(std::uint64_t connectionId, std::uint64_t requestId,
@@ -1021,8 +1169,32 @@ void WorldServer::SaveDirtyPositions() {
 
 void WorldServer::SavePlayerPositionNow(std::uint64_t characterId, std::uint16_t mapId, float x,
                                         float y) {
-    // 指令五十二/五十三/五十六：位置保存经 DB Worker（prepared statement）。
+    // 指令五十二/五十三/五十六：位置保存（legacy 经 DB Worker；RPC 经 DbServer）。
     auto self = shared_from_this();
+    if (m_persistence) {
+        legend::internal::WorldSavePosition command;
+        command.characterId = characterId;
+        command.mapId = mapId;
+        command.positionX = x;
+        command.positionY = y;
+        command.lastPlayedAt = legend::account::UnixNow();
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldSavePosition(command, payload)) {
+            LOG_ERROR("[World] Save position encode failed character=" +
+                      std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::SavePosition, std::move(payload),
+            [self, characterId](const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    // Persistence Degraded：内存权威值保留，下个保存周期重试（不静默丢）。
+                    LOG_ERROR("[World] Save position failed character=" +
+                              std::to_string(characterId) + " detail=" + response.message);
+                }
+            });
+        return;
+    }
     m_dbWorker.Post([self, characterId, mapId, x, y]() {
         auto saved = CharacterRepository::UpdateWorldPosition(self->m_database, characterId, mapId,
                                                               x, y, legend::account::UnixNow());
@@ -1038,6 +1210,363 @@ void WorldServer::SavePlayerPosition(const std::shared_ptr<PlayerSession>& playe
     (void)touchLastPlayed;
     SavePlayerPositionNow(player->CharacterId(), player->MapId(), player->PositionX(),
                           player->PositionY());
+}
+
+// ---------------------------------------------------------------------------
+// 阶段25.5：成长/金币/离线奖励落库（legacy DbWorker 与 DbServer RPC 双模式）。
+// ---------------------------------------------------------------------------
+void WorldServer::PersistProgression(std::uint64_t characterId, std::uint32_t level,
+                                     std::int64_t exp, std::int64_t gold) {
+    if (m_persistence) {
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldSaveProgression(
+                {characterId, level, exp, gold}, payload)) {
+            LOG_ERROR("[Progression] encode failed character=" + std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::SaveProgression, std::move(payload),
+            [characterId](const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Progression] RPC save failed character=" +
+                              std::to_string(characterId) + " detail=" + response.message);
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, level, exp, gold]() {
+        CharacterRepository::SaveProgression(self->m_database, characterId, level, exp, gold);
+    });
+}
+
+void WorldServer::PersistGold(std::uint64_t characterId, std::int64_t gold) {
+    if (m_persistence) {
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldSaveGold({characterId, gold}, payload)) {
+            LOG_ERROR("[Gold] encode failed character=" + std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::SaveGoldWrite, std::move(payload),
+            [characterId](const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Gold] RPC save failed character=" +
+                              std::to_string(characterId) + " detail=" + response.message);
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, gold]() {
+        std::string error;
+        account::Statement stmt;
+        if (!stmt.Prepare(self->m_database.Handle(),
+                          "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
+            LOG_ERROR("[Gold] prepare failed: " + error);
+            return;
+        }
+        stmt.BindInt64(1, gold);
+        stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
+        stmt.Step(error);
+        if (!error.empty()) {
+            LOG_ERROR("[Gold] update failed: " + error);
+        }
+    });
+}
+
+void WorldServer::PersistOfflineReward(std::uint64_t characterId, std::int64_t expDelta,
+                                       std::int64_t goldDelta) {
+    if (m_persistence) {
+        // 读角色行 -> 算升级 -> 整体写回；角色不存在则保底累加（与 legacy 语义一致）。
+        std::vector<std::uint8_t> query;
+        legend::internal::EncodeCharacterIdQuery({characterId}, query);
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::LoadCharacterFull, std::move(query),
+            [this, self = shared_from_this(), characterId, expDelta, goldDelta](
+                const legend::internal::DbResponse& rowResponse) {
+                if (rowResponse.errorCode == legend::internal::InternalErrorCode::Ok) {
+                    legend::internal::WorldCharacterRow row;
+                    std::string error;
+                    if (legend::internal::DecodeWorldCharacterRow(
+                            rowResponse.payload.data(), rowResponse.payload.size(), row, error)) {
+                        const auto progression = AddExperience(row.level, row.exp, expDelta);
+                        PersistProgression(characterId, progression.level, progression.exp,
+                                           AddGold(row.gold, goldDelta));
+                        return;
+                    }
+                }
+                std::vector<std::uint8_t> payload;
+                if (!legend::internal::EncodeWorldAddRewards(
+                        {characterId, expDelta, goldDelta}, payload)) {
+                    LOG_ERROR("[Progression] offline reward encode failed character=" +
+                              std::to_string(characterId));
+                    return;
+                }
+                m_persistence->AsyncRequest(
+                    legend::internal::DbOperation::AddRewardsWrite, std::move(payload),
+                    [characterId](const legend::internal::DbResponse& response) {
+                        if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                            LOG_ERROR("[Progression] offline reward failed character=" +
+                                      std::to_string(characterId) + " detail=" +
+                                      response.message);
+                        }
+                    });
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, expDelta, goldDelta]() {
+        // DB 线程：读 level/exp -> 算升级 -> 整体写回（事务性由单 UPDATE 保证）。
+        auto found = CharacterRepository::FindCharacterById(self->m_database, characterId);
+        if (found.success && found.value.has_value()) {
+            const auto row = *found.value;
+            const auto progression = AddExperience(row.level, row.exp, expDelta);
+            CharacterRepository::SaveProgression(self->m_database, characterId,
+                                                 progression.level, progression.exp,
+                                                 AddGold(row.gold, goldDelta));
+        } else {
+            // 角色已被删除等边界：保底累加（不丢失奖励）。
+            CharacterRepository::AddProgressionRewards(self->m_database, characterId,
+                                                       expDelta, goldDelta);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 阶段25.5：任务持久化（legacy DbWorker 与 DbServer RPC 双模式）。
+// ---------------------------------------------------------------------------
+void WorldServer::PersistQuestInsert(std::uint64_t characterId, QuestId questId,
+                                     std::uint8_t state, std::int64_t acceptedAt,
+                                     const std::vector<std::uint32_t>& objectiveIds) {
+    if (m_persistence) {
+        legend::internal::WorldQuestInsert command;
+        command.characterId = characterId;
+        command.questId = static_cast<std::uint32_t>(questId);
+        command.state = state;
+        command.acceptedAt = acceptedAt;
+        command.objectiveIds = objectiveIds;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldQuestInsert(command, payload)) {
+            LOG_ERROR("[Quest] InsertQuest encode failed char=" + std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::QuestInsertWrite, std::move(payload),
+            [self = shared_from_this(), characterId, questId](
+                const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Quest] InsertQuest failed char=" + std::to_string(characterId) +
+                              " quest=" + std::to_string(questId) + ": " + response.message);
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, questId, state, acceptedAt,
+                     objectiveIds]() {
+        std::string error;
+        if (!QuestRepository::InsertQuest(self->m_database, characterId, questId,
+                                          static_cast<std::int8_t>(state), acceptedAt,
+                                          objectiveIds, error)) {
+            LOG_ERROR("[Quest] InsertQuest failed char=" + std::to_string(characterId) +
+                      " quest=" + std::to_string(questId) + ": " + error);
+        }
+    });
+}
+
+void WorldServer::PersistQuestTurnIn(
+    const QuestRepository::TurnInTransaction& tx,
+    const std::function<void(bool ok, std::uint64_t itemInstanceId,
+                             const std::string& error)>& onDone) {
+    if (m_persistence) {
+        legend::internal::WorldQuestTurnIn command;
+        command.characterId = tx.characterId;
+        command.questId = static_cast<std::uint32_t>(tx.questId);
+        command.turnedInAt = tx.turnedInAt;
+        command.newLevel = tx.newLevel;
+        command.newExperience = tx.newExperience;
+        command.newGold = tx.newGold;
+        command.rewardItemDefinitionId = tx.rewardItemDefinitionId;
+        command.rewardItemQuantity = tx.rewardItemQuantity;
+        command.rewardItemSlotIndex = tx.rewardItemSlotIndex;
+        command.rewardItemCreatedAt = tx.rewardItemCreatedAt;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldQuestTurnIn(command, payload)) {
+            onDone(false, 0, "turn-in encode failed");
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::QuestTurnInWrite, std::move(payload),
+            [onDone](const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    onDone(false, 0, response.message);
+                    return;
+                }
+                legend::internal::WorldQuestTurnInResult result;
+                std::string error;
+                if (!legend::internal::DecodeWorldQuestTurnInResult(
+                        response.payload.data(), response.payload.size(), result, error)) {
+                    onDone(false, 0, error);
+                    return;
+                }
+                onDone(result.ok, result.itemInstanceId, "");
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), tx, onDone]() {
+        std::string dbError;
+        const auto result = QuestRepository::RunTurnInTransaction(self->m_database, tx, dbError);
+        onDone(result.ok, result.itemInstanceId, dbError);
+    });
+}
+
+void WorldServer::PersistQuestAbandon(std::uint64_t characterId, QuestId questId,
+                                      std::int64_t nowUnix) {
+    if (m_persistence) {
+        legend::internal::WorldQuestAbandon command;
+        command.characterId = characterId;
+        command.questId = static_cast<std::uint32_t>(questId);
+        command.nowUnix = nowUnix;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldQuestAbandon(command, payload)) {
+            LOG_ERROR("[Quest] MarkAbandoned encode failed char=" + std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::QuestAbandonWrite, std::move(payload),
+            [self = shared_from_this(), characterId, questId](
+                const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Quest] MarkAbandoned failed char=" + std::to_string(characterId) +
+                              " quest=" + std::to_string(questId) + ": " + response.message);
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, questId, nowUnix]() {
+        std::string error;
+        if (!QuestRepository::MarkAbandoned(self->m_database, characterId, questId, nowUnix,
+                                            error)) {
+            LOG_ERROR("[Quest] MarkAbandoned failed char=" + std::to_string(characterId) +
+                      " quest=" + std::to_string(questId) + ": " + error);
+        }
+    });
+}
+
+void WorldServer::PersistQuestObjective(std::uint64_t characterId, QuestId questId,
+                                        std::uint32_t objectiveId, std::uint32_t progress) {
+    if (m_persistence) {
+        legend::internal::WorldQuestObjective command;
+        command.characterId = characterId;
+        command.questId = static_cast<std::uint32_t>(questId);
+        command.objectiveId = objectiveId;
+        command.progress = progress;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldQuestObjective(command, payload)) {
+            LOG_ERROR("[Quest] UpdateObjectiveProgress encode failed char=" +
+                      std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::QuestObjectiveWrite, std::move(payload),
+            [self = shared_from_this(), characterId, questId](
+                const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Quest] UpdateObjectiveProgress failed char=" +
+                              std::to_string(characterId) + " quest=" +
+                              std::to_string(questId) + ": " + response.message);
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, questId, objectiveId, progress]() {
+        std::string error;
+        if (!QuestRepository::UpdateObjectiveProgress(self->m_database, characterId, questId,
+                                                      objectiveId, progress, error)) {
+            LOG_ERROR("[Quest] UpdateObjectiveProgress failed char=" +
+                      std::to_string(characterId) + " quest=" + std::to_string(questId) + ": " +
+                      error);
+        }
+    });
+}
+
+void WorldServer::PersistQuestState(std::uint64_t characterId, QuestId questId,
+                                    std::uint8_t state, std::int64_t timestamp,
+                                    bool setTurnedInAt) {
+    if (m_persistence) {
+        legend::internal::WorldQuestState command;
+        command.characterId = characterId;
+        command.questId = static_cast<std::uint32_t>(questId);
+        command.state = state;
+        command.timestamp = timestamp;
+        command.setTurnedInAt = setTurnedInAt;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldQuestState(command, payload)) {
+            LOG_ERROR("[Quest] UpdateQuestState encode failed char=" + std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::QuestStateWrite, std::move(payload),
+            [self = shared_from_this(), characterId, questId](
+                const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Quest] UpdateQuestState failed char=" +
+                              std::to_string(characterId) + " quest=" +
+                              std::to_string(questId) + ": " + response.message);
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, questId, state, timestamp,
+                     setTurnedInAt]() {
+        std::string error;
+        if (!QuestRepository::UpdateQuestState(self->m_database, characterId, questId,
+                                               static_cast<std::int8_t>(state), timestamp,
+                                               setTurnedInAt, error)) {
+            LOG_ERROR("[Quest] UpdateQuestState failed char=" + std::to_string(characterId) +
+                      " quest=" + std::to_string(questId) + ": " + error);
+        }
+    });
+}
+
+void WorldServer::PersistOfflineKill(std::uint64_t characterId,
+                                     const std::vector<QuestRepository::KillCandidate>& candidates) {
+    if (m_persistence) {
+        legend::internal::WorldOfflineKill command;
+        command.characterId = characterId;
+        command.candidates.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            command.candidates.push_back({static_cast<std::uint32_t>(candidate.questId),
+                                          candidate.objectiveId, candidate.requiredCount});
+        }
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldOfflineKill(command, payload)) {
+            LOG_ERROR("[Quest] OfflineAdvanceKill encode failed char=" +
+                      std::to_string(characterId));
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::OfflineKillWrite, std::move(payload),
+            [self = shared_from_this(), characterId](
+                const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    LOG_ERROR("[Quest] OfflineAdvanceKill failed char=" +
+                              std::to_string(characterId) + ": " + response.message);
+                } else {
+                    LOG_INFO("[Quest] offline kill advanced char=" +
+                             std::to_string(characterId));
+                }
+            });
+        return;
+    }
+    m_dbWorker.Post([self = shared_from_this(), characterId, candidates]() {
+        std::string error;
+        if (QuestRepository::OfflineAdvanceKill(self->m_database, characterId, candidates,
+                                                error)) {
+            LOG_INFO("[Quest] offline kill advanced char=" + std::to_string(characterId));
+        }
+        if (!error.empty()) {
+            LOG_ERROR("[Quest] OfflineAdvanceKill failed char=" +
+                      std::to_string(characterId) + ": " + error);
+        }
+    });
 }
 
 void WorldServer::ScheduleTicketTimeoutCheck() {
@@ -2950,36 +3479,13 @@ void WorldServer::GrantMonsterReward(const std::shared_ptr<MonsterEntity>& monst
         }
         LOG_INFO("[Progression] Reward " + std::to_string(expGain) + " exp / " +
                  std::to_string(goldGain) + " gold to #" + std::to_string(killerCharacterId));
-        // 指令三十四：成长写 DB 继续走 DbWorker（io 线程禁止同步 SQLite 写）。
-        auto self = shared_from_this();
-        const auto level = progression.level;
-        const auto exp = progression.exp;
-        const auto gold = newGold;
-        m_dbWorker.Post([self, killerCharacterId, level, exp, gold]() {
-            CharacterRepository::SaveProgression(self->m_database, killerCharacterId, level, exp,
-                                                 gold);
-        });
+        // 指令三十四：成长写 DB（io 线程禁止同步 SQLite 写；阶段25.5 走双模式辅助）。
+        PersistProgression(killerCharacterId, progression.level, progression.exp, newGold);
         return;
     }
     // 指令七：离线 killer —— 奖励入库（不能因 PlayerSession 不在线就丢失奖励）。
-    auto self = shared_from_this();
-    const std::int64_t expDelta = static_cast<std::int64_t>(expGain);
-    const std::int64_t goldDelta = static_cast<std::int64_t>(goldGain);
-    m_dbWorker.Post([self, killerCharacterId, expDelta, goldDelta]() {
-        // DB 线程：读 level/exp -> 算升级 -> 整体写回（事务性由单 UPDATE 保证）。
-        auto found = CharacterRepository::FindCharacterById(self->m_database, killerCharacterId);
-        if (found.success && found.value.has_value()) {
-            const auto row = *found.value;
-            const auto progression = AddExperience(row.level, row.exp, expDelta);
-            CharacterRepository::SaveProgression(self->m_database, killerCharacterId,
-                                                 progression.level, progression.exp,
-                                                 AddGold(row.gold, goldDelta));
-        } else {
-            // 角色已被删除等边界：保底累加（不丢失奖励）。
-            CharacterRepository::AddProgressionRewards(self->m_database, killerCharacterId,
-                                                       expDelta, goldDelta);
-        }
-    });
+    PersistOfflineReward(killerCharacterId, static_cast<std::int64_t>(expGain),
+                         static_cast<std::int64_t>(goldGain));
 }
 
 void WorldServer::SendRewardGranted(const std::shared_ptr<PlayerSession>& killer,
@@ -3424,6 +3930,7 @@ void WorldServer::HandleItemPickupRequest(std::uint64_t connectionId,
              std::to_string(claimed.itemDefinitionId) + " x" +
              std::to_string(claimed.quantity));
     // 指令二十四：claimed -> DB 事务 -> 成功后 Delta + Despawn；失败回滚恢复 Drop。
+    // 阶段25.5：应用逻辑（io 线程）由 legacy/RPC 两路共用（applyResult）。
     auto self = shared_from_this();
     const std::uint64_t characterId = player->CharacterId();
     const std::uint32_t definitionId = claimed.itemDefinitionId;
@@ -3442,23 +3949,9 @@ void WorldServer::HandleItemPickupRequest(std::uint64_t connectionId,
             mergeQuantity = current->quantity;
         }
     }
-    m_dbWorker.Post([self, characterId, definitionId, quantity, bagSlotIndex, requestId,
-                     dropEntityId, mergedIntoStack, mergeInstanceId, mergeQuantity,
-                     claimed]() {
-        // DB 线程：写 inventory_items（prepared statement，指令五十四）。
-        bool dbOk = false;
-        std::uint64_t newInstanceId = 0;
-        if (mergedIntoStack) {
-            dbOk = mergeInstanceId != 0 &&
-                   InventoryRepository::UpdateQuantity(self->m_database, mergeInstanceId,
-                                                       mergeQuantity);
-        } else {
-            newInstanceId = InventoryRepository::InsertItem(
-                self->m_database, characterId, definitionId, quantity,
-                static_cast<std::int64_t>(bagSlotIndex), legend::account::UnixNow());
-            dbOk = newInstanceId != 0;
-        }
-        // 结果回 io 线程。
+    const auto applyResult = [self, characterId, requestId, dropEntityId, bagSlotIndex,
+                              definitionId, quantity, mergedIntoStack,
+                              claimed](bool dbOk, std::uint64_t newInstanceId) {
         self->m_service.Post([self, characterId, requestId, dropEntityId, bagSlotIndex,
                               definitionId, quantity, mergedIntoStack, dbOk, newInstanceId,
                               claimed]() {
@@ -3515,6 +4008,57 @@ void WorldServer::HandleItemPickupRequest(std::uint64_t connectionId,
             self->NotifyItemDropGoneToObservers(dropEntityId,
                                                 ItemDespawnReason::PickedUp);
         });
+    };
+    if (m_persistence) {
+        // 阶段25.5：RPC 模式——写 inventory_items 事务在 DbServer 内执行。
+        legend::internal::WorldItemInsert command;
+        command.characterId = characterId;
+        command.definitionId = definitionId;
+        command.quantity = quantity;
+        command.slotIndex = static_cast<std::int64_t>(bagSlotIndex);
+        command.createdAt = legend::account::UnixNow();
+        command.mergedIntoStack = mergedIntoStack;
+        command.mergeInstanceId = mergeInstanceId;
+        command.mergeQuantity = mergeQuantity;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldItemInsert(command, payload)) {
+            applyResult(false, 0);
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::ItemInsertWrite, std::move(payload),
+            [applyResult](const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    applyResult(false, 0);
+                    return;
+                }
+                legend::internal::WorldItemInsertResult result;
+                std::string error;
+                if (!legend::internal::DecodeWorldItemInsertResult(
+                        response.payload.data(), response.payload.size(), result, error)) {
+                    applyResult(false, 0);
+                    return;
+                }
+                applyResult(true, result.newInstanceId);
+            });
+        return;
+    }
+    m_dbWorker.Post([self, applyResult, characterId, definitionId, quantity, bagSlotIndex,
+                     mergedIntoStack, mergeInstanceId, mergeQuantity]() {
+        // DB 线程：写 inventory_items（prepared statement，指令五十四）。
+        bool dbOk = false;
+        std::uint64_t newInstanceId = 0;
+        if (mergedIntoStack) {
+            dbOk = mergeInstanceId != 0 &&
+                   InventoryRepository::UpdateQuantity(self->m_database, mergeInstanceId,
+                                                       mergeQuantity);
+        } else {
+            newInstanceId = InventoryRepository::InsertItem(
+                self->m_database, characterId, definitionId, quantity,
+                static_cast<std::int64_t>(bagSlotIndex), legend::account::UnixNow());
+            dbOk = newInstanceId != 0;
+        }
+        applyResult(dbOk, newInstanceId);
     });
 }
 
@@ -3607,8 +4151,7 @@ void WorldServer::HandleEquipItemRequest(std::uint64_t connectionId,
     tx.hadPrevious = result.code == EquipResultCode::Replaced;
     tx.previousInstanceId = tx.hadPrevious ? result.unequipped.instanceId : 0;
     tx.freedBagSlotIndex = static_cast<std::int64_t>(request.slotIndex);
-    m_dbWorker.Post([self, characterId, requestId, slot, tx]() {
-        const bool dbOk = InventoryRepository::RunEquipTransaction(self->m_database, tx);
+    const auto applyResult = [self, characterId, requestId, slot](bool dbOk) {
         self->m_service.Post([self, characterId, requestId, slot, dbOk]() {
             if (self->m_stopped.load()) {
                 return;
@@ -3625,6 +4168,31 @@ void WorldServer::HandleEquipItemRequest(std::uint64_t connectionId,
                                              : ItemResultCode::InternalError,
                                         slot);
         });
+    };
+    if (m_persistence) {
+        // 阶段25.5：RPC 模式——装备原子事务在 DbServer 内执行。
+        legend::internal::WorldEquipItem command;
+        command.characterId = tx.characterId;
+        command.newItemInstanceId = tx.newItemInstanceId;
+        command.equipmentSlotCode = tx.equipmentSlotCode;
+        command.hadPrevious = tx.hadPrevious;
+        command.previousInstanceId = tx.previousInstanceId;
+        command.freedBagSlotIndex = tx.freedBagSlotIndex;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldEquipItem(command, payload)) {
+            applyResult(false);
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::EquipItemWrite, std::move(payload),
+            [applyResult](const legend::internal::DbResponse& response) {
+                applyResult(response.errorCode == legend::internal::InternalErrorCode::Ok);
+            });
+        return;
+    }
+    m_dbWorker.Post([self, applyResult, tx]() {
+        const bool dbOk = InventoryRepository::RunEquipTransaction(self->m_database, tx);
+        applyResult(dbOk);
     });
 }
 
@@ -3700,8 +4268,7 @@ void WorldServer::HandleUnequipItemRequest(std::uint64_t connectionId,
         slot == EquipmentSlot::Weapon ? InventoryRepository::kWeaponSlotCode
                                             : InventoryRepository::kArmorSlotCode;
     tx.bagSlotIndex = static_cast<std::int64_t>(result.bagSlotIndex);
-    m_dbWorker.Post([self, characterId, requestId, slot, tx]() {
-        const bool dbOk = InventoryRepository::RunUnequipTransaction(self->m_database, tx);
+    const auto applyResult = [self, characterId, requestId, slot](bool dbOk) {
         self->m_service.Post([self, characterId, requestId, slot, dbOk]() {
             if (self->m_stopped.load()) {
                 return;
@@ -3717,6 +4284,28 @@ void WorldServer::HandleUnequipItemRequest(std::uint64_t connectionId,
                                                : ItemResultCode::InternalError,
                                           slot);
         });
+    };
+    if (m_persistence) {
+        // 阶段25.5：RPC 模式——卸下原子事务在 DbServer 内执行。
+        legend::internal::WorldUnequipItem command;
+        command.instanceId = tx.instanceId;
+        command.equipmentSlotCode = tx.equipmentSlotCode;
+        command.bagSlotIndex = tx.bagSlotIndex;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldUnequipItem(command, payload)) {
+            applyResult(false);
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::UnequipItemWrite, std::move(payload),
+            [applyResult](const legend::internal::DbResponse& response) {
+                applyResult(response.errorCode == legend::internal::InternalErrorCode::Ok);
+            });
+        return;
+    }
+    m_dbWorker.Post([self, applyResult, tx]() {
+        const bool dbOk = InventoryRepository::RunUnequipTransaction(self->m_database, tx);
+        applyResult(dbOk);
     });
 }
 
@@ -4073,22 +4662,14 @@ QuestResultCode WorldServer::AcceptQuestForPlayer(const std::shared_ptr<PlayerSe
              player->CharacterName());
     // 指令十七：接取写 DB（先于进度写——DbWorker FIFO 保证顺序）。
     {
-        auto self = shared_from_this();
-        const std::uint64_t characterId = player->CharacterId();
         std::vector<std::uint32_t> objectiveIds;
         for (const auto& objective : definition->objectives) {
             objectiveIds.push_back(objective.objectiveId);
         }
-        const std::int64_t acceptedAt = legend::account::UnixNow();
-        m_dbWorker.Post([self, characterId, questId, acceptedAt, objectiveIds]() {
-            std::string error;
-            if (!QuestRepository::InsertQuest(self->m_database, characterId, questId,
-                                              static_cast<std::int8_t>(QuestState::InProgress),
-                                              acceptedAt, objectiveIds, error)) {
-                LOG_ERROR("[Quest] InsertQuest failed char=" + std::to_string(characterId) +
-                          " quest=" + std::to_string(questId) + ": " + error);
-            }
-        });
+        // 指令十七：接取写 DB（先于进度写——FIFO/RPC 单连接保序）。
+        PersistQuestInsert(player->CharacterId(), questId,
+                           static_cast<std::uint8_t>(QuestState::InProgress),
+                           legend::account::UnixNow(), objectiveIds);
     }
     SendQuestStateChanged(player, questId, QuestState::NotAccepted, QuestState::InProgress); // 指令三十二
     HandleQuestObjectiveChanges(player, changes, stateChanges);
@@ -4179,12 +4760,13 @@ QuestResultCode WorldServer::BeginQuestTurnIn(const std::shared_ptr<PlayerSessio
     tx.rewardItemQuantity = definition->reward.itemQuantity;
     tx.rewardItemSlotIndex = rewardSlotIndex;
     tx.rewardItemCreatedAt = tx.turnedInAt;
-    m_dbWorker.Post([self, characterId, questId, requestId, tx, definition, oldLevel,
-                     sendResponsePacket]() {
-        std::string dbError;
-        const auto result = QuestRepository::RunTurnInTransaction(self->m_database, tx, dbError);
-        self->m_service.Post([self, characterId, questId, requestId, tx, result, definition,
-                              oldLevel, dbError, sendResponsePacket]() {
+    // 指令四十：原子 TurnIn 事务（Quest Completed + 成长写回 + 物品入库）。
+    // 阶段25.5：事务执行双模式（legacy DB Worker / DbServer RPC）；应用共用 applyResult。
+    const auto applyResult = [self, characterId, questId, requestId, tx, definition, oldLevel,
+                              sendResponsePacket](bool ok, std::uint64_t itemInstanceId,
+                                                  const std::string& dbError) {
+        self->m_service.Post([self, characterId, questId, requestId, tx, ok, itemInstanceId,
+                              definition, oldLevel, dbError, sendResponsePacket]() {
             if (self->m_stopped.load()) {
                 return;
             }
@@ -4192,7 +4774,7 @@ QuestResultCode WorldServer::BeginQuestTurnIn(const std::shared_ptr<PlayerSessio
             if (!player) {
                 return; // 玩家已离线：DB 事务已提交，重进恢复 Completed
             }
-            if (!result.ok) {
+            if (!ok) {
                 // 指令四十：失败整体回滚——任务仍 ReadyToTurnIn，奖励未发。
                 LOG_ERROR("[Quest] TurnIn transaction failed char=" +
                           std::to_string(characterId) + " quest=" + std::to_string(questId) +
@@ -4203,6 +4785,7 @@ QuestResultCode WorldServer::BeginQuestTurnIn(const std::shared_ptr<PlayerSessio
                 }
                 return;
             }
+            const std::uint64_t rewardItemInstanceId = itemInstanceId;
             // ---- 成功：更新内存并广播（指令四十） ----
             PlayerQuestState* state = player->Quests().MutableFind(questId);
             const QuestState oldState = state ? state->state : QuestState::ReadyToTurnIn;
@@ -4212,9 +4795,9 @@ QuestResultCode WorldServer::BeginQuestTurnIn(const std::shared_ptr<PlayerSessio
             }
             // 物品奖励入内存（instanceId 回填，同 Pickup 流程）。
             if (tx.rewardItemDefinitionId != 0 && tx.rewardItemSlotIndex >= 0 &&
-                result.itemInstanceId != 0) {
+                rewardItemInstanceId != 0) {
                 InventoryEntry entry;
-                entry.instanceId = result.itemInstanceId;
+                entry.instanceId = rewardItemInstanceId;
                 entry.definitionId = tx.rewardItemDefinitionId;
                 entry.quantity = tx.rewardItemQuantity;
                 player->Inventory().PutAt(static_cast<std::size_t>(tx.rewardItemSlotIndex), entry);
@@ -4269,7 +4852,8 @@ QuestResultCode WorldServer::BeginQuestTurnIn(const std::shared_ptr<PlayerSessio
                      std::to_string(definition->reward.exp) + " gold=" +
                      std::to_string(definition->reward.gold));
         });
-    });
+    };
+    PersistQuestTurnIn(tx, applyResult);
     return QuestResultCode::Success;
 }
 
@@ -4310,18 +4894,7 @@ void WorldServer::HandleQuestAbandonRequest(std::uint64_t connectionId,
     LOG_INFO("[Quest] abandoned quest=" + std::to_string(request.questId) + " char=" +
              player->CharacterName());
     // 指令十七/四十三：保留记录 state=Abandoned + 进度清零。
-    auto self = shared_from_this();
-    const std::uint64_t characterId = player->CharacterId();
-    const QuestId questId = request.questId;
-    const std::int64_t nowUnix = legend::account::UnixNow();
-    m_dbWorker.Post([self, characterId, questId, nowUnix]() {
-        std::string error;
-        if (!QuestRepository::MarkAbandoned(self->m_database, characterId, questId, nowUnix,
-                                            error)) {
-            LOG_ERROR("[Quest] MarkAbandoned failed char=" + std::to_string(characterId) +
-                      " quest=" + std::to_string(questId) + ": " + error);
-        }
-    });
+    PersistQuestAbandon(player->CharacterId(), request.questId, legend::account::UnixNow());
     SendQuestAbandonResponse(player, request.requestId, request.questId, true,
                              QuestResultCode::Success);
     SendQuestStateChanged(player, request.questId, oldState, QuestState::Abandoned);
@@ -4455,7 +5028,6 @@ void WorldServer::HandleQuestObjectiveChanges(
     if (changes.empty() && stateChanges.empty()) {
         return;
     }
-    auto self = shared_from_this();
     const std::uint64_t characterId = player->CharacterId();
     for (const auto& change : changes) {
         const PlayerQuestState* state = player->Quests().Find(change.questId);
@@ -4473,31 +5045,15 @@ void WorldServer::HandleQuestObjectiveChanges(
         }
         SendQuestProgressUpdated(player, change.questId, change.objectiveId, change.newProgress,
                                  required, questState);
-        m_dbWorker.Post([self, characterId, change]() {
-            std::string error;
-            if (!QuestRepository::UpdateObjectiveProgress(self->m_database, characterId,
-                                                          change.questId, change.objectiveId,
-                                                          change.newProgress, error)) {
-                LOG_ERROR("[Quest] UpdateObjectiveProgress failed char=" +
-                          std::to_string(characterId) + " quest=" +
-                          std::to_string(change.questId) + ": " + error);
-            }
-        });
+        PersistQuestObjective(characterId, change.questId, change.objectiveId,
+                              change.newProgress);
     }
     for (const auto& change : stateChanges) {
         // 指令二十九：InProgress -> ReadyToTurnIn（不自动领奖，指令七十八）。
         SendQuestStateChanged(player, change.questId, change.oldState, change.newState);
-        m_dbWorker.Post([self, characterId, change]() {
-            std::string error;
-            if (!QuestRepository::UpdateQuestState(
-                    self->m_database, characterId, change.questId,
-                    static_cast<std::int8_t>(change.newState), legend::account::UnixNow(),
-                    false, error)) {
-                LOG_ERROR("[Quest] UpdateQuestState failed char=" +
-                          std::to_string(characterId) + " quest=" +
-                          std::to_string(change.questId) + ": " + error);
-            }
-        });
+        PersistQuestState(characterId, change.questId,
+                          static_cast<std::uint8_t>(change.newState),
+                          legend::account::UnixNow(), false);
     }
     // 阶段20 指令三十三：任务状态变化（Kill/Collect/Reach 推进 -> ReadyToTurnIn 等）
     // 同样必须重算相关 NPC per-player Marker。
@@ -4540,18 +5096,7 @@ void WorldServer::HandleQuestMonsterKilled(std::uint64_t killerCharacterId,
     if (candidates.empty()) {
         return;
     }
-    auto self = shared_from_this();
-    m_dbWorker.Post([self, killerCharacterId, candidates]() {
-        std::string error;
-        if (QuestRepository::OfflineAdvanceKill(self->m_database, killerCharacterId, candidates,
-                                                error)) {
-            LOG_INFO("[Quest] offline kill advanced char=" + std::to_string(killerCharacterId));
-        }
-        if (!error.empty()) {
-            LOG_ERROR("[Quest] OfflineAdvanceKill failed char=" +
-                      std::to_string(killerCharacterId) + ": " + error);
-        }
-    });
+    PersistOfflineKill(killerCharacterId, candidates);
 }
 
 void WorldServer::HandleQuestInventoryChanged(const std::shared_ptr<PlayerSession>& player) {
@@ -5190,91 +5735,105 @@ void WorldServer::HandleShopBuyRequest(std::uint64_t connectionId,
             mergeQuantity = current->quantity;
         }
     }
-    m_dbWorker.Post([self, characterId, requestId = request.requestId, newGold,
-                     itemDefinitionId = request.itemDefinitionId, quantity, bagSlotIndex,
-                     mergedIntoStack, mergeInstanceId, mergeQuantity, totalCost]() {
-        // DB 线程：BEGIN → Gold 扣除 → Inventory 写入 → COMMIT（指令四十六原子性）。
-        std::string error;
-        bool ok = self->m_database.Execute("BEGIN IMMEDIATE;", error);
-        if (ok) {
-            {
-                account::Statement stmt;
-                ok = stmt.Prepare(self->m_database.Handle(),
-                                  "UPDATE characters SET gold = ? WHERE id = ?;", error);
-                if (ok) {
-                    stmt.BindInt64(1, newGold);
-                    stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
-                    stmt.Step(error);
-                    ok = error.empty();
-                }
-            }
-            std::uint64_t newInstanceId = 0;
-            if (ok) {
-                if (mergedIntoStack) {
-                    ok = mergeInstanceId != 0 &&
-                         InventoryRepository::UpdateQuantity(self->m_database, mergeInstanceId,
-                                                             mergeQuantity);
-                } else {
-                    newInstanceId = InventoryRepository::InsertItem(
-                        self->m_database, characterId, itemDefinitionId, quantity,
-                        static_cast<std::int64_t>(bagSlotIndex), legend::account::UnixNow());
-                    ok = newInstanceId != 0;
-                }
-            }
-            if (!ok) {
-                self->m_database.Execute("ROLLBACK;", error);
-                self->m_service.Post([self, characterId, requestId]() {
-                    if (self->m_stopped.load()) {
-                        return;
-                    }
-                    auto player = self->m_players.FindByCharacter(characterId);
-                    if (player) {
-                        self->SendShopBuyResponse(player, requestId, false,
-                                                  ShopResultCode::InternalError, 0, 0, 0);
-                    }
-                });
+    const auto applyResult = [self, characterId, requestId = request.requestId, newGold,
+                              itemDefinitionId = request.itemDefinitionId, quantity,
+                              bagSlotIndex, mergedIntoStack,
+                              totalCost](bool ok, std::uint64_t instanceId) {
+        self->m_service.Post([self, characterId, requestId, newGold, itemDefinitionId, quantity,
+                              bagSlotIndex, mergedIntoStack, ok, instanceId, totalCost]() {
+            if (self->m_stopped.load()) {
                 return;
             }
-            self->m_database.Execute("COMMIT;", error);
-            const std::uint64_t instanceId = newInstanceId;
-            self->m_service.Post([self, characterId, requestId, newGold, itemDefinitionId,
-                                  quantity, bagSlotIndex, mergedIntoStack, instanceId,
-                                  totalCost]() {
-                if (self->m_stopped.load()) {
+            auto player = self->m_players.FindByCharacter(characterId);
+            if (!ok) {
+                // 指令四十六：失败整体回滚（DB ROLLBACK），内存未变。
+                if (player) {
+                    self->SendShopBuyResponse(player, requestId, false,
+                                              ShopResultCode::InternalError, 0, 0, 0);
+                }
+                return;
+            }
+            if (!player) {
+                return; // 玩家已离线：DB 事务已提交，重进加载
+            }
+            // 成功后更新内存（指令四十六）。
+            player->SetProgression(player->Experience(), newGold);
+            if (mergedIntoStack) {
+                InventoryEntry* entry = player->Inventory().MutableAt(bagSlotIndex);
+                if (entry) {
+                    entry->quantity += quantity;
+                }
+            } else {
+                InventoryEntry entry;
+                entry.instanceId = instanceId;
+                entry.definitionId = itemDefinitionId;
+                entry.quantity = quantity;
+                player->Inventory().PutAt(bagSlotIndex, entry);
+            }
+            // 指令四十八：InventoryDelta + BuyResponse(newGold)。
+            const InventoryEntry* current = player->Inventory().At(bagSlotIndex);
+            if (current) {
+                self->SendInventoryDelta(player, 1, *current, bagSlotIndex);
+            }
+            self->SendShopBuyResponse(player, requestId, true, ShopResultCode::Success,
+                                      itemDefinitionId, quantity,
+                                      static_cast<std::uint32_t>(totalCost));
+            // 指令八十五：购买 Slime Core 触发 Collect 任务重算（持有数量型）。
+            self->HandleQuestInventoryChanged(player);
+            self->SendProgressionSnapshot(player);
+            self->SendNpcQuestMarkersFor(player);
+        });
+    };
+    InventoryRepository::ShopBuyTransaction tx;
+    tx.characterId = characterId;
+    tx.newGold = newGold;
+    tx.itemDefinitionId = request.itemDefinitionId;
+    tx.quantity = quantity;
+    tx.bagSlotIndex = static_cast<std::int64_t>(bagSlotIndex);
+    tx.mergedIntoStack = mergedIntoStack;
+    tx.mergeInstanceId = mergeInstanceId;
+    tx.mergeQuantity = mergeQuantity;
+    if (m_persistence) {
+        // 阶段25.5：RPC 模式——购买原子事务在 DbServer 内执行。
+        legend::internal::WorldShopBuy command;
+        command.characterId = tx.characterId;
+        command.newGold = tx.newGold;
+        command.itemDefinitionId = tx.itemDefinitionId;
+        command.quantity = tx.quantity;
+        command.bagSlotIndex = tx.bagSlotIndex;
+        command.mergedIntoStack = tx.mergedIntoStack;
+        command.mergeInstanceId = tx.mergeInstanceId;
+        command.mergeQuantity = tx.mergeQuantity;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldShopBuy(command, payload)) {
+            applyResult(false, 0);
+            return;
+        }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::ShopBuyWrite, std::move(payload),
+            [applyResult](const legend::internal::DbResponse& response) {
+                if (response.errorCode != legend::internal::InternalErrorCode::Ok) {
+                    applyResult(false, 0);
                     return;
                 }
-                auto player = self->m_players.FindByCharacter(characterId);
-                if (!player) {
-                    return; // 玩家已离线：DB 事务已提交，重进加载
+                legend::internal::WorldShopBuyResult result;
+                std::string error;
+                if (!legend::internal::DecodeWorldShopBuyResult(
+                        response.payload.data(), response.payload.size(), result, error)) {
+                    applyResult(false, 0);
+                    return;
                 }
-                // 成功后更新内存（指令四十六）。
-                player->SetProgression(player->Experience(), newGold);
-                if (mergedIntoStack) {
-                    InventoryEntry* entry = player->Inventory().MutableAt(bagSlotIndex);
-                    if (entry) {
-                        entry->quantity += quantity;
-                    }
-                } else {
-                    InventoryEntry entry;
-                    entry.instanceId = instanceId;
-                    entry.definitionId = itemDefinitionId;
-                    entry.quantity = quantity;
-                    player->Inventory().PutAt(bagSlotIndex, entry);
-                }
-                // 指令四十八：InventoryDelta + BuyResponse(newGold)。
-                const InventoryEntry* current = player->Inventory().At(bagSlotIndex);
-                if (current) {
-                    self->SendInventoryDelta(player, 1, *current, bagSlotIndex);
-                }
-                self->SendShopBuyResponse(player, requestId, true, ShopResultCode::Success,
-                                          itemDefinitionId, quantity,
-                                          static_cast<std::uint32_t>(totalCost));
-                // 指令八十五：购买 Slime Core 触发 Collect 任务重算（持有数量型）。
-                self->HandleQuestInventoryChanged(player);
-                self->SendProgressionSnapshot(player);
-                self->SendNpcQuestMarkersFor(player);
+                applyResult(true, result.newInstanceId);
             });
-        }
+        return;
+    }
+    m_dbWorker.Post([self, applyResult, tx]() {
+        // DB 线程：BEGIN → Gold 扣除 → Inventory 写入 → COMMIT（指令四十六原子性）。
+        std::uint64_t newInstanceId = 0;
+        std::string error;
+        const bool ok =
+            InventoryRepository::RunShopBuyTransaction(self->m_database, tx, newInstanceId, error);
+        applyResult(ok, newInstanceId);
     });
 }
 
@@ -5376,88 +5935,81 @@ void WorldServer::HandleShopSellRequest(std::uint64_t connectionId,
     const bool wholeStack = quantity == entry->quantity;
     auto self = shared_from_this();
     const std::uint64_t characterId = player->CharacterId();
-    m_dbWorker.Post([self, characterId, requestId = request.requestId, newGold, instanceId,
-                     quantity, wholeStack, definitionId, goldReceived]() {
-        // 指令五十四：DB 事务 —— Inventory 扣除 + Gold 增加一次提交；失败全部回滚。
-        std::string error;
-        bool ok = self->m_database.Execute("BEGIN IMMEDIATE;", error);
-        if (ok) {
-            {
-                account::Statement stmt;
-                ok = stmt.Prepare(self->m_database.Handle(),
-                                  "UPDATE characters SET gold = ? WHERE id = ?;", error);
-                if (ok) {
-                    stmt.BindInt64(1, newGold);
-                    stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
-                    stmt.Step(error);
-                    ok = error.empty();
-                }
-            }
-            if (ok) {
-                if (wholeStack) {
-                    ok = InventoryRepository::DeleteItem(self->m_database, instanceId);
-                } else {
-                    account::Statement stmt2;
-                    ok = stmt2.Prepare(self->m_database.Handle(),
-                                       "UPDATE inventory_items SET quantity = quantity - ? "
-                                       "WHERE instance_id = ?;",
-                                       error);
-                    if (ok) {
-                        stmt2.BindInt64(1, static_cast<std::int64_t>(quantity));
-                        stmt2.BindInt64(2, static_cast<std::int64_t>(instanceId));
-                        stmt2.Step(error);
-                        ok = error.empty();
-                    }
-                }
-            }
-            if (!ok) {
-                self->m_database.Execute("ROLLBACK;", error);
-                self->m_service.Post([self, characterId, requestId]() {
-                    if (self->m_stopped.load()) {
-                        return;
-                    }
-                    auto player = self->m_players.FindByCharacter(characterId);
-                    if (player) {
-                        self->SendShopSellResponse(player, requestId, false,
-                                                   ShopResultCode::InternalError, 0, 0, 0);
-                    }
-                });
+    const auto applyResult = [self, characterId, requestId = request.requestId, newGold,
+                              instanceId, quantity, wholeStack, definitionId,
+                              goldReceived](bool ok) {
+        self->m_service.Post([self, characterId, requestId, newGold, instanceId, quantity,
+                              wholeStack, definitionId, goldReceived, ok]() {
+            if (self->m_stopped.load()) {
                 return;
             }
-            self->m_database.Execute("COMMIT;", error);
-            self->m_service.Post([self, characterId, requestId, newGold, instanceId, quantity,
-                                  wholeStack, definitionId, goldReceived]() {
-                if (self->m_stopped.load()) {
-                    return;
+            auto player = self->m_players.FindByCharacter(characterId);
+            if (!ok) {
+                // 指令五十四：失败整体回滚（DB ROLLBACK），内存未变。
+                if (player) {
+                    self->SendShopSellResponse(player, requestId, false,
+                                               ShopResultCode::InternalError, 0, 0, 0);
                 }
-                auto player = self->m_players.FindByCharacter(characterId);
-                if (!player) {
-                    return;
-                }
-                // 成功后更新内存。
-                player->SetProgression(player->Experience(), newGold);
-                for (std::size_t i = 0; i < player->Inventory().SlotCount(); ++i) {
-                    InventoryEntry* slot = player->Inventory().MutableAt(i);
-                    if (slot != nullptr && slot->instanceId == instanceId) {
-                        if (wholeStack) {
-                            player->Inventory().TakeAt(i, *slot);
-                        } else {
-                            slot->quantity -= quantity;
-                        }
-                        self->SendInventoryDelta(player, wholeStack ? 2 : 1, *slot,
-                                                 static_cast<std::uint32_t>(i));
-                        break;
+                return;
+            }
+            if (!player) {
+                return;
+            }
+            // 成功后更新内存。
+            player->SetProgression(player->Experience(), newGold);
+            for (std::size_t i = 0; i < player->Inventory().SlotCount(); ++i) {
+                InventoryEntry* slot = player->Inventory().MutableAt(i);
+                if (slot != nullptr && slot->instanceId == instanceId) {
+                    if (wholeStack) {
+                        player->Inventory().TakeAt(i, *slot);
+                    } else {
+                        slot->quantity -= quantity;
                     }
+                    self->SendInventoryDelta(player, wholeStack ? 2 : 1, *slot,
+                                             static_cast<std::uint32_t>(i));
+                    break;
                 }
-                self->SendShopSellResponse(player, requestId, true, ShopResultCode::Success,
-                                           definitionId, quantity,
-                                           static_cast<std::uint32_t>(goldReceived));
-                // 指令八十六：InProgress 的 Collect 按持有量下降（Ready 冻结不回退）。
-                self->HandleQuestInventoryChanged(player);
-                self->SendProgressionSnapshot(player);
-                self->SendNpcQuestMarkersFor(player);
-            });
+            }
+            self->SendShopSellResponse(player, requestId, true, ShopResultCode::Success,
+                                       definitionId, quantity,
+                                       static_cast<std::uint32_t>(goldReceived));
+            // 指令八十六：InProgress 的 Collect 按持有量下降（Ready 冻结不回退）。
+            self->HandleQuestInventoryChanged(player);
+            self->SendProgressionSnapshot(player);
+            self->SendNpcQuestMarkersFor(player);
+        });
+    };
+    InventoryRepository::ShopSellTransaction tx;
+    tx.characterId = characterId;
+    tx.newGold = newGold;
+    tx.instanceId = instanceId;
+    tx.quantity = quantity;
+    tx.wholeStack = wholeStack;
+    if (m_persistence) {
+        // 阶段25.5：RPC 模式——出售原子事务在 DbServer 内执行。
+        legend::internal::WorldShopSell command;
+        command.characterId = tx.characterId;
+        command.newGold = tx.newGold;
+        command.instanceId = tx.instanceId;
+        command.quantity = tx.quantity;
+        command.wholeStack = tx.wholeStack;
+        std::vector<std::uint8_t> payload;
+        if (!legend::internal::EncodeWorldShopSell(command, payload)) {
+            applyResult(false);
+            return;
         }
+        m_persistence->AsyncRequest(
+            legend::internal::DbOperation::ShopSellWrite, std::move(payload),
+            [applyResult](const legend::internal::DbResponse& response) {
+                applyResult(response.errorCode == legend::internal::InternalErrorCode::Ok);
+            });
+        return;
+    }
+    m_dbWorker.Post([self, applyResult, tx]() {
+        // 指令五十四：DB 事务 —— Inventory 扣除 + Gold 增加一次提交；失败全部回滚。
+        std::string error;
+        const bool ok = InventoryRepository::RunShopSellTransaction(self->m_database, tx, error);
+        applyResult(ok);
     });
 }
 
@@ -5559,26 +6111,7 @@ bool WorldServer::TeleportPlayerViaNpc(const std::shared_ptr<PlayerSession>& pla
     const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(teleport->goldCost);
     player->SetProgression(player->Experience(), newGold);
     // 指令六十八：金币扣除必须落库（服务器权威价格/费用的持久化证据）。
-    {
-        auto self = shared_from_this();
-        const std::uint64_t characterId = player->CharacterId();
-        const std::int64_t persistedGold = newGold;
-        m_dbWorker.Post([self, characterId, persistedGold]() {
-            std::string error;
-            account::Statement stmt;
-            if (!stmt.Prepare(self->m_database.Handle(),
-                              "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
-                LOG_ERROR("[Npc] teleport gold prepare failed: " + error);
-                return;
-            }
-            stmt.BindInt64(1, persistedGold);
-            stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
-            stmt.Step(error);
-            if (!error.empty()) {
-                LOG_ERROR("[Npc] teleport gold update failed: " + error);
-            }
-        });
-    }
+    PersistGold(player->CharacterId(), newGold);
     // 指令二十三/二十四：统一地图切换（旧区 Despawn/可见集清理/权威位置/AOI 重建/
     // MapChanged/MapSnapshot/立即位置快照/持久化/Quest OnPlayerMoved 全部在服务内）。
     if (!m_mapTransition.TransitionPlayer(player, teleport->destinationMapId,
@@ -5866,26 +6399,7 @@ void WorldServer::HandlePortalUseRequest(std::uint64_t connectionId,
     const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(portal->goldCost);
     player->SetProgression(player->Experience(), newGold);
     if (portal->goldCost > 0) {
-        auto self = shared_from_this();
-        const std::uint64_t characterId = player->CharacterId();
-        const std::int64_t persistedGold = newGold;
-        const std::uint32_t cost = portal->goldCost;
-        m_dbWorker.Post([self, characterId, persistedGold, cost]() {
-            std::string error;
-            account::Statement stmt;
-            if (!stmt.Prepare(self->m_database.Handle(),
-                              "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
-                LOG_ERROR("[Portal] gold prepare failed: " + error);
-                return;
-            }
-            stmt.BindInt64(1, persistedGold);
-            stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
-            stmt.Step(error);
-            if (!error.empty()) {
-                LOG_ERROR("[Portal] gold update failed (cost=" + std::to_string(cost) +
-                          "): " + error);
-            }
-        });
+        PersistGold(player->CharacterId(), newGold);
     }
     if (!m_mapTransition.TransitionPlayer(player, portal->destinationMapId, portal->destinationX,
                                           portal->destinationY, "portal")) {
@@ -5948,28 +6462,7 @@ bool WorldServer::ExecuteRespawn(const std::shared_ptr<PlayerSession>& player, R
     // 指令三十八：扣复活费（CurrentMap 10G；Town 免费）+ 落库。
     const std::int64_t newGold = player->Gold() - static_cast<std::int64_t>(plan.goldCost);
     player->SetProgression(player->Experience(), newGold);
-    {
-        auto self = shared_from_this();
-        const std::uint64_t characterId = player->CharacterId();
-        const std::int64_t persistedGold = newGold;
-        const std::uint32_t cost = plan.goldCost;
-        m_dbWorker.Post([self, characterId, persistedGold, cost]() {
-            std::string error;
-            account::Statement stmt;
-            if (!stmt.Prepare(self->m_database.Handle(),
-                              "UPDATE characters SET gold = ? WHERE id = ?;", error)) {
-                LOG_ERROR("[Respawn] gold prepare failed: " + error);
-                return;
-            }
-            stmt.BindInt64(1, persistedGold);
-            stmt.BindInt64(2, static_cast<std::int64_t>(characterId));
-            stmt.Step(error);
-            if (!error.empty()) {
-                LOG_ERROR("[Respawn] gold update failed (cost=" + std::to_string(cost) + "): " +
-                          error);
-            }
-        });
-    }
+    PersistGold(player->CharacterId(), newGold);
     // 指令四十：复活清空全部状态（Buff/Debuff 统一清除 -> StatusContainer 为空）。
     if (!player->StatusEffects().Empty()) {
         const auto effects = player->StatusEffects().All();

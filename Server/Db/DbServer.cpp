@@ -2,6 +2,8 @@
 
 #include "Engine/Debug/Logger.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
+#include "Server/WorldServer/Item/InventoryRepository.h"
+#include "Server/WorldServer/Quest/QuestRepository.h"
 #include "Shared/InternalProtocol/PersistenceMessages.h"
 #include "Shared/Network/MessageId.h"
 
@@ -125,6 +127,8 @@ void DbServer::HandleRequest(std::uint64_t connectionId, DbRequest request) {
 }
 
 DbResponse DbServer::Execute(const DbRequest& request) {
+    using legend::world::InventoryRepository;
+    using legend::world::QuestRepository;
     DbResponse response; response.requestId = request.requestId;
     response.recordVersion = m_revision.load();
     std::string error;
@@ -199,6 +203,293 @@ DbResponse DbServer::Execute(const DbRequest& request) {
             if (!result.success) { response.errorCode = MapAccountError(result.errorCode);
                 response.message = result.errorMessage; return response; }
             EncodeCharacterSummary(result.value, response.payload);
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        // -------------------------------------------------------------------
+        // 阶段25.5：World 持久化 RPC（事务在 DbServer DB Worker 线程执行；
+        // World io 线程零 SQLite）。失败返回非 Ok 错误码（不中断连接）。
+        // -------------------------------------------------------------------
+        case DbOperation::LoadCharacterFull: {
+            CharacterIdQuery query;
+            if (!DecodeCharacterIdQuery(request.payload.data(), request.payload.size(), query, error)) break;
+            auto found = legend::account::CharacterRepository::FindCharacterById(
+                m_database, query.characterId);
+            if (!found.success) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = found.errorMessage; return response; }
+            if (!found.value.has_value() || found.value->deleted) {
+                response.errorCode = InternalErrorCode::CharacterNotFound;
+                response.message = "character not found"; return response;
+            }
+            const auto& row = *found.value;
+            WorldCharacterRow out;
+            out.id = row.id; out.accountId = row.accountId; out.name = row.name;
+            out.classId = row.classId; out.gender = row.gender; out.level = row.level;
+            out.exp = row.exp; out.gold = row.gold; out.mapId = row.mapId;
+            out.positionX = static_cast<float>(row.positionX);
+            out.positionY = static_cast<float>(row.positionY);
+            out.deleted = row.deleted;
+            if (!EncodeWorldCharacterRow(out, response.payload)) {
+                LOG_ERROR("[Db] LoadCharacterFull encode failed (nameSize=" +
+                          std::to_string(row.name.size()) + " deleted=" +
+                          std::to_string(row.deleted ? 1 : 0) + ")");
+                response.payload.clear();
+                response.errorCode = InternalErrorCode::InternalError;
+                response.message = "character row encode failed";
+                return response;
+            }
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::LoadInventory: {
+            CharacterIdQuery query;
+            if (!DecodeCharacterIdQuery(request.payload.data(), request.payload.size(), query, error)) break;
+            WorldInventoryList out;
+            out.characterId = query.characterId;
+            std::vector<InventoryRepository::InventoryRow> rows;
+            if (!InventoryRepository::LoadInventory(m_database, query.characterId, rows, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            out.items.reserve(rows.size());
+            for (const auto& row : rows) {
+                out.items.push_back({row.instanceId, row.definitionId, row.quantity,
+                                     row.slotIndex, row.createdAt});
+            }
+            EncodeWorldInventoryList(out, response.payload);
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::LoadQuestState: {
+            CharacterIdQuery query;
+            if (!DecodeCharacterIdQuery(request.payload.data(), request.payload.size(), query, error)) break;
+            WorldQuestStateList out;
+            std::vector<QuestRepository::QuestRow> quests;
+            std::vector<QuestRepository::ObjectiveRow> objectives;
+            if (!QuestRepository::LoadCharacterQuests(m_database, query.characterId, quests,
+                                                      objectives, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            out.quests.reserve(quests.size());
+            for (const auto& row : quests) {
+                out.quests.push_back({static_cast<std::uint32_t>(row.questId), row.state,
+                                      row.acceptedAt, row.completedAt, row.turnedInAt});
+            }
+            out.objectives.reserve(objectives.size());
+            for (const auto& row : objectives) {
+                out.objectives.push_back({static_cast<std::uint32_t>(row.questId),
+                                          row.objectiveId, row.progress});
+            }
+            EncodeWorldQuestStateList(out, response.payload);
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::SavePosition: {
+            WorldSavePosition command;
+            if (!DecodeWorldSavePosition(request.payload.data(), request.payload.size(), command, error)) break;
+            auto saved = legend::account::CharacterRepository::UpdateWorldPosition(
+                m_database, command.characterId, command.mapId, command.positionX,
+                command.positionY, command.lastPlayedAt);
+            if (!saved.success) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = saved.errorMessage; return response; }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::SaveProgression: {
+            WorldSaveProgression command;
+            if (!DecodeWorldSaveProgression(request.payload.data(), request.payload.size(), command, error)) break;
+            auto saved = legend::account::CharacterRepository::SaveProgression(
+                m_database, command.characterId, command.level, command.exp, command.gold);
+            if (!saved.success) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = saved.errorMessage; return response; }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::ItemInsertWrite: {
+            WorldItemInsert command;
+            if (!DecodeWorldItemInsert(request.payload.data(), request.payload.size(), command, error)) break;
+            const auto newInstanceId = InventoryRepository::InsertOrMergeItem(
+                m_database, command.characterId, command.definitionId, command.quantity,
+                command.slotIndex, command.createdAt, command.mergedIntoStack,
+                command.mergeInstanceId, command.mergeQuantity);
+            if (newInstanceId == 0) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = "item insert failed"; return response; }
+            EncodeWorldItemInsertResult({newInstanceId}, response.payload);
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::EquipItemWrite: {
+            WorldEquipItem command;
+            if (!DecodeWorldEquipItem(request.payload.data(), request.payload.size(), command, error)) break;
+            InventoryRepository::EquipTransaction tx;
+            tx.characterId = command.characterId;
+            tx.newItemInstanceId = command.newItemInstanceId;
+            tx.equipmentSlotCode = command.equipmentSlotCode;
+            tx.hadPrevious = command.hadPrevious;
+            tx.previousInstanceId = command.previousInstanceId;
+            tx.freedBagSlotIndex = command.freedBagSlotIndex;
+            if (!InventoryRepository::RunEquipTransaction(m_database, tx)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = "equip transaction failed"; return response;
+            }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::UnequipItemWrite: {
+            WorldUnequipItem command;
+            if (!DecodeWorldUnequipItem(request.payload.data(), request.payload.size(), command, error)) break;
+            InventoryRepository::UnequipTransaction tx;
+            tx.instanceId = command.instanceId;
+            tx.equipmentSlotCode = command.equipmentSlotCode;
+            tx.bagSlotIndex = command.bagSlotIndex;
+            if (!InventoryRepository::RunUnequipTransaction(m_database, tx)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = "unequip transaction failed"; return response;
+            }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::QuestInsertWrite: {
+            WorldQuestInsert command;
+            if (!DecodeWorldQuestInsert(request.payload.data(), request.payload.size(), command, error)) break;
+            if (!QuestRepository::InsertQuest(m_database, command.characterId, command.questId,
+                                              static_cast<std::int8_t>(command.state),
+                                              command.acceptedAt, command.objectiveIds, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::QuestTurnInWrite: {
+            WorldQuestTurnIn command;
+            if (!DecodeWorldQuestTurnIn(request.payload.data(), request.payload.size(), command, error)) break;
+            QuestRepository::TurnInTransaction tx;
+            tx.characterId = command.characterId;
+            tx.questId = command.questId;
+            tx.turnedInAt = command.turnedInAt;
+            tx.newLevel = command.newLevel;
+            tx.newExperience = command.newExperience;
+            tx.newGold = command.newGold;
+            tx.rewardItemDefinitionId = command.rewardItemDefinitionId;
+            tx.rewardItemQuantity = command.rewardItemQuantity;
+            tx.rewardItemSlotIndex = command.rewardItemSlotIndex;
+            tx.rewardItemCreatedAt = command.rewardItemCreatedAt;
+            const auto result = QuestRepository::RunTurnInTransaction(m_database, tx, error);
+            if (!result.ok) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response; }
+            EncodeWorldQuestTurnInResult({true, result.itemInstanceId}, response.payload);
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::QuestAbandonWrite: {
+            WorldQuestAbandon command;
+            if (!DecodeWorldQuestAbandon(request.payload.data(), request.payload.size(), command, error)) break;
+            if (!QuestRepository::MarkAbandoned(m_database, command.characterId, command.questId,
+                                                command.nowUnix, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::QuestObjectiveWrite: {
+            WorldQuestObjective command;
+            if (!DecodeWorldQuestObjective(request.payload.data(), request.payload.size(), command, error)) break;
+            if (!QuestRepository::UpdateObjectiveProgress(m_database, command.characterId,
+                                                           command.questId, command.objectiveId,
+                                                           command.progress, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::QuestStateWrite: {
+            WorldQuestState command;
+            if (!DecodeWorldQuestState(request.payload.data(), request.payload.size(), command, error)) break;
+            if (!QuestRepository::UpdateQuestState(m_database, command.characterId,
+                                                   command.questId,
+                                                   static_cast<std::int8_t>(command.state),
+                                                   command.timestamp, command.setTurnedInAt,
+                                                   error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::OfflineKillWrite: {
+            WorldOfflineKill command;
+            if (!DecodeWorldOfflineKill(request.payload.data(), request.payload.size(), command, error)) break;
+            std::vector<QuestRepository::KillCandidate> candidates;
+            candidates.reserve(command.candidates.size());
+            for (const auto& candidate : command.candidates) {
+                candidates.push_back({static_cast<legend::world::QuestId>(candidate.questId),
+                                      candidate.objectiveId, candidate.requiredCount});
+            }
+            // 返回 false = 无 InProgress 任务可推进（合法，非错误）；仅 error 非空才是失败。
+            const bool changed = QuestRepository::OfflineAdvanceKill(
+                m_database, command.characterId, candidates, error);
+            if (!error.empty()) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            (void)changed;
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::ShopBuyWrite: {
+            WorldShopBuy command;
+            if (!DecodeWorldShopBuy(request.payload.data(), request.payload.size(), command, error)) break;
+            InventoryRepository::ShopBuyTransaction tx;
+            tx.characterId = command.characterId;
+            tx.newGold = command.newGold;
+            tx.itemDefinitionId = command.itemDefinitionId;
+            tx.quantity = command.quantity;
+            tx.bagSlotIndex = command.bagSlotIndex;
+            tx.mergedIntoStack = command.mergedIntoStack;
+            tx.mergeInstanceId = command.mergeInstanceId;
+            tx.mergeQuantity = command.mergeQuantity;
+            std::uint64_t newInstanceId = 0;
+            if (!InventoryRepository::RunShopBuyTransaction(m_database, tx, newInstanceId, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            EncodeWorldShopBuyResult({newInstanceId}, response.payload);
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::ShopSellWrite: {
+            WorldShopSell command;
+            if (!DecodeWorldShopSell(request.payload.data(), request.payload.size(), command, error)) break;
+            InventoryRepository::ShopSellTransaction tx;
+            tx.characterId = command.characterId;
+            tx.newGold = command.newGold;
+            tx.instanceId = command.instanceId;
+            tx.quantity = command.quantity;
+            tx.wholeStack = command.wholeStack;
+            if (!InventoryRepository::RunShopSellTransaction(m_database, tx, error)) {
+                response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = error; return response;
+            }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::SaveGoldWrite: {
+            WorldSaveGold command;
+            if (!DecodeWorldSaveGold(request.payload.data(), request.payload.size(), command, error)) break;
+            auto saved = legend::account::CharacterRepository::SaveGold(m_database,
+                                                                        command.characterId,
+                                                                        command.gold);
+            if (!saved.success) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = saved.errorMessage; return response; }
+            response.recordVersion = m_revision.fetch_add(1) + 1;
+            response.errorCode = InternalErrorCode::Ok; return response;
+        }
+        case DbOperation::AddRewardsWrite: {
+            WorldAddRewards command;
+            if (!DecodeWorldAddRewards(request.payload.data(), request.payload.size(), command, error)) break;
+            auto saved = legend::account::CharacterRepository::AddProgressionRewards(
+                m_database, command.characterId, command.expDelta, command.goldDelta);
+            if (!saved.success) { response.errorCode = InternalErrorCode::DatabaseUnavailable;
+                response.message = saved.errorMessage; return response; }
             response.recordVersion = m_revision.fetch_add(1) + 1;
             response.errorCode = InternalErrorCode::Ok; return response;
         }
