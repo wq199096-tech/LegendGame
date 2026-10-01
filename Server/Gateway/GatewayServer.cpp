@@ -273,6 +273,7 @@ void GatewayServer::StartWorldProxy(std::uint64_t clientConnectionId,
 void GatewayServer::OnWorldProxyConnected(std::uint64_t clientConnectionId,
                                           net::TcpConnectionPtr connection) {
     std::vector<Packet> pending;
+    std::shared_ptr<GatewaySession> session;
     {
         std::lock_guard<std::mutex> lock(m_mapsMutex);
         const auto it = m_worldProxies.find(clientConnectionId);
@@ -281,6 +282,7 @@ void GatewayServer::OnWorldProxyConnected(std::uint64_t clientConnectionId,
             return;
         }
         it->second.backend = connection;
+        session = it->second.client;
         pending.swap(it->second.pending);
     }
     auto self = shared_from_this();
@@ -292,6 +294,9 @@ void GatewayServer::OnWorldProxyConnected(std::uint64_t clientConnectionId,
             self->CloseWorldProxy(clientConnectionId);
         });
     for (const auto& packet : pending) connection->Send(packet);
+    // 阶段26 指令十七：世界代理建立 = 玩家进入世界（补置 InWorld，使 Gateway
+    // 状态机与真实链路一致）。
+    if (session) session->MarkInWorld();
     LOG_INFO("[Gateway] World channel connected for client #" +
              std::to_string(clientConnectionId));
 }
@@ -322,7 +327,12 @@ void GatewayServer::CloseWorldProxy(std::uint64_t clientConnectionId) {
         m_worldProxies.erase(it);
     }
     if (backend) backend->Close();
-    if (client) client->Disconnect();
+    if (client) {
+        // 阶段26 指令十七：world 代理关闭 ≠ 客户端断线（主动 LeaveWorld 后客户端
+        // 只关代理连接，主 Gateway 连接保留）。会话回退 Authenticated 以便重新
+        // 拉角色列表；若主连接其实已死，OnClientClosed 也会做最终清理（双序安全）。
+        client->MarkLeftWorld();
+    }
 }
 
 void GatewayServer::ConnectToLogin() {

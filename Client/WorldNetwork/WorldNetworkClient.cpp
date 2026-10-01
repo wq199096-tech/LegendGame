@@ -109,6 +109,20 @@ void WorldNetworkClient::SendEnterWorld(const std::string& selectionTicket) {
     }
 }
 
+void WorldNetworkClient::SendLeaveWorld() {
+    // 阶段26 指令十七：仅 WorldReady 可主动离开。
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    world::LeaveWorldRequestPayload request;
+    request.requestId = 1;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::LeaveWorldRequest);
+    if (world::EncodeLeaveWorldRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
 void WorldNetworkClient::SendMoveInput(std::uint32_t inputSequence, float directionX,
                                        float directionY, float deltaTime) {
     if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
@@ -518,6 +532,29 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.errorCode = response.errorCode;
             event.message = response.message;
             PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::LeaveWorldResponse: {
+            // 阶段26 指令十七：服务器已保存并移除玩家 —— 事件上抛 + 本地断开
+            //（Gateway 检测到代理关闭会回退会话状态，主连接保留）。
+            world::LeaveWorldResponsePayload response;
+            std::string decodeError;
+            if (!world::DecodeLeaveWorldResponse(packet.payload.data(), packet.payload.size(),
+                                                 response, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type =
+                response.success ? WorldNetworkEvent::Type::LeaveWorldSuccess
+                                 : WorldNetworkEvent::Type::LeaveWorldFailed;
+            event.requestId = response.requestId;
+            event.errorCode = response.errorCode;
+            event.message = response.message;
+            PushEvent(std::move(event));
+            SetState(WorldFlowState::Disconnected);
+            if (m_connection) {
+                m_connection->Close();
+            }
             return;
         }
         case MessageId::PlayerPositionSnapshot: {

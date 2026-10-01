@@ -1,4 +1,54 @@
-# CURRENT_STAGE — Stage25.6 Server Management GUI V0.256
+# CURRENT_STAGE — Stage26 Production Login & Character Lobby V0.26
+
+## Stage26（2026-10-01/02）— **completed（代码封板，待 PR + main CI 后正式封板）**
+
+- **状态：completed（本地）**。目标达成：LegendClient.exe 已升级为普通玩家完整入口：
+  启动画面 → 连接 → 登录/注册 → 角色大厅 → 创建/删除/选择角色 → 进入世界 → 正式游戏。
+- 交付内容（五大批次，分支 `stage26-production-client-entry`，基线 6f02d42）：
+  1. **服务器规则层（批次 A）**：角色名 UTF-8 码点规则（2~12 码点，CJK+ASCII 白名单，
+     严格解码拒绝截断/overlong/代理区）；visualId 持久化（DB Migration 6，
+     characters.visual_id 列）；每账号 4 角色上限 + 归属校验（服务器权威，
+     CharacterLimitReached/CharacterNotOwned）；CharacterCreateRequest 增 visualId
+     全链（Account 协议/CharacterService/Repository/PersistenceMessages/DbServer）。
+  2. **主动离开世界（批次 B）**：LeaveWorldRequest/Response（MessageId 213/214）；
+     WorldServer::HandleLeaveWorldRequest（保存位置 → AOI Despawn(LeftWorld) →
+     回执 → 关会话）；Gateway MarkInWorld（代理建立）/ MarkLeftWorld（代理关闭回退
+     Authenticated）；客户端 SendLeaveWorld + LeaveWorldSuccess/Failed 事件；
+     修复 WorldTests 确定性崩溃（枚举插入使 RespawnResponseEvent=64 越界
+     recorded[64]，kEventCapacity 64→96）。
+  3. **客户端前端（批次 C）**：ClientFlowState/ClientFlowController 集中状态机
+     （AutoEnter 模式下纯观测，不自动连接/登录/拉列表）；FlowUiModel 纯数据 +
+     码点安全 UTF-8 文本编辑；PlayerFacingErrorCatalog（错误码→简体中文）；
+     CharacterVisualCatalog（visualId 1/2/3 → player_warrior/mage/taoist + 造型一/二/三）；
+     ClientLoginStore（savedata/client_login.json 只存账号名）；FlowPages 全页面
+     渲染（Boot/Connecting/Login/Register/Lobby/Create/EnteringWorld/Disconnected/
+     FatalError，UiTheme 参考分辨率缩放）；大厅角色卡 + 动画立绘（identity 相机 +
+     EntityVisual）；删除二次确认（重输角色名）；SDL3 文本输入会话（IME 就绪，
+     目标窗口由 Engine 注入）；本地玩家进世界用大厅选中 visualId 渲染；
+     Esc 收编（全局退出移除，流程页=返回，游戏内=Settings）。
+  4. **测试（批次 D）**：Stage26FlowChecks 13 项并入 LegendWorldTests——纯逻辑
+     （UTF-8 编辑/状态名/错误文案/造型映射）+ 完整流程 E2E（注册→登录→空列表→
+     建中文名角色 visualId=2→进世界→主动离开回大厅→重进→服务器重启持久化→
+     第五角色本地预检(32)→跨账号删除拒绝(34)）；WorldTests 全套 failures=0
+     （含 ClientSmoke AutoEnter 链路未破坏）。
+  5. **GUI 人工验收（批次 D）**：14 张截图 testlogs/stage26-ui-acceptance/
+     （boot/登录/注册填写/注册完成/大厅空/创建页/大厅1卡(立绘+界面英雄+造型二)/
+     删除确认浮层(输入名后确认钮激活)/进入世界/游戏内(HUD+NPC+绿野村)/断线页）；
+     服务器日志确认 `Character created id=1 name=界面英雄`（visualId=2 持久化）。
+- 修复实录（验收驱动）：登录账号名持久化漏接线；注册/创建页快速响应（<1帧）
+  边沿漏采致页面卡死 → 改"已发出请求"标记；SDL_StartTextInput 依赖 GetKeyboardFocus
+  首帧静默失败 → Engine 注入目标窗口；立绘坐标误用参考分辨率坐标 → 乘 scale。
+- **Known Issues（非阻塞，视觉层）**：
+  - 文本框内运行时输入的 CJK 字形部分帧不显示（数据链路已验证正确：服务器收到
+    精确 UTF-8、大厅卡片同字符串正常显示；疑字形烘焙/上传时序，待 DrawString 层深查）。
+  - 世界内远程玩家仍按 classId 渲染（PlayerSpawn 载荷暂无 visualId；本地玩家
+    已正确使用大厅选中造型）。
+- Git：wip/fix/feat 提交链（ecbb957 → d1c21f2 → 06bc206 → a77e177 → 1c759cd）。
+  PR + main CI 全绿后在 main 封板。
+
+---
+
+## 历史：Stage25.6 Server Management GUI V0.256
 
 ## Stage25.6（2026-10-01）— **completed（封板）**
 

@@ -1,5 +1,6 @@
 #include "Client/Visuals/VisualRuntime.h"
 
+#include "Client/Ui/CharacterVisualCatalog.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/WorldClientController.h"
@@ -667,11 +668,18 @@ void VisualRuntime::Update(const WorldClientController& world, float deltaTime) 
         auto& local = EnsureVisual(m_playerVisuals, world.CharacterId(),
                                    EntityKind::LocalPlayer, std::string());
         if (local.visualId.empty()) {
-            const int classId = m_localClassId != 0 ? m_localClassId : 1;
-            const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(classId);
-            if (def != nullptr) {
-                local.visualId = def->visualId;
+            // Stage26 指令十一：大厅选中的造型优先（服务器持久化 visualId）；
+            // 无覆盖时回退 classId 推导（AutoEnter/旧链路）。
+            if (m_localVisualOverride != 0) {
+                local.visualId = legend::ui::CharacterVisualEntityName(m_localVisualOverride);
                 ApplyEntityDefinition(local);
+            } else {
+                const int classId = m_localClassId != 0 ? m_localClassId : 1;
+                const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(classId);
+                if (def != nullptr) {
+                    local.visualId = def->visualId;
+                    ApplyEntityDefinition(local);
+                }
             }
         }
         // 方向：服务器位置差分
@@ -1004,6 +1012,36 @@ void VisualRuntime::DrawEntitySprite(legend::render::SpriteBatch& batch, EntityV
     const Vector2 center = feet + Vector2((0.5f - info.pivotX) * fw, (0.5f - info.pivotY) * fh);
 
     Color tint(1.0f, 1.0f, 1.0f, 1.0f);
+    // 阶段26 指令十一：造型底色（def tint "#RRGGBB[AA]"，空=白）——死亡/受击覆盖。
+    if (!def->tint.empty()) {
+        bool ok = true;
+        const auto clamp01 = [](int v) { return std::clamp(v, 0, 255) / 255.0f; };
+        const auto hexVal = [&](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            return -1;
+        };
+        const std::string& hex = def->tint;
+        if ((hex.size() == 7 || hex.size() == 9) && hex[0] == '#') {
+            auto pairAt = [&](std::size_t i) -> int {
+                const int hi = hexVal(hex[i]);
+                const int lo = hexVal(hex[i + 1]);
+                if (hi < 0 || lo < 0) {
+                    ok = false;
+                    return 0;
+                }
+                return hi * 16 + lo;
+            };
+            const int r = pairAt(1), g = pairAt(3), b = pairAt(5);
+            tint = ok ? Color(clamp01(r), clamp01(g), clamp01(b),
+                              hex.size() == 9 ? clamp01(pairAt(7)) : 1.0f)
+                      : Color(1.0f, 1.0f, 1.0f, 1.0f);
+        } else {
+            ok = false;
+        }
+        (void)ok; // 非法 tint 回退白色
+    }
     if (ev.dead || !ev.player.IsPlaying() ||
         (frame.clip != nullptr && frame.clip->animationId.find("death") != std::string::npos)) {
         tint = Color(0.55f, 0.55f, 0.60f, 0.95f); // 死亡灰

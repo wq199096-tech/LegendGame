@@ -50,7 +50,8 @@ public:
     void SendSessionResume(const std::string& token);
     void SendCharacterList(const std::string& token);
     void SendCreateCharacter(const std::string& token, const std::string& name,
-                             std::uint16_t classId, std::uint16_t gender);
+                             std::uint16_t classId, std::uint16_t gender,
+                             std::uint16_t visualId = 1);
     void SendDeleteCharacter(const std::string& token, std::uint64_t characterId);
     void SendSelectCharacter(const std::string& token, std::uint64_t characterId);
 

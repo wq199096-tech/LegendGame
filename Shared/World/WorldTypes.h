@@ -60,6 +60,7 @@ enum class PlayerDespawnReason : std::uint8_t {
     Disconnected = 2,
     ChangedMap = 3,
     ServerCleanup = 4,
+    LeftWorld = 5, // 阶段26 指令十七：主动离开世界（回角色大厅）
 };
 
 inline bool IsMapIdSupported(std::uint16_t mapId) {

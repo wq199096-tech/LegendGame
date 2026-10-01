@@ -44,6 +44,7 @@ void WriteCharacterSummary(legend::network::ByteWriter& writer, const CharacterS
     writer.WriteUInt32(summary.level);
     writer.WriteUInt16(summary.mapId);
     writer.WriteUInt64(static_cast<std::uint64_t>(summary.lastPlayedAt));
+    writer.WriteUInt16(summary.visualId); // 阶段26 指令十一：造型槽位
 }
 
 bool ReadCharacterSummary(legend::network::ByteReader& reader, CharacterSummary& out) {
@@ -56,6 +57,7 @@ bool ReadCharacterSummary(legend::network::ByteReader& reader, CharacterSummary&
     out.level = reader.ReadUInt32();
     out.mapId = reader.ReadUInt16();
     out.lastPlayedAt = static_cast<std::int64_t>(reader.ReadUInt64());
+    out.visualId = reader.ReadUInt16();
     return reader.IsValid();
 }
 
@@ -230,6 +232,7 @@ bool EncodeCharacterCreateRequest(const CharacterCreateRequestPayload& p,
         w.WriteUInt64(p.requestId);
         w.WriteUInt16(p.classId);
         w.WriteUInt16(p.gender);
+        w.WriteUInt16(p.visualId); // 阶段26 指令十一：初始造型
         return w.WriteString(p.sessionToken) && w.WriteString(p.name);
     });
 }
@@ -240,6 +243,7 @@ bool DecodeCharacterCreateRequest(const std::uint8_t* data, std::size_t size,
         out.requestId = r.ReadUInt64();
         out.classId = r.ReadUInt16();
         out.gender = r.ReadUInt16();
+        out.visualId = r.ReadUInt16();
         (void)(r.ReadString(out.sessionToken) && r.ReadString(out.name));
     });
 }

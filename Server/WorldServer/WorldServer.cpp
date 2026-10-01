@@ -397,6 +397,11 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
         HandleEnterWorldRequest(connectionId, enterPacket);
         return;
     }
+    Packet leavePacket;
+    if (session->TakePendingLeaveWorld(leavePacket)) {
+        HandleLeaveWorldRequest(connectionId, leavePacket); // 阶段26 指令十七
+        return;
+    }
     // 握手完成后允许的其它消息
     const auto messageId = static_cast<MessageId>(packet.header.messageId);
     if (session->State() == WorldSessionState::InWorld) {
@@ -472,6 +477,75 @@ void WorldServer::OnClientClosed(std::uint64_t connectionId, const std::error_co
     }
     (void)ec;
     (void)session;
+}
+
+// 阶段26 指令十七：主动离开世界 —— 保存位置 → AOI Despawn(LeftWorld) → 移除 →
+// 回 LeaveWorldResponse → 关闭该 World 会话（客户端收到 Response 后回角色大厅，
+// Gateway 把会话从 InWorld 回退到 Authenticated；与断线路径严格区分）。
+void WorldServer::HandleLeaveWorldRequest(std::uint64_t connectionId,
+                                          const legend::network::Packet& packet) {
+    world::LeaveWorldRequestPayload request;
+    std::string error;
+    if (!legend::world::DecodeLeaveWorldRequest(packet.payload.data(), packet.payload.size(),
+                                                request, error)) {
+        LOG_INFO("[World] Malformed LeaveWorldRequest from #" + std::to_string(connectionId));
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    auto getSession = [&](std::uint64_t cid) -> std::shared_ptr<WorldSession> {
+        std::lock_guard<std::mutex> lock(m_sessionsMutex);
+        auto it = m_sessions.find(cid);
+        return it != m_sessions.end() ? it->second : nullptr;
+    };
+    if (!player) {
+        // 非法状态（未在世界中）——拒绝但不断连（客户端可重试/回大厅）。
+        world::LeaveWorldResponsePayload out;
+        out.requestId = request.requestId;
+        out.success = false;
+        out.errorCode = static_cast<std::uint16_t>(WorldErrorCode::InvalidTicket);
+        out.message = "not in world";
+        Packet resp;
+        resp.header.messageId = static_cast<std::uint16_t>(MessageId::LeaveWorldResponse);
+        if (legend::world::EncodeLeaveWorldResponse(out, resp.payload)) {
+            if (auto session = getSession(connectionId)) {
+                session->SendPacket(resp);
+            }
+        }
+        return;
+    }
+    // 与 OnClientClosed 相同的移除序列（主动离开语义：Despawn reason = LeftWorld）。
+    auto removed = m_players.RemoveByConnection(connectionId);
+    if (removed) {
+        m_mapManager.RemovePlayer(connectionId, removed->MapId());
+        m_spatialGrid.RemovePlayer(removed->CharacterId());
+        NotifyPlayerGoneToObservers(removed->CharacterId(), PlayerDespawnReason::LeftWorld);
+        OnTargetPlayerRemoved(removed->CharacterId());
+        SavePlayerPositionNow(removed->CharacterId(), removed->MapId(), removed->PositionX(),
+                              removed->PositionY());
+        LOG_INFO("[World] Player left world (voluntary) character=" + removed->CharacterName() +
+                 " (#" + std::to_string(removed->CharacterId()) + ")");
+        if (m_hooks.onPlayerChanged) {
+            m_hooks.onPlayerChanged(removed->CharacterId(), false);
+        }
+    }
+    world::LeaveWorldResponsePayload out;
+    out.requestId = request.requestId;
+    out.success = true;
+    out.errorCode = 0;
+    out.message = "ok";
+    Packet resp;
+    resp.header.messageId = static_cast<std::uint16_t>(MessageId::LeaveWorldResponse);
+    if (legend::world::EncodeLeaveWorldResponse(out, resp.payload)) {
+        if (auto session = getSession(connectionId)) {
+            session->SendPacket(resp);
+        }
+    }
+    // 会话收尾：World 侧职责已完成，关闭连接（客户端收到 Response 后回大厅；
+    // Gateway 检测到 worldProxy 关闭但主连接存活 -> 回退 Authenticated）。
+    if (auto session = getSession(connectionId)) {
+        session->SetState(WorldSessionState::Closing);
+        session->Disconnect();
+    }
 }
 
 // ---------------------------------------------------------------------------

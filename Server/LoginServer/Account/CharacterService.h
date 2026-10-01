@@ -18,9 +18,11 @@ public:
 
     RepositoryResult<std::vector<CharacterSummary>> List(Database& db,
                                                          std::uint64_t accountId) const;
+    // 阶段26 指令十一：Create 增加 visualId（1~3 造型槽位，服务器权威校验）。
     RepositoryResult<CharacterSummary> Create(Database& db, std::uint64_t accountId,
                                               const std::string& name, std::uint16_t classId,
-                                              std::uint16_t gender) const;
+                                              std::uint16_t gender,
+                                              std::uint16_t visualId) const;
     RepositoryResult<std::uint64_t> Delete(Database& db, std::uint64_t accountId,
                                            std::uint64_t characterId) const;
     RepositoryResult<CharacterSummary> Select(Database& db, std::uint64_t accountId,

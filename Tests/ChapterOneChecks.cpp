@@ -378,7 +378,7 @@ void RunChapterOneChecks() {
             servers.StopAll();
             return;
         }
-        auto created = characters.Create(db, registered.value, "ChapterHero", 1, 1);
+        auto created = characters.Create(db, registered.value, "ChapterHero", 1, 1, 1);
         if (!created.success) {
             Check("Chapter1CreateCheck: account + character created", false);
             servers.StopAll();

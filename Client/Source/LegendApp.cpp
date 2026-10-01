@@ -36,8 +36,8 @@ bool LegendApp::OnInitialize(legend::Engine& engine) {
 void LegendApp::OnUpdate(legend::Engine& engine, float deltaTime) {
     (void)deltaTime;
 
-    if (engine.GetInput().IsKeyPressed(SDL_SCANCODE_ESCAPE)) {
-        LOG_INFO("ESC pressed. Exiting test program.");
-        engine.Quit();
-    }
+    // Stage26 指令三十五：Esc 双绑定收编——全局 Esc 退出移除。
+    // Esc 语义归流程/场景层：流程页 = 返回上级（GameScene::Update），游戏内 =
+    // Settings 开关。退出程序走窗口关闭按钮（SDL QUIT 事件，Engine 已处理）。
+    (void)engine;
 }

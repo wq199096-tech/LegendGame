@@ -35,6 +35,8 @@ public:
 
     // 阶段11 指令十九：EnterWorldRequest 一次性取出（io 线程）。
     bool TakePendingEnterWorld(legend::network::Packet& out);
+    // 阶段26 指令十七：LeaveWorldRequest 一次性取出（仅 InWorld 状态接受）。
+    bool TakePendingLeaveWorld(legend::network::Packet& out);
 
     void SetState(WorldSessionState state) { m_state = state; }
     WorldSessionState State() const { return m_state; }
@@ -59,6 +61,9 @@ private:
     std::chrono::steady_clock::time_point m_lastPacketTime{std::chrono::steady_clock::now()};
     bool m_hasPendingEnterWorld = false;
     legend::network::Packet m_pendingEnterWorld;
+    // 阶段26 指令十七：主动离开世界 pending（io 线程接收，主循环处理）。
+    bool m_hasPendingLeaveWorld = false;
+    legend::network::Packet m_pendingLeaveWorld;
     std::uint64_t m_accountId = 0;
     std::uint64_t m_characterId = 0;
 };

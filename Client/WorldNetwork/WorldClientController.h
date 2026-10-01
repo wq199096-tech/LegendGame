@@ -47,6 +47,9 @@ public:
     void SetWorldEndpoint(const std::string& host, std::uint16_t port) {
         m_client->SetWorldEndpoint(host, port);
     }
+    // 阶段26 指令十七：主动离开世界（WorldReady 才有效；LeaveWorldSuccess 事件后
+    // 本地断开，由上层切回角色大厅）。
+    void SendLeaveWorld() { m_client->SendLeaveWorld(); }
     // 指令三十四：WorldReady 后发送移动输入（方向，禁止绝对坐标）。
     void SendMoveInput(float directionX, float directionY, float deltaTime);
     // 阶段14 指令五十九/六十一：Debug 攻击——只发目标（服务器重新验证）。

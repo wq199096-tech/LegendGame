@@ -54,6 +54,19 @@ struct WorldDisconnectNoticePayload {
     std::string reason; // 与阶段9 DisconnectNoticePayload 同布局
 };
 
+// 阶段26 指令十七：主动离开世界（区别于断线）——World 保存位置/移除玩家后回
+// LeaveWorldResponse；客户端收到后关闭 World 代理连接并回角色大厅重拉列表。
+struct LeaveWorldRequestPayload {
+    std::uint64_t requestId = 0;
+};
+
+struct LeaveWorldResponsePayload {
+    std::uint64_t requestId = 0;
+    bool success = false;
+    std::uint16_t errorCode = 0; // WorldErrorCode
+    std::string message;
+};
+
 // 阶段11 指令三十四：移动输入 —— 只发方向，禁止绝对坐标（指令三十五）。
 struct PlayerMoveInputPayload {
     std::uint32_t inputSequence = 0;
@@ -147,6 +160,13 @@ bool EncodeWorldDisconnectNotice(const WorldDisconnectNoticePayload& p,
                                  std::vector<std::uint8_t>& out);
 bool DecodeWorldDisconnectNotice(const std::uint8_t* data, std::size_t size,
                                  WorldDisconnectNoticePayload& out, std::string& error);
+// 阶段26 指令十七：主动离开世界。
+bool EncodeLeaveWorldRequest(const LeaveWorldRequestPayload& p, std::vector<std::uint8_t>& out);
+bool DecodeLeaveWorldRequest(const std::uint8_t* data, std::size_t size,
+                             LeaveWorldRequestPayload& out, std::string& error);
+bool EncodeLeaveWorldResponse(const LeaveWorldResponsePayload& p, std::vector<std::uint8_t>& out);
+bool DecodeLeaveWorldResponse(const std::uint8_t* data, std::size_t size,
+                              LeaveWorldResponsePayload& out, std::string& error);
 bool EncodePlayerMoveInput(const PlayerMoveInputPayload& p, std::vector<std::uint8_t>& out);
 bool DecodePlayerMoveInput(const std::uint8_t* data, std::size_t size,
                            PlayerMoveInputPayload& out, std::string& error);

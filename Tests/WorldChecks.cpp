@@ -38,6 +38,8 @@ void RunVerticalSliceChecks(); // 阶段25：Vertical Slice 检查（新角色�
 void RunUiModelChecks(); // 阶段25：UI 模型检查（指令六十七）
 void RunChapterOneChecks(); // 阶段25：Chapter One 端到端（真实服务器链路）
 void RunFullServerTopologyCheck(); // Stage25.5: config/topology contract
+int RunLeaveWorldChecks(WorldTestServers& servers); // Stage26 指令十七：主动离开世界
+int RunStage26FlowChecks(WorldTestServers& servers); // Stage26 指令三十六：玩家流程 E2E
 }
 
 namespace {
@@ -836,7 +838,56 @@ void RunWorldFullChainCheck(WorldTestServers& servers) {
 
 } // namespace
 
+#if defined(_WIN32)
+// Stage26 临时诊断：崩溃时打印异常码 + 符号化栈回溯（stdout 无缓冲，崩溃前落盘）。
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+namespace {
+LONG WINAPI LegendTestCrashHandler(EXCEPTION_POINTERS* info) {
+    static char buf[2048];
+    HANDLE proc = GetCurrentProcess();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(proc, nullptr, TRUE);
+    void* stack[62];
+    const USHORT frames = CaptureStackBackTrace(0, 62, stack, nullptr);
+    int n = std::snprintf(buf, sizeof(buf), "\n[Crash] code=0x%08lX addr=%p frames=%u\n",
+                          static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode),
+                          info->ExceptionRecord->ExceptionAddress,
+                          static_cast<unsigned>(frames));
+    if (n > 0) {
+        fwrite(buf, 1, static_cast<size_t>(n), stdout);
+        fflush(stdout);
+    }
+    alignas(SYMBOL_INFO) unsigned char symBuf[sizeof(SYMBOL_INFO) + 256 * sizeof(char)];
+    auto* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
+    for (USHORT i = 0; i < frames; ++i) {
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        DWORD64 disp = 0;
+        if (SymFromAddr(proc, reinterpret_cast<DWORD64>(stack[i]), &disp, sym)) {
+            n = std::snprintf(buf, sizeof(buf), "[Crash] #%.2u %s +0x%llX\n",
+                              static_cast<unsigned>(i), sym->Name,
+                              static_cast<unsigned long long>(disp));
+        } else {
+            n = std::snprintf(buf, sizeof(buf), "[Crash] #%.2u %p\n",
+                              static_cast<unsigned>(i), stack[i]);
+        }
+        if (n > 0) {
+            fwrite(buf, 1, static_cast<size_t>(n), stdout);
+            fflush(stdout);
+        }
+    }
+    fflush(stdout);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+} // namespace
+#endif
+
 int main() {
+#if defined(_WIN32)
+    SetUnhandledExceptionFilter(LegendTestCrashHandler);
+#endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     legend::debug::Logger::Init("testlogs");
     std::printf("[WorldTest] LegendWorldTests begin\n");
@@ -859,10 +910,25 @@ int main() {
 
         RunWorldHandshakeChecks(servers);
         RunEnterWorldChecks(servers);
+        RunLeaveWorldChecks(servers); // 阶段26 指令十七：主动离开世界链路
         RunMovementChecks(servers);
         RunSaveChecks(servers);
         RunLoginLinkChecks(servers);
         RunRobustnessChecks(servers);
+        servers.StopAll();
+    }
+
+    // ---- Stage26 指令三十六：玩家流程 E2E（注册/登录/建角/进世界/离开/重启持久化；
+    //      独立 servers 生命周期 + Gateway 内联拓扑）----
+    {
+        WorldTestServers servers;
+        servers.dbPath = TempDbPath("stage26_flow");
+        RemoveDb(servers.dbPath);
+        Check("FlowLoginStartCheck", servers.StartLogin());
+        Check("FlowWorldStartCheck", servers.StartWorld());
+        Check("FlowGatewayStartCheck", servers.StartGateway());
+
+        RunStage26FlowChecks(servers);
         servers.StopAll();
     }
 

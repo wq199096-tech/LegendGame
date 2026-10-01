@@ -232,7 +232,8 @@ DbResponse DbServer::Execute(const DbRequest& request) {
             CharacterCreateCommand command;
             if (!DecodeCharacterCreateCommand(request.payload.data(), request.payload.size(), command, error)) break;
             auto result = m_characterService.Create(m_database, command.accountId, command.name,
-                                                    command.classId, command.gender);
+                                                    command.classId, command.gender,
+                                                    command.visualId);
             if (!result.success) { response.errorCode = MapAccountError(result.errorCode);
                 response.message = result.errorMessage; return response; }
             EncodeCharacterSummary(result.value, response.payload);

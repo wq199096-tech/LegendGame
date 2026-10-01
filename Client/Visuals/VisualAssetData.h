@@ -111,6 +111,8 @@ struct VisualEntityDef {
     int serverVisualId = 0; // Npc：NpcSpawn 协议中的数字 visualId（0=n/a）
     std::map<std::string, std::string> animations; // 槽位 -> animationId
     std::string portraitAsset;                     // Player HUD 头像（可空）
+    // 阶段26 指令十一：可选着色 "#RRGGBB[AA]"（造型差异化；空 = 白色不染色）。
+    std::string tint;
 };
 
 struct VisualEntitySet {

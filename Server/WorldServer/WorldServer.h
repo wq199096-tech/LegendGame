@@ -529,6 +529,9 @@ private:
     void OnClientAccepted(legend::net::TcpConnectionPtr connection);
     void OnClientPacket(std::uint64_t connectionId, const legend::network::Packet& packet);
     void OnClientClosed(std::uint64_t connectionId, const std::error_code& ec);
+    // 阶段26 指令十七：主动离开世界（保存→移除→响应→关会话）。
+    void HandleLeaveWorldRequest(std::uint64_t connectionId,
+                                 const legend::network::Packet& packet);
 
     // Login 内部链路
     void ConnectToLogin();

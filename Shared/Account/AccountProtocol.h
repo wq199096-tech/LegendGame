@@ -83,6 +83,7 @@ struct CharacterCreateRequestPayload {
     std::string name;
     std::uint16_t classId = 0;
     std::uint16_t gender = 0;
+    std::uint16_t visualId = 1; // 阶段26 指令十一：初始造型槽位（1~3）
 };
 
 struct CharacterCreateResponsePayload {

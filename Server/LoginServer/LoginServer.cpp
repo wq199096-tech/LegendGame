@@ -608,10 +608,12 @@ void LoginServer::HandleAccountForward(std::uint64_t gatewayConnectionId, const 
                 return;
             }
             LOG_INFO("[Login] Character create request id=" + std::to_string(requestId) +
-                     " name=" + request.name + " class=" + std::to_string(request.classId));
+                     " name=" + request.name + " class=" + std::to_string(request.classId) +
+                     " visual=" + std::to_string(request.visualId));
             postDbTask(
                 [this, clientRequestId = request.requestId, token = request.sessionToken,
-                 name = request.name, classId = request.classId, gender = request.gender]() {
+                 name = request.name, classId = request.classId, gender = request.gender,
+                 visualId = request.visualId]() {
                     CharacterCreateResponsePayload response;
                     response.requestId = clientRequestId; // Client 侧 id 原样回传
                     auto resumed = m_sessionService.Resume(m_database, token);
@@ -622,7 +624,7 @@ void LoginServer::HandleAccountForward(std::uint64_t gatewayConnectionId, const 
                     } else {
                         auto created =
                             m_characterService.Create(m_database, resumed.value.accountId, name,
-                                                      classId, gender);
+                                                      classId, gender, visualId);
                         response.success = created.success;
                         response.errorCode = static_cast<std::uint16_t>(created.errorCode);
                         response.message =

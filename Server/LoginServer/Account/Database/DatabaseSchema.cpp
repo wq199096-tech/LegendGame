@@ -117,6 +117,11 @@ const char* kMigration5Statements[] = {
     "ALTER TABLE characters ADD COLUMN record_version INTEGER NOT NULL DEFAULT 1;",
 };
 
+// Stage26 指令十一/三十：初始造型槽位（1~3）；旧角色默认 1（外观兼容）。
+const char* kMigration6Statements[] = {
+    "ALTER TABLE characters ADD COLUMN visual_id INTEGER NOT NULL DEFAULT 1;",
+};
+
 struct Migration {
     int version;
     const char* const* statements;
@@ -129,6 +134,7 @@ const Migration kMigrations[] = {
     {3, kMigration3Statements, static_cast<int>(std::size(kMigration3Statements))},
     {4, kMigration4Statements, static_cast<int>(std::size(kMigration4Statements))},
     {5, kMigration5Statements, static_cast<int>(std::size(kMigration5Statements))},
+    {6, kMigration6Statements, static_cast<int>(std::size(kMigration6Statements))},
 };
 
 // ---------------------------------------------------------------------------
