@@ -1,4 +1,28 @@
-# CURRENT_STAGE — Stage25.6 Server Management GUI V0.256
+# CURRENT_STAGE — Stage26 Production Login & Character Lobby V0.26
+
+## Stage26（2026-10-01 开始）— **running**
+
+- **状态：running**。目标：把 LegendClient.exe 从"开发测试客户端 / AutoEnter 客户端"
+  升级为普通玩家可用的完整游戏入口：启动画面 → 服务器连接检查 → 登录/注册 →
+  角色大厅 → 创建/删除/选择角色 → 进入世界加载 → 正式游戏。
+- 硬性规则：默认启动绝不自动注册/登录/建角/进世界（AutoEnter 仅限 CI/Smoke/开发
+  模式，LEGEND_CLIENT_AUTO_ENTER / LEGEND_CLIENT_VS_SMOKE 保留）；客户端前端
+  ClientFlowState 状态机集中管理（Boot/Connecting/Login/Register/CharacterLobby/
+  CharacterCreate/EnteringWorld/InWorld/Disconnected/FatalError），禁止 bool 拼接；
+  全部新 UI 简体中文并统一 UiTheme/LegendClientUi 风格（禁止第二套 UI 框架、
+  禁止直接复用服务器 AdminUi 风格）；角色名唯一由 DB UNIQUE 约束保证（Schema
+  Migration，不破坏旧库）；每账号最多 4 角色（服务器权威）；删除角色二次确认
+  （重输角色名全匹配 + 服务器验证归属）；错误码统一 PlayerFacingErrorCatalog
+  中文映射；日志禁止打印密码/完整 Token；仍为 11 exe（8 正式 + 3 测试），
+  测试并入现有 3 套 CTest。
+- 开发分支：`stage26-production-client-entry`（基线 6f02d42）。完成标准 25 条见
+  阶段指令；完成后 PR + main CI 全绿再封板。
+- Git 纪律：开发分支长期开发，wip checkpoint 提交，最终
+  `feat(client): add production login and character lobby`。
+
+---
+
+## 历史：Stage25.6 Server Management GUI V0.256
 
 ## Stage25.6（2026-10-01）— **completed（封板）**
 

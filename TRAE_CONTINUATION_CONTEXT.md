@@ -4,23 +4,26 @@
 > 然后执行 git status / git log -5 --oneline，确认一致后继续。
 
 ## 当前续接状态（2026-10-01）
-- **Stage25.6 Server Management GUI 已封板（completed）；等待用户 Stage26 指令，
-  不自动进入任何新阶段。**
-- 六服务器（Db/Log/Login/Character/World/Gateway）双击打开全简体中文 GUI 管理台
-  （SDL3+Dear ImGui，五页签+状态栏，默认模式无 CMD，--console 供 CI/开发，
-  WM_CLOSE 优雅停机）；统一 LegendServerAdminUi + Tools/UiCore 共享 UI 基建；
-  Studio 服务器中心（启动全部/停止全部/单独启停/打开管理窗口）全部实测可用。
-- Stage25.5 Server Architecture（六服务拓扑、InternalProtocol v1、World 持久化
-  DbServer RPC 收口、11 exe CI）为 Stage25.6 基线，已随 PR #1 一并进入 main
-  （merge bd8eabc）；StatusSnapshotCheck 慢机竞态已修复（Run #67 失败根因，
-  内容断言并入等待谓词，未删测试未弱化断言）。
-- 最终验证：main CI 七步骤全绿（Configure/Build/Verify 11 exe/CTest hard gate/
-  Runtime gate/Topology smoke/Vertical Slice full 7-process chain）+
-  本机 GUI 人工验收 PASS（截图证据 testlogs/gui-acceptance/）。
+- **Stage26 Production Login & Character Lobby V0.26（running）**；开发分支
+  `stage26-production-client-entry`（基线 6f02d42）。目标：LegendClient.exe 升级为
+  正式玩家入口（启动画面→连接检查→登录/注册→角色大厅→创建/删除/选择角色→
+  进入世界加载→游戏）。默认启动绝不自动注册/登录/建角/进世界（AutoEnter 仅
+  CI/Smoke/开发，env 保留）。客户端 ClientFlowState 状态机集中管理；全部新 UI
+  简体中文统一 UiTheme/LegendClientUi；角色名唯一 DB UNIQUE + Migration；
+  每账号 4 角色上限服务器权威；删除二次确认；PlayerFacingErrorCatalog 中文映射；
+  11 exe 不变，测试并入 3 套 CTest；完成后 PR + main CI 全绿再封板。
+  详见 CURRENT_STAGE.md 与阶段指令（42 条）。
+- **Stage25.6 Server Management GUI 已封板（completed）**：六服务器全简体中文
+  GUI 管理台（SDL3+Dear ImGui 五页签+状态栏，默认无 CMD，--console 供 CI/开发，
+  WM_CLOSE 优雅停机）；LegendServerAdminUi + Tools/UiCore 共享 UI 基建；
+  Studio 服务器中心全部实测可用。PR #1 已合并 main（bd8eabc）。
+- Stage25.5 基线：六服务拓扑、InternalProtocol v1、World 持久化 DbServer RPC
+  收口、11 exe CI；StatusSnapshotCheck 慢机竞态已修复。
+- 最终基线验证：main CI 七步骤全绿（Run #71 = 36865757905）。
 - 现有 `LegendMapEditor.exe` = "传奇游戏开发工具 - LegendGame Studio"：
   中文主题/DPI/菜单/内容树/地图 Canvas/Asset Browser/Animation Preview/
   Quest Flow/BOSS/Chapter/Validation/Process Status/服务器中心。
-- 下一步：停止，等待用户 Stage26 指令。
+- 下一步：执行 Stage26 设计与实现（见 CURRENT_STAGE.md running 段）。
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
