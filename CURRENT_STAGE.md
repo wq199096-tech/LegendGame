@@ -2,9 +2,15 @@
 
 ## Stage25.6（2026-10-01）
 
-- 状态：**implementation WIP preserved（本地 GUI 工作已存在，正在整合；未经人工视觉
-  验收，未经 CI 验证，不得宣称封板 / not yet final accepted）**。
-  按用户要求：完成前不报告"服务器PC可视化完成"。
+- 状态：**implementation WIP preserved + GUI 验收 PASS（2026-10-01 本机实测）**。
+  六服务器（Login/Character/Gateway/World/Db/Log）逐一实测：SDL3+ImGui 真图形窗口、
+  全简体中文、GUI 模式 CMD=0、五页签（概览/连接/性能/日志/配置）+状态栏、
+  通用 12 项+专属指标全齐、依赖服务状态实时 Healthy、WM_CLOSE 优雅停机 6/6
+  （exit 0 + "graceful shutdown/Shutting down" 日志）、--console 模式 6/6 正常；
+  Studio 服务器中心实测：六行服务/启动全部(全绿+无CMD)/停止全部/单独启停/
+  打开管理窗口/日志过滤四级/清空显示 均真实生效。截图证据：
+  testlogs/gui-acceptance/。**未经 CI 全绿前不宣称封板**——Run #68 已全绿，
+  待合并 PR #1 后此条自动满足。
 - 整合方式：WIP 已备份于 `backup/stage25.6-wip`（f200669c），cherry-pick 至
   `stage25.6-integration`（基于 Stage25.5 c140e00）。在 Stage25.5 CI 修复全绿之前
   **暂停 Stage25.6 开发**（用户指令：CI 全绿才能继续 Stage25.6）。
@@ -50,14 +56,14 @@
 
 ## 历史：Stage25.5 Server Architecture Completion V0.255
 
-## Stage25.5（2026-10-01）— feature-complete, CI stabilization still required
+## Stage25.5（2026-10-01）— feature-complete, CI all green
 
-- 状态：**feature-complete, CI stabilization still required**。最新 CI
-  **Run #67 = 36846123700 FAILURE：失败点为「Run runtime tests (CTest hard gate)」**，
-  Runtime gate / Server topology smoke / Vertical Slice full 7-process chain
-  均因 CTest 失败被跳过。前一状态 Run #66 = 36827770559 FAILURE：仅
-  Vertical Slice runtime smoke (full 7-process chain) 失败，其余步骤全绿。
-  CI 全绿之前不得标记 completed；不进入 Stage26。
+- 状态：**CI 全绿（Run #68 = 36858823913 SUCCESS，PR #1 / stage25.6-integration 分支）**。
+  七步骤逐项确认：Configure / Build / Verify 11 exe / **CTest hard gate**（#67 失败点已修复）/
+  Runtime gate / Server topology smoke / **Vertical Slice full 7-process chain**（#66 失败点）
+  全部 SUCCESS。main 尚未合并（PR #1 待用户决定）。
+  历史失败：Run #67（CTest hard gate，StatusSnapshotCheck 慢机竞态）→ 已修复；
+  Run #66（仅 Vertical Slice smoke）。不进入 Stage26。
 - 稳定化修复（仅动失败链路，不重构已通过的 Db/Character/Log/Gateway/
   Persistence RPC/Topology smoke）：
   - Client AutoEnter 墙钟节流：原实现每帧 -1/60 为帧率依赖，CI llvmpipe 软渲染
