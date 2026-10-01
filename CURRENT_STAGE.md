@@ -2,8 +2,12 @@
 
 ## Stage25.6（2026-10-01）
 
-- 状态：**implemented（本地验证通过，待人工 GUI 视觉验收 + CI）**。
+- 状态：**implementation WIP preserved（本地 GUI 工作已存在，正在整合；未经人工视觉
+  验收，未经 CI 验证，不得宣称封板 / not yet final accepted）**。
   按用户要求：完成前不报告"服务器PC可视化完成"。
+- 整合方式：WIP 已备份于 `backup/stage25.6-wip`（f200669c），cherry-pick 至
+  `stage25.6-integration`（基于 Stage25.5 c140e00）。在 Stage25.5 CI 修复全绿之前
+  **暂停 Stage25.6 开发**（用户指令：CI 全绿才能继续 Stage25.6）。
 - 交付内容（用户 15 条硬性要求逐项落实）：
   - **统一 Admin UI 框架**：新静态库 `LegendServerAdminUi`（Server/AdminUi/）——
     ServerAdminApp（SDL3+Dear ImGui+EditorTheme，概览/连接/性能/日志/配置五页签+状态栏，
@@ -46,12 +50,14 @@
 
 ## 历史：Stage25.5 Server Architecture Completion V0.255
 
-## Stage25.5（2026-10-01）— feature-complete, CI stabilization in progress
+## Stage25.5（2026-10-01）— feature-complete, CI stabilization still required
 
-- 状态：**feature-complete, CI stabilization in progress**（CI Run #66 =
-  36827770559 FAILURE：仅 Vertical Slice runtime smoke (full 7-process chain)
-  失败；其余 Configure/Build/Verify 11 exe/CTest/Runtime gate/Topology smoke 全绿）。
-  Vertical Slice 全绿之前不得标记 completed；不进入 Stage25.6/Stage26。
+- 状态：**feature-complete, CI stabilization still required**。最新 CI
+  **Run #67 = 36846123700 FAILURE：失败点为「Run runtime tests (CTest hard gate)」**，
+  Runtime gate / Server topology smoke / Vertical Slice full 7-process chain
+  均因 CTest 失败被跳过。前一状态 Run #66 = 36827770559 FAILURE：仅
+  Vertical Slice runtime smoke (full 7-process chain) 失败，其余步骤全绿。
+  CI 全绿之前不得标记 completed；不进入 Stage26。
 - 稳定化修复（仅动失败链路，不重构已通过的 Db/Character/Log/Gateway/
   Persistence RPC/Topology smoke）：
   - Client AutoEnter 墙钟节流：原实现每帧 -1/60 为帧率依赖，CI llvmpipe 软渲染
@@ -62,6 +68,12 @@
     即依赖服务尚未 Healthy）退避 2s 重试（建角有界 5 次），替换原一次性标志位死锁。
   - Client 进世界失败重试：EnterWorld 失败（ticket 一次性作废）→ 重新选角换新
     ticket 重试，替换原 Failed 态死等。
+  - StatusSnapshotCheck 慢机加固（Run #67 CTest hard gate 失败点，诊断
+    `[Diag] Snapshot: got=1 effects=0`）：怪物 6 在 Burn 施加前生成的旧空快照
+    仍留在客户端队列且更新，快照等待反向扫描先命中它 → effects=0 假失败。
+    修复：检查前白盒重施 Burn（保证效果存活）+ 内容断言（2003/1 层）并入
+    等待谓词（跳过旧空快照；服务器快照漏带效果时 6s 内无匹配照样失败，
+    断言强度不变）。修复后本地 CTest 3/3 PASS。
   - CI Vertical Slice 步骤失败诊断：任何失败路径 dump 客户端+六服务日志尾部 30 行
     （不改变断言强度/不加 sleep/不 continue-on-error）。
 - 正式进程 8 个：LegendClient / LegendMapEditor(Studio) / LegendLoginServer /
