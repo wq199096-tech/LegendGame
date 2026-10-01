@@ -5,15 +5,20 @@
 > 然后执行 git status / git fetch origin / git pull --ff-only / git log -8 --oneline。
 > 禁止 git reset --hard / git clean -fd / checkout .（除非已证明安全）。
 
-## 最新状态：Stage25.5 Server Architecture Completion completed（2026-10-01）
-- **Stage25.5 completed**：六服务架构（Db/Log/Login/Character/World/Gateway + Client）、
-  InternalProtocol v1、共享 PersistenceClient/LogClient、Gateway 四态状态机、
-  11 exe CI、World 持久化全部经 DbServer RPC 收口（TRAE 补完 CODEX 未竟部分）。
-- 接管 Checkpoint：`2d48702 wip(stage25.5): preserve codex server architecture work`；
-  最终功能提交：`feat(server): complete multi-service server architecture`（见 git log）。
-- 本地验证：11/11 exe、CTest 三套件 0 failures、六服务拓扑 Smoke、
-  七进程 Vertical Slice Smoke（entered-world 经 World→DbServer RPC）全通过。
-- **不进入 Stage25.6 或 Stage26；等待用户指令。**
+## 最新状态：Stage25.6 Server Management GUI completed（2026-10-01）
+- **Stage25.6 completed（封板）**：六服务器（Db/Log/Login/Character/World/Gateway）
+  双击打开全简体中文 GUI 管理台（SDL3+Dear ImGui 五页签+状态栏，默认模式无 CMD，
+  --console 供 CI/开发，WM_CLOSE 优雅停机）；统一 LegendServerAdminUi +
+  Tools/UiCore 共享 UI 基建；Studio 服务器中心（启动全部/停止全部/单独启停/
+  打开管理窗口/实时状态）全部实测可用；本机人工 GUI 验收 PASS
+  （截图证据 testlogs/gui-acceptance/）。
+- 交付路径：PR #1（stage25.6-integration → main）已合并，merge SHA **bd8eabc**；
+  包含 Stage25.5 CTest 稳定化修复（StatusSnapshotCheck 慢机竞态，内容断言并入
+  等待谓词，未删测试未弱化断言）+ Stage25.6 全部 GUI 成果。
+- 最终验证：**main CI 七步骤全绿**（Configure CMake / Build all targets /
+  Verify 11 executables / CTest hard gate / Runtime gate / Server topology smoke /
+  Vertical Slice full 7-process chain）。
+- **下一步：停止。等待用户 Stage26 指令（不自动进入）。**
 
 ## 历史：Stage25 Chinese Studio UI Patch completed（2026-09-30）
 - 本补丁在原 `LegendMapEditor.exe` 内完成 LegendGame Studio 简体中文专业 UI 重构；

@@ -3,10 +3,12 @@
 > 本文件是长期稳定信息（不随阶段内进度变化）。新会话/续接时**必读**。
 
 ## 仓库
-- GitHub: https://github.com/wq199096-tech/LegendGame（远端 main 分支，唯一分支）
-- 本地仓库根: `d:\LegendGame-main`（构建目录 `d:\LegendGame-main\Build`，Debug）
-- 历史: 项目曾以中文路径 `d:\传奇1\...\LegendGame` + 独立构建副本 `D:\LegendGame` 开发
-  （中文路径 MSVC MSB8084 教训即来自该时期；现路径无中文，直接构建）
+- GitHub: https://github.com/wq199096-tech/LegendGame（远端 main 分支为主；
+  历史 PR/backup 分支保留归档）
+- 本地仓库根: `d:\LegendGame-main\LegendGame`（构建目录 `build/`，Debug；
+  构建用 VS BuildTools 自带 CMake 3.31）
+- 历史: 项目曾以中文路径 `d:\传奇1\...\LegendGame` + 独立构建副本 `D:\LegendGame`
+  开发（中文路径 MSVC MSB8084 教训即来自该时期；现路径无中文，直接构建）
 
 ## 技术栈
 - C++20 / CMake ≥3.24 / Visual Studio 2022 BuildTools（MSVC）/ Debug 构建

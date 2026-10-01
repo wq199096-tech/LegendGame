@@ -1,19 +1,36 @@
 # CURRENT_STAGE — Stage25.6 Server Management GUI V0.256
 
-## Stage25.6（2026-10-01）
+## Stage25.6（2026-10-01）— **completed（封板）**
 
-- 状态：**implementation WIP preserved + GUI 验收 PASS（2026-10-01 本机实测）**。
-  六服务器（Login/Character/Gateway/World/Db/Log）逐一实测：SDL3+ImGui 真图形窗口、
-  全简体中文、GUI 模式 CMD=0、五页签（概览/连接/性能/日志/配置）+状态栏、
-  通用 12 项+专属指标全齐、依赖服务状态实时 Healthy、WM_CLOSE 优雅停机 6/6
-  （exit 0 + "graceful shutdown/Shutting down" 日志）、--console 模式 6/6 正常；
-  Studio 服务器中心实测：六行服务/启动全部(全绿+无CMD)/停止全部/单独启停/
-  打开管理窗口/日志过滤四级/清空显示 均真实生效。截图证据：
-  testlogs/gui-acceptance/。**未经 CI 全绿前不宣称封板**——Run #68 已全绿，
-  待合并 PR #1 后此条自动满足。
-- 整合方式：WIP 已备份于 `backup/stage25.6-wip`（f200669c），cherry-pick 至
-  `stage25.6-integration`（基于 Stage25.5 c140e00）。在 Stage25.5 CI 修复全绿之前
-  **暂停 Stage25.6 开发**（用户指令：CI 全绿才能继续 Stage25.6）。
+- **状态：completed**。PR #1 已合并 main（merge SHA bd8eabc），main CI 全绿
+  （Run #70，七步骤逐项 SUCCESS），本机人工 GUI 验收 PASS。等待 Stage26 指令。
+- 封板清单（12 项）：
+  1. **六服务器 GUI 全部完成**：LegendLoginServer / LegendCharacterServer /
+     LegendGateway / LegendWorldServer / LegendDbServer / LegendLogServer
+     ——双击打开「LegendGame <服务中文名> 管理台」SDL3+Dear ImGui 真图形窗口。
+  2. **默认 GUI 模式无黑色 CMD 窗口**（WIN32_EXECUTABLE + /ENTRY:mainCRTStartup；
+     本机实测六进程 CMD 窗口数 = 0）。
+  3. **--console 保留命令行模式**用于 CI/开发（AttachConsole/AllocConsole 兜底）；
+     --hidden 供 Studio 静默拉起。
+  4. **全部简体中文**（界面/页签/字段/日志面板；中文字体回退链）。
+  5. **统一 AdminUi + UiCore**：LegendServerAdminUi 静态库（ServerAdminApp/
+     ServerMainRunner/LogCapture）+ Tools/UiCore 共享 legend_imgui/EditorTheme/
+     EditorStrings，Studio 与六服务器一套主题零重复。
+  6. **五个页签**：概览 / 连接 / 性能 / 日志 / 配置。
+  7. **状态栏**：服务名 | 运行状态 | 运行时长 | 警告数 | 错误数 | 当前时间。
+  8. **服务器专属指标**（概览+性能页）：Login(登录连接/认证成功失败/Session/Ticket
+     三计数)、Character(角色列表/创建/删除/选择/Ticket)、Gateway(登录转发/World
+     代理/依赖状态)、World(在线/Map1-3/怪物/NPC/掉落/传送门/Tick)、Db(SQLite/
+     DB 路径/DbWorker/查询/写入/事务/失败/Queue/Migration v5)、Log(接收/写入/
+     丢弃/当前文件/大小/fallback)。
+  9. **Graceful Shutdown**：WM_CLOSE → 优雅停机，绝不 TerminateProcess（六服
+     实测 exit 0 + "graceful shutdown/Shutting down" 日志，约 320ms）。
+  10. **Studio 服务器中心**：启动全部/停止全部/单独启停/打开管理窗口/实时状态
+      （端口/PID/状态绿字）/启动客户端。
+  11. **人工 GUI 验收 PASS**（2026-10-01 本机实测，截图证据 testlogs/gui-acceptance/）；
+      日志面板四级过滤/搜索/暂停滚动/清空显示实测可用。
+  12. **main CI 全绿**：Run #70（merge 提交 bd8eabc）七步骤 SUCCESS；PR 分支
+      侧 Run #68/#69 亦全绿（CTest hard gate 修复经 CI 真实验证）。
 - 交付内容（用户 15 条硬性要求逐项落实）：
   - **统一 Admin UI 框架**：新静态库 `LegendServerAdminUi`（Server/AdminUi/）——
     ServerAdminApp（SDL3+Dear ImGui+EditorTheme，概览/连接/性能/日志/配置五页签+状态栏，

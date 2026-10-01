@@ -4,20 +4,28 @@
 > 然后执行 git status / git log -5 --oneline，确认一致后继续。
 
 ## 当前续接状态（2026-10-01）
-- **Stage25.5 Server Architecture Completion 已封板（completed）**；不进入 Stage25.6/Stage26。
-- 六服务正式拓扑、内部协议 v1、Db/Log 客户端、Gateway 世界代理、Studio 七进程启动、
-  11 exe CI 与新增测试全部就位；**World 持久化已经 DbServer RPC 收口**（TRAE 补完）：
-  进世界三段加载链 + 位置/成长/金币/拾取/装备/任务/商店全部 RPC 化，事务在 DbServer 内原子提交。
-- 本地最终验证：11/11 exe、CTest 三套件 0 failures、六服务拓扑 Smoke、七进程 Vertical Slice。
-- Stage25 Chinese Studio UI Patch 已完成并作为本阶段基线，不修改 Stage26 玩法。
-- 现有 `LegendMapEditor.exe` 已升级为"传奇游戏开发工具 - LegendGame Studio"：中文主题、
-  中文系统字体+DPI、中文菜单/工具栏/内容树/Inspector/底部面板、真实地图视觉 Canvas、
-  Asset Browser/Animation Preview/Quest Flow/BOSS/Chapter/Validation/Process 中文 UI。
-- 下一步：停止，等待用户明确 Stage25.6 指令。
+- **Stage25.6 Server Management GUI 已封板（completed）；等待用户 Stage26 指令，
+  不自动进入任何新阶段。**
+- 六服务器（Db/Log/Login/Character/World/Gateway）双击打开全简体中文 GUI 管理台
+  （SDL3+Dear ImGui，五页签+状态栏，默认模式无 CMD，--console 供 CI/开发，
+  WM_CLOSE 优雅停机）；统一 LegendServerAdminUi + Tools/UiCore 共享 UI 基建；
+  Studio 服务器中心（启动全部/停止全部/单独启停/打开管理窗口）全部实测可用。
+- Stage25.5 Server Architecture（六服务拓扑、InternalProtocol v1、World 持久化
+  DbServer RPC 收口、11 exe CI）为 Stage25.6 基线，已随 PR #1 一并进入 main
+  （merge bd8eabc）；StatusSnapshotCheck 慢机竞态已修复（Run #67 失败根因，
+  内容断言并入等待谓词，未删测试未弱化断言）。
+- 最终验证：main CI 七步骤全绿（Configure/Build/Verify 11 exe/CTest hard gate/
+  Runtime gate/Topology smoke/Vertical Slice full 7-process chain）+
+  本机 GUI 人工验收 PASS（截图证据 testlogs/gui-acceptance/）。
+- 现有 `LegendMapEditor.exe` = "传奇游戏开发工具 - LegendGame Studio"：
+  中文主题/DPI/菜单/内容树/地图 Canvas/Asset Browser/Animation Preview/
+  Quest Flow/BOSS/Chapter/Validation/Process Status/服务器中心。
+- 下一步：停止，等待用户 Stage26 指令。
 
 ## 基本信息
 - GitHub repo: https://github.com/wq199096-tech/LegendGame（branch: main）
-- 本地: 仓库根 = `d:\LegendGame-main\LegendGame`（构建目录 `Build/`；push 走 SOCKS5 10808）
+- 本地: 仓库根 = `d:\LegendGame-main\LegendGame`（构建目录 `build/`；构建用 VS BuildTools
+  自带 CMake 3.31；git 代理 repo-local http://127.0.0.1:10809，代理间歇可用）
 - 阶段24 起始 HEAD: **1b43b61c494346411e0943fabfd01db520a6878a**
   （`docs: finalize stage 23 context`）
 

@@ -25,11 +25,13 @@ Shared/          协议与定义层（Server/Client 共用，仅依赖标准库�
                  chapters.json 为可选展示文件【阶段23/25】）
   Monster/       MonsterDefinition/LootTableDefinition/MonsterSpawnDefinition 定义【阶段23】
 Tools/
+  UiCore/        legend_imgui + EditorTheme/EditorStrings 共享 UI 基建（Studio 与
+                 六服务器管理台共链：一套主题/中文字体链/DPI）【阶段25.6】
   MapEditor/     LegendGame World Editor（TileMap + World 双工作区；WorldDocument +
                  GameDataDocument 文档模型；Validation 禁存；Asset Browser /
                  Animation Preview / Quest Flow / Boss Editor / Chapter Editor /
                  Quest Area Map Picker / Validate All / Launch Full Game /
-                 Stop Local Game / Process Status）【阶段22/23/25】
+                 Stop Local Game / Process Status / 服务器中心）【阶段22/23/25/25.6】
 Data/
   World/         world_manifest/maps/npcs/monster_spawns/portals/visual_maps.json
                  （6 文件，schemaVersion=1；visual_maps 为地图视觉定义【阶段24】）
@@ -38,8 +40,15 @@ Data/
                  chapters.json 为章节展示元数据，加载可选【阶段25】）
   Assets/        asset_manifest/animations/visual_entities/effects.json
                  （4 文件，Client 视觉资产域【阶段24】）
-Engine/          引擎（渲染/输入/网络 TcpServer/TcpClient/Logger）
+Engine/          引擎（渲染/输入/网络 TcpServer/TcpClient/Logger；阶段25.6 增加 SetSink
+                 日志捕获 sink + TcpConnection/TcpServer 收发包计数埋点）
 Server/
+  AdminUi/       LegendServerAdminUi 静态库：ServerAdminApp（SDL3+ImGui 五页签管理台：
+                 概览/连接/性能/日志/配置+状态栏，全简体中文）+ ServerMainRunner
+                 （GUI+worker 双线程/参数预扫描/优雅停机）+ LogCapture（Logger sink→
+                 4096 行环形缓冲→实时日志面板：级别过滤/搜索/暂停滚动/清空）
+                 【阶段25.6；六服务器 exe 为 WIN32_EXECUTABLE GUI 子系统，
+                 /ENTRY:mainCRTStartup，--console 开发/CI 模式，--hidden 隐藏窗口】
   Common/        ServerConfig + PersistenceClient + LogClient（超时/心跳/指数退避）
   Gateway/       GatewayServer/Session（统一接入、状态机、Login/Character/World 路由）
   Character/     CharacterServer（角色 List/Create/Delete/Select + SelectionTicket）
