@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "services": {
+    "login": { "host": "127.0.0.1", "port": 7100, "enabled": true },
+    "world": { "host": "127.0.0.1", "port": 7200, "enabled": true },
+    "gateway": { "host": "127.0.0.1", "port": 7300, "enabled": true },
+    "character": { "host": "127.0.0.1", "port": 7400, "enabled": true },
+    "db": { "host": "127.0.0.1", "port": 7500, "enabled": true },
+    "log": { "host": "127.0.0.1", "port": 7600, "enabled": true }
+  },
+  "persistence": {
+    "databasePath": "Data/legend_account.db",
+    "saveIntervalSeconds": 60
+  },
+  "heartbeat": {
+    "intervalSeconds": 5,
+    "timeoutSeconds": 15
+  },
+  "rpc": {
+    "timeoutMilliseconds": 5000
+  },
+  "security": {
+    "serviceToken": ""
+  }
+}

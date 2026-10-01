@@ -2440,13 +2440,18 @@ bool LegendMapEditorApp::LaunchEditorProcess(const char* name, const std::string
     return ok;
 }
 
-// 四进程全链：Login(7100)/Gateway(7300)/World(7200)/Client。
+// Stage25.5 完整拓扑：Db -> Log -> Login -> Character -> World -> Gateway -> Client。
 void LegendMapEditorApp::LaunchFullGame() {
     m_worldMessage = "";
-    bool allOk = LaunchEditorProcess("登录服务器", "LegendLoginServer.exe") &&
-                 LaunchEditorProcess("网关服务器", "LegendGateway.exe") &&
-                 LaunchEditorProcess("世界服务器", "LegendWorldServer.exe");
-    // Client 延迟 2s 启动（等服务器监听就绪）。
+    const std::string configArgs = "--config \"" + m_serverConfigPath + "\"";
+    bool allOk = LaunchEditorProcess("数据库服务器", "LegendDbServer.exe", configArgs) &&
+                 LaunchEditorProcess("日志服务器", "LegendLogServer.exe", configArgs);
+    if (allOk) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    allOk = allOk && LaunchEditorProcess("登录服务器", "LegendLoginServer.exe", configArgs) &&
+             LaunchEditorProcess("角色服务器", "LegendCharacterServer.exe", configArgs) &&
+             LaunchEditorProcess("世界服务器", "LegendWorldServer.exe", configArgs) &&
+             LaunchEditorProcess("网关服务器", "LegendGateway.exe", configArgs);
+    // Client 延迟 2s 启动（等内部握手与依赖重连就绪）。
     if (allOk) {
         std::thread([] { std::this_thread::sleep_for(std::chrono::milliseconds(2000)); }).join();
     }
@@ -3027,6 +3032,13 @@ void LegendMapEditorApp::DrawProcessStatusWindow() {
     if (m_processes.empty()) {
         ImGui::TextDisabled("本地游戏已停止");
     }
+    char configPath[260] = {};
+    std::snprintf(configPath, sizeof(configPath), "%s", m_serverConfigPath.c_str());
+    ImGui::SetNextItemWidth(360.0f);
+    if (ImGui::InputText("服务器配置", configPath, sizeof(configPath))) {
+        m_serverConfigPath = configPath;
+    }
+    ImGui::TextDisabled("端口: 登录 7100 | 世界 7200 | 网关 7300 | 角色 7400 | 数据库 7500 | 日志 7600");
     if (ImGui::Button("停止本地游戏")) {
         StopLocalGame();
     }

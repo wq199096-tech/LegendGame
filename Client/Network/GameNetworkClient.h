@@ -78,7 +78,7 @@ public:
     // 指令四十二：默认连接配置集中于此（不散落多个 cpp）
     struct Config {
         std::string gatewayHost = "127.0.0.1";
-        std::uint16_t gatewayPort = 7000;
+        std::uint16_t gatewayPort = 7300;
         std::string clientBuild = "0.9.0";
         std::string clientName = "LegendClient";
         double heartbeatIntervalSeconds = 5.0;

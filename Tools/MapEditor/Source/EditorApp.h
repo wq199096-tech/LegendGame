@@ -104,7 +104,7 @@ private:
     void DrawBossEditorWindow();          // Boss（怪物+掉落+刷新）绑定编辑
     void DrawProcessStatusWindow();       // 本地游戏进程状态
     void ValidateAll();                   // World + Game + Assets 全量校验
-    void LaunchFullGame();                // 四进程链（Login/Gateway/World/Client）
+    void LaunchFullGame();                // Stage25.5 七进程完整拓扑
     bool LaunchEditorProcess(const char* name, const std::string& exeName,
                              const std::string& args = "");
     void StopLocalGame();
@@ -141,6 +141,7 @@ private:
         bool exitCodeValid = false;
     };
     std::vector<EditorProcess> m_processes;
+    std::string m_serverConfigPath = "Config/servers.json";
 
     // ---- 阶段24：Visual Asset 绑定 / Assets Validation / Visual Preview ----
     void LoadVisualCatalog();              // Initialize 时加载 Data/Assets（失败降级）

@@ -310,7 +310,7 @@ RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db
     // 阶段17：SELECT 补 gold 列（Migration 2）。
     if (!stmt.Prepare(db.Handle(),
                       "SELECT id, account_id, name, class_id, gender, level, exp, gold, map_id, "
-                      "position_x, position_y, created_at, last_played_at, deleted "
+                      "position_x, position_y, created_at, last_played_at, deleted, record_version "
                       "FROM characters WHERE account_id = ? AND deleted = 0 "
                       "ORDER BY last_played_at IS NULL ASC, last_played_at DESC, created_at ASC;",
                       error)) {
@@ -333,6 +333,7 @@ RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db
         row.createdAt = stmt.ColumnInt64(11);
         row.lastPlayedAt = stmt.ColumnInt64(12);
         row.deleted = stmt.ColumnInt64(13) != 0;
+        row.recordVersion = static_cast<std::uint64_t>(stmt.ColumnInt64(14));
         result.value.push_back(std::move(row));
     }
     if (!error.empty()) {
@@ -349,7 +350,7 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
     std::string error;
     if (!stmt.Prepare(db.Handle(),
                       "SELECT id, account_id, name, class_id, gender, level, exp, gold, map_id, "
-                      "position_x, position_y, created_at, last_played_at, deleted "
+                      "position_x, position_y, created_at, last_played_at, deleted, record_version "
                       "FROM characters WHERE id = ?;",
                       error)) {
         return MapSqlError<std::optional<CharacterRow>>("FindCharacterById prepare", error);
@@ -371,6 +372,7 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
         row.createdAt = stmt.ColumnInt64(11);
         row.lastPlayedAt = stmt.ColumnInt64(12);
         row.deleted = stmt.ColumnInt64(13) != 0;
+        row.recordVersion = static_cast<std::uint64_t>(stmt.ColumnInt64(14));
         result.success = true;
         result.value = std::move(row);
         return result;
@@ -385,7 +387,7 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
 RepositoryResult<int> SoftDeleteCharacter(Database& db, std::uint64_t characterId) {
     Statement stmt;
     std::string error;
-    if (!stmt.Prepare(db.Handle(), "UPDATE characters SET deleted = 1 WHERE id = ?;", error)) {
+    if (!stmt.Prepare(db.Handle(), "UPDATE characters SET deleted = 1, record_version = record_version + 1 WHERE id = ?;", error)) {
         return MapSqlError<int>("SoftDeleteCharacter prepare", error);
     }
     stmt.BindInt64(1, static_cast<std::int64_t>(characterId));
@@ -400,7 +402,7 @@ RepositoryResult<int> UpdateLastPlayed(Database& db, std::uint64_t characterId) 
     Statement stmt;
     std::string error;
     if (!stmt.Prepare(db.Handle(),
-                      "UPDATE characters SET last_played_at = ? WHERE id = ?;", error)) {
+                      "UPDATE characters SET last_played_at = ?, record_version = record_version + 1 WHERE id = ?;", error)) {
         return MapSqlError<int>("UpdateLastPlayed prepare", error);
     }
     stmt.BindInt64(1, UnixNow());
@@ -420,7 +422,7 @@ RepositoryResult<int> UpdateWorldPosition(Database& db, std::uint64_t characterI
     std::string error;
     if (!stmt.Prepare(db.Handle(),
                       "UPDATE characters SET map_id = ?, position_x = ?, position_y = ?, "
-                      "last_played_at = ? WHERE id = ?;",
+                      "last_played_at = ?, record_version = record_version + 1 WHERE id = ?;",
                       error)) {
         return MapSqlError<int>("UpdateWorldPosition prepare", error);
     }
@@ -442,7 +444,7 @@ RepositoryResult<int> SaveProgression(Database& db, std::uint64_t characterId,
     Statement stmt;
     std::string error;
     if (!stmt.Prepare(db.Handle(),
-                      "UPDATE characters SET level = ?, exp = ?, gold = ? WHERE id = ?;",
+                      "UPDATE characters SET level = ?, exp = ?, gold = ?, record_version = record_version + 1 WHERE id = ?;",
                       error)) {
         return MapSqlError<int>("SaveProgression prepare", error);
     }
@@ -467,7 +469,7 @@ RepositoryResult<int> AddProgressionRewards(Database& db, std::uint64_t characte
     {
         Statement stmt;
         if (!stmt.Prepare(db.Handle(),
-                          "UPDATE characters SET exp = exp + ?, gold = gold + ? WHERE id = ?;",
+                          "UPDATE characters SET exp = exp + ?, gold = gold + ?, record_version = record_version + 1 WHERE id = ?;",
                           error)) {
             db.Execute("ROLLBACK;", error);
             return MapSqlError<int>("AddProgressionRewards prepare", error);

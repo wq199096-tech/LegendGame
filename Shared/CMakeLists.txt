@@ -11,6 +11,8 @@ add_library(LegendSharedNetwork STATIC
     Network/NetworkErrors.cpp
     Network/Protocol.cpp
     Network/MessageId.cpp
+    InternalProtocol/InternalProtocol.cpp
+    InternalProtocol/PersistenceMessages.cpp
     Account/AccountProtocol.cpp
     World/WorldProtocol.cpp
     Monster/MonsterProtocol.cpp

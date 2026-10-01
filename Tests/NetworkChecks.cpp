@@ -38,6 +38,9 @@ using legend::net::NetworkService;
 using legend::net::TcpConnectionPtr;
 using legend::net::TcpServer;
 
+int RunInternalProtocolChecks();
+int RunServerTopologyChecks();
+
 namespace {
 
 constexpr std::uint16_t kTestGatewayPort = 17210;
@@ -910,6 +913,8 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("[NetworkTest] start\n");
     RunProtocolChecks();
+    g_failures += RunInternalProtocolChecks();
+    g_failures += RunServerTopologyChecks();
     RunTcpConnectionChecks();
     RunNetworkChecks();
     std::printf("[NetworkTest] completed, failures = %d\n", g_failures);

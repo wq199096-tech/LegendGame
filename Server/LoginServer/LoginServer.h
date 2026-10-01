@@ -2,6 +2,8 @@
 
 #include "Engine/Network/NetworkService.h"
 #include "Engine/Network/TcpServer.h"
+#include "Server/Common/PersistenceClient.h"
+#include "Shared/Account/AccountProtocol.h"
 
 #include "Server/LoginServer/Account/AccountService.h"
 #include "Server/LoginServer/Account/CharacterService.h"
@@ -14,6 +16,7 @@
 #include "Shared/Network/Protocol.h" // 阶段9.2指令二：Shared Protocol 统一
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -52,6 +55,10 @@ public:
         std::int64_t lockoutSeconds = 60;                    // 指令二十九
         int maxFailedLogins = 5;                             // 指令二十九
         double ticketTtlSeconds = 60.0;                      // 指令五十一
+        std::string dbHost = "127.0.0.1";
+        std::uint16_t dbPort = 0; // production sets 7500; zero preserves isolated legacy tests
+        std::string serviceToken;
+        std::chrono::milliseconds dbTimeout{5000};
     };
 
     bool Start(std::string& error);
@@ -79,6 +86,8 @@ private:
     // 阶段10：GatewayAccountForward 信封 -> DB Worker 任务 -> post 回 io 发响应。
     void HandleAccountForward(std::uint64_t gatewayConnectionId,
                               const legend::network::Packet& packet);
+    void HandleRemoteAccountForward(std::uint64_t gatewayConnectionId,
+                                    const legend::account::AccountEnvelope& envelope);
     // 把响应信封发回 Gateway（io 线程内调用；Gateway 断开则丢弃）。
     void SendAccountResponse(std::uint64_t gatewayConnectionId, std::uint64_t requestId,
                              std::uint64_t clientConnectionId, std::uint16_t innerMessageId,
@@ -101,6 +110,7 @@ private:
     legend::account::SessionService m_sessionService;
     legend::account::CharacterService m_characterService;
     legend::account::TicketStore m_ticketStore;
+    std::shared_ptr<legend::server::PersistenceClient> m_persistence;
 };
 
 } // namespace legend::login

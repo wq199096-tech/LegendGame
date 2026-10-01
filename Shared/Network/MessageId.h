@@ -130,6 +130,14 @@ enum class MessageId : std::uint16_t {
     RespawnRequest = 346,
     RespawnResponse = 347,
     PlayerRespawned = 348,
+    // Stage25.5: private server-to-server protocol. Clients are never routed to these IDs.
+    InternalServiceHandshake = 1000,
+    InternalServiceHandshakeAck = 1001,
+    InternalHeartbeat = 1002,
+    InternalDbRequest = 1010,
+    InternalDbResponse = 1011,
+    InternalLogEvent = 1020,
+    InternalLogAck = 1021,
     WorldErrorResponse = 2550,
     ErrorResponse = 255,
 };
@@ -288,6 +296,13 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::RespawnRequest:
         case MessageId::RespawnResponse:
         case MessageId::PlayerRespawned:
+        case MessageId::InternalServiceHandshake:
+        case MessageId::InternalServiceHandshakeAck:
+        case MessageId::InternalHeartbeat:
+        case MessageId::InternalDbRequest:
+        case MessageId::InternalDbResponse:
+        case MessageId::InternalLogEvent:
+        case MessageId::InternalLogAck:
         case MessageId::WorldErrorResponse:
         case MessageId::ErrorResponse:
             return true;

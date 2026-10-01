@@ -14,17 +14,20 @@
 - 依赖全部 FetchContent 自动下载
 
 ## 进程架构
-- **LegendClient**：SDL3 + OpenGL 客户端。Gateway 直连账号链路（7100/7400 经 GatewayServer 7300），
-  选择角色拿 SelectionTicket 后**直连 WorldServer**（127.0.0.1:7200）
-- **LegendGateway**：账号消息信封转发（不解析业务 payload）
-- **LegendLoginServer**：账号/角色/Session/SelectionTicket（7100）；账号 DB（WAL）
-- **LegendWorldServer**：世界权威（7200）；内部连接 LoginServer 消费 Ticket；独立 DbWorker 单线程 DB（io 线程禁止同步 SQLite）
-- 同一 SQLite 数据库（data/legend_account.db），Login/World 共享
+- **Stage25.5 起正式拓扑**：8 个正式程序 + 3 个测试程序；旧的 Login + Gateway + World
+  三服务组合不再是最终架构。
+- **LegendClient**：SDL3 + OpenGL 客户端；账号和世界两个逻辑频道均连接 Gateway 7300。
+- **LegendGateway**：统一接入、连接状态、安全校验与 Login/Character/World 路由；不访问 SQLite。
+- **LegendLoginServer**：账号认证、Argon2id 密码校验、Session；正式模式经 PersistenceClient 访问 DbServer。
+- **LegendCharacterServer**：角色 List/Create/Delete/Select、归属校验、SelectionTicket；经 DbServer 持久化。
+- **LegendWorldServer**：世界权威（地图/AOI/战斗/技能/任务运行态），消费 CharacterServer Ticket。
+- **LegendDbServer**：SQLite/WAL、Schema/Migration、DbWorker、账号/角色及持久化 RPC。
+- **LegendLogServer**：异步审计队列、敏感字段拒绝、按日/服务 JSONL；业务端 LogClient 断线缓冲并自动恢复。
 
 ## 数据库
 - schema_version 单行表（id=1 主键 + UPSERT），`kCurrentSchemaVersion` 在 DatabaseSchema.h
 - Migration 1: accounts/characters/sessions；2: characters.gold；3: inventory_items/character_equipment；
-  4: character_quests/character_quest_objectives（阶段19）
+  4: character_quests/character_quest_objectives（阶段19）；5: characters.record_version（Stage25.5）
 - 只存玩家数据（账号/角色/成长/背包/装备/任务状态）；一切 Definition（地图/NPC/怪物刷怪点/
   Portal/物品/怪物/技能/状态/任务/商店/传送/LootTable）**不入库**——阶段22/23 起改为
   Data/World（5 JSON）+ Data/Game（9 JSON）数据驱动（JSON 入库，运行时 db 与 backup 不入库）
@@ -33,7 +36,7 @@
 - 三套 CTest（禁止新增第四个）：LegendNetworkTests / LegendAccountTests / LegendWorldTests（后缀追加源文件）
 - WorldTests 端口 17240(World)/17241(Login)/17242(Gateway)；测试 DB: testdata/world_test_<pid>/*.db
 - 共享测试基建：Tests/WorldTestHarness.h（worldtest namespace：WorldTestServers/WorldTestClient/Check/WaitUntil/TempDbPath）
-- GitHub Actions: .github/workflows/windows-build.yml（Configure → Build → Verify 8 exe → CTest 硬门禁，禁止 continue-on-error；
+- GitHub Actions: .github/workflows/windows-build.yml（Configure → Build → Verify 11 exe → CTest 硬门禁 → 六服务拓扑 Smoke → 七进程 Vertical Slice；禁止 continue-on-error；
   失败时上传 ctest.log artifact + `::error::` 注解输出 FAIL 行——注解 API 公开可读）
 - CI 日志/logs/artifacts API 无 token 均返回 "Must have admin rights"，只能靠注解通道拿失败信息
 - git 推送：直连被重置时走 SOCKS5：`git -c http.proxy=socks5h://127.0.0.1:10808 -c https.proxy=socks5h://127.0.0.1:10808 push origin main`；

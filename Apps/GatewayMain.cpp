@@ -1,4 +1,5 @@
 #include "Server/Gateway/GatewayServer.h"
+#include "Server/Common/ServerConfig.h"
 
 #include "Engine/Debug/Logger.h"
 
@@ -10,6 +11,19 @@
 // 不 link SDL/OpenGL/Renderer/GameScene。
 int main(int argc, char** argv) {
     legend::gateway::GatewayConfig config;
+    std::string configPath = "Config/servers.json";
+    legend::server::ServerConfig topology;
+    std::string configError;
+    if (legend::server::LoadServerConfig(configPath, topology, configError)) {
+        const auto* gateway = legend::server::FindService(topology, "gateway");
+        const auto* login = legend::server::FindService(topology, "login");
+        const auto* character = legend::server::FindService(topology, "character");
+        const auto* world = legend::server::FindService(topology, "world");
+        config.listenPort = gateway->port;
+        config.loginHost = login->host; config.loginPort = login->port;
+        config.characterHost = character->host; config.characterPort = character->port;
+        config.worldHost = world->host; config.worldPort = world->port;
+    }
 
     // 指令一百二十四：命令行参数（未知参数打印 usage）
     for (int i = 1; i < argc; ++i) {
@@ -17,15 +31,27 @@ int main(int argc, char** argv) {
         auto value = [&]() -> std::string {
             return (i + 1 < argc) ? argv[++i] : std::string();
         };
-        if (arg == "--port" && i + 1 < argc) {
+        if (arg == "--config" && i + 1 < argc) {
+            configPath = argv[++i];
+            if (!legend::server::LoadServerConfig(configPath, topology, configError)) {
+                std::fprintf(stderr, "Config error: %s\n", configError.c_str()); return 1;
+            }
+            const auto* gateway = legend::server::FindService(topology, "gateway");
+            const auto* login = legend::server::FindService(topology, "login");
+            const auto* character = legend::server::FindService(topology, "character");
+            const auto* world = legend::server::FindService(topology, "world");
+            config.listenPort=gateway->port; config.loginHost=login->host; config.loginPort=login->port;
+            config.characterHost=character->host; config.characterPort=character->port;
+            config.worldHost=world->host; config.worldPort=world->port;
+        } else if (arg == "--port" && i + 1 < argc) {
             config.listenPort = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         } else if (arg == "--login-host" && i + 1 < argc) {
             config.loginHost = argv[++i];
         } else if (arg == "--login-port" && i + 1 < argc) {
             config.loginPort = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         } else {
-            std::printf("Usage: LegendGateway.exe [--port 7000] [--login-host 127.0.0.1] "
-                        "[--login-port 7100]\n");
+            std::printf("Usage: LegendGateway.exe [--config Config/servers.json] [--port 7300] "
+                        "[--login-host 127.0.0.1] [--login-port 7100]\n");
             return arg == "--help" || arg == "-h" ? 0 : 1;
         }
     }

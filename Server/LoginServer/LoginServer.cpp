@@ -4,6 +4,7 @@
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
 #include "Shared/Account/AccountProtocol.h"
 #include "Shared/Account/AccountTypes.h"
+#include "Shared/InternalProtocol/PersistenceMessages.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/ByteWriter.h"
 #include "Shared/World/WorldError.h"
@@ -68,26 +69,36 @@ LoginServer::LoginServer(net::NetworkService& service)
       m_accountService(m_config.maxFailedLogins, m_config.lockoutSeconds) {}
 
 bool LoginServer::Start(std::string& error) {
-    // 阶段10 指令四：data 目录不存在则自动创建；数据库初始化自动建 Schema。
-    std::error_code fsError;
-    const std::filesystem::path dbPath(m_config.databasePath);
-    if (dbPath.has_parent_path()) {
-        std::filesystem::create_directories(dbPath.parent_path(), fsError);
+    if (m_config.dbPort != 0) {
+        legend::server::PersistenceClient::Config persistence;
+        persistence.host = m_config.dbHost;
+        persistence.port = m_config.dbPort;
+        persistence.serviceType = legend::internal::ServiceType::LoginServer;
+        persistence.instanceId = "login-1";
+        persistence.serviceToken = m_config.serviceToken;
+        persistence.requestTimeout = m_config.dbTimeout;
+        m_persistence = std::make_shared<legend::server::PersistenceClient>(m_service,
+                                                                           std::move(persistence));
+        m_persistence->Start();
+    } else {
+        // Legacy isolated-test mode. Formal deployment always uses DbServer.
+        std::error_code fsError;
+        const std::filesystem::path dbPath(m_config.databasePath);
+        if (dbPath.has_parent_path()) std::filesystem::create_directories(dbPath.parent_path(), fsError);
+        if (!m_database.Open(m_config.databasePath, error)) {
+            error = "database open failed: " + error;
+            return false;
+        }
+        if (!account::InitializeSchema(m_database, error)) {
+            error = "database schema init failed: " + error;
+            m_database.Close();
+            return false;
+        }
+        m_dbWorker.Start();
     }
-    if (!m_database.Open(m_config.databasePath, error)) {
-        // 指令九十八：打开/损坏失败 -> 启动失败（不得静默另建覆盖）
-        error = "database open failed: " + error;
-        return false;
-    }
-    if (!account::InitializeSchema(m_database, error)) {
-        error = "database schema init failed: " + error;
-        m_database.Close();
-        return false;
-    }
-    m_dbWorker.Start();
     if (!m_server->Listen(m_config.listenPort, error)) {
-        m_dbWorker.Stop();
-        m_database.Close();
+        if (m_persistence) { m_persistence->Stop(); m_persistence.reset(); }
+        else { m_dbWorker.Stop(); m_database.Close(); }
         return false;
     }
     m_server->StartAccepting(
@@ -103,8 +114,13 @@ void LoginServer::Stop() {
         std::lock_guard<std::mutex> lock(m_gatewaysMutex);
         m_gateways.clear();
     }
-    m_dbWorker.Stop(); // 等待队列内任务执行完（结果 post 回 io 后由 m_stopped 丢弃）
-    m_database.Close();
+    if (m_persistence) {
+        m_persistence->Stop();
+        m_persistence.reset();
+    } else {
+        m_dbWorker.Stop(); // 等待队列内任务执行完（结果 post 回 io 后由 m_stopped 丢弃）
+        m_database.Close();
+    }
 }
 
 void LoginServer::OnGatewayAccepted(net::TcpConnectionPtr connection) {
@@ -393,6 +409,11 @@ void LoginServer::HandleAccountForward(std::uint64_t gatewayConnectionId, const 
     }
     const std::uint64_t requestId = envelope.requestId;
     const std::uint64_t clientConnectionId = envelope.clientConnectionId;
+
+    if (m_persistence) {
+        HandleRemoteAccountForward(gatewayConnectionId, envelope);
+        return;
+    }
 
     // DB Worker 任务闭包统一形态：捕获必要参数，执行 DB 操作，post 结果回 io。
     // 阶段10 UAF 修复：io 完成回调持 shared_from_this 保活（self），
@@ -707,6 +728,96 @@ void LoginServer::HandleAccountForward(std::uint64_t gatewayConnectionId, const 
             // 指令九十二：未知内层消息 -> 丢弃（不断 Gateway 链）
             LOG_WARN("[Login] Unknown account inner message id " +
                      std::to_string(envelope.innerMessageId) + " dropped.");
+            return;
+    }
+}
+
+void LoginServer::HandleRemoteAccountForward(
+    std::uint64_t gatewayConnectionId, const legend::account::AccountEnvelope& envelope) {
+    using namespace legend::internal;
+    const auto reply = [self = shared_from_this(), gatewayConnectionId,
+                        requestId = envelope.requestId,
+                        clientConnectionId = envelope.clientConnectionId](
+                           std::uint16_t messageId, std::vector<std::uint8_t> payload) {
+        if (!self->m_stopped.load()) {
+            self->SendAccountResponse(gatewayConnectionId, requestId, clientConnectionId,
+                                      messageId, std::move(payload));
+        }
+    };
+    const auto accountError = [](InternalErrorCode code) {
+        if (code == InternalErrorCode::NotAuthenticated) return AccountErrorCode::SessionInvalid;
+        if (code == InternalErrorCode::DatabaseUnavailable || code == InternalErrorCode::Timeout ||
+            code == InternalErrorCode::ServiceUnavailable) return AccountErrorCode::ServiceUnavailable;
+        return AccountErrorCode::InternalError;
+    };
+    std::string error;
+    switch (static_cast<MessageId>(envelope.innerMessageId)) {
+        case MessageId::RegisterRequest: {
+            RegisterRequestPayload request;
+            if (!account::DecodeRegisterRequest(envelope.innerPayload.data(),
+                                                envelope.innerPayload.size(), request, error)) return;
+            std::vector<std::uint8_t> payload;
+            if (!EncodeAccountCredentials({request.username, request.password}, payload)) return;
+            m_persistence->AsyncRequest(DbOperation::SaveAccount, std::move(payload),
+                [reply, requestId = request.requestId, accountError](DbResponse db) mutable {
+                    RegisterResponsePayload response; response.requestId = requestId;
+                    response.success = db.errorCode == InternalErrorCode::Ok;
+                    response.errorCode = static_cast<std::uint16_t>(accountError(db.errorCode));
+                    response.message = response.success ? "ok" : "registration failed";
+                    AccountRegisterResult result; std::string decode;
+                    if (response.success && DecodeAccountRegisterResult(db.payload.data(), db.payload.size(), result, decode))
+                        response.accountId = result.accountId;
+                    else if (response.success) { response.success = false; response.message = "invalid database response"; }
+                    std::vector<std::uint8_t> bytes; EncodeRegisterResponse(response, bytes);
+                    reply(static_cast<std::uint16_t>(MessageId::RegisterResponse), std::move(bytes));
+                });
+            return;
+        }
+        case MessageId::AccountLoginRequest: {
+            AccountLoginRequestPayload request;
+            if (!account::DecodeAccountLoginRequest(envelope.innerPayload.data(),
+                                                     envelope.innerPayload.size(), request, error)) return;
+            std::vector<std::uint8_t> payload;
+            if (!EncodeAccountCredentials({request.username, request.password}, payload)) return;
+            m_persistence->AsyncRequest(DbOperation::LoadAccount, std::move(payload),
+                [reply, requestId = request.requestId, accountError](DbResponse db) mutable {
+                    AccountLoginResponsePayload response; response.requestId = requestId;
+                    response.success = db.errorCode == InternalErrorCode::Ok;
+                    response.errorCode = static_cast<std::uint16_t>(accountError(db.errorCode));
+                    response.message = response.success ? "ok" : "login failed";
+                    AccountLoginResult result; std::string decode;
+                    if (response.success && DecodeAccountLoginResult(db.payload.data(), db.payload.size(), result, decode)) {
+                        response.accountId = result.accountId; response.sessionToken = std::move(result.sessionToken);
+                        response.expiresAt = result.expiresAt;
+                    } else if (response.success) { response.success = false; response.message = "invalid database response"; }
+                    std::vector<std::uint8_t> bytes; EncodeAccountLoginResponse(response, bytes);
+                    reply(static_cast<std::uint16_t>(MessageId::AccountLoginResponse), std::move(bytes));
+                });
+            return;
+        }
+        case MessageId::SessionResumeRequest: {
+            SessionResumeRequestPayload request;
+            if (!account::DecodeSessionResumeRequest(envelope.innerPayload.data(),
+                                                      envelope.innerPayload.size(), request, error)) return;
+            std::vector<std::uint8_t> payload;
+            if (!EncodeValidateSessionRequest({request.sessionToken}, payload)) return;
+            m_persistence->AsyncRequest(DbOperation::ValidateSession, std::move(payload),
+                [reply, requestId = request.requestId, accountError](DbResponse db) mutable {
+                    SessionResumeResponsePayload response; response.requestId = requestId;
+                    response.success = db.errorCode == InternalErrorCode::Ok;
+                    response.errorCode = static_cast<std::uint16_t>(accountError(db.errorCode));
+                    response.message = response.success ? "ok" : "session resume failed";
+                    ValidateSessionResult result; std::string decode;
+                    if (response.success && DecodeValidateSessionResult(db.payload.data(), db.payload.size(), result, decode)) {
+                        response.accountId = result.accountId; response.expiresAt = result.expiresAt;
+                    } else if (response.success) { response.success = false; response.message = "invalid database response"; }
+                    std::vector<std::uint8_t> bytes; EncodeSessionResumeResponse(response, bytes);
+                    reply(static_cast<std::uint16_t>(MessageId::SessionResumeResponse), std::move(bytes));
+                });
+            return;
+        }
+        default:
+            LOG_WARN("[Login] Character request reached LoginServer while CharacterServer routing is enabled.");
             return;
     }
 }

@@ -39,7 +39,7 @@ jobs:
           Get-ChildItem $dst -Filter *.dll | ForEach-Object { Write-Host $_.Name }
           Write-Host 'MESA SOFTWARE GL INSTALLED'
 
-      - name: Verify artifacts (8 executables)
+      - name: Verify artifacts (8 formal + 3 test executables)
         shell: pwsh
         run: |
           $exes = @(
@@ -48,6 +48,9 @@ jobs:
             'build/bin/Debug/LegendGateway.exe',
             'build/bin/Debug/LegendLoginServer.exe',
             'build/bin/Debug/LegendWorldServer.exe',
+            'build/bin/Debug/LegendCharacterServer.exe',
+            'build/bin/Debug/LegendDbServer.exe',
+            'build/bin/Debug/LegendLogServer.exe',
             'build/bin/Debug/LegendNetworkTests.exe',
             'build/bin/Debug/LegendAccountTests.exe',
             'build/bin/Debug/LegendWorldTests.exe'
@@ -58,6 +61,7 @@ jobs:
           Write-Host 'NETWORK BUILD PASS'
           Write-Host 'ACCOUNT BUILD PASS'
           Write-Host 'WORLD BUILD PASS'
+          Write-Host 'VERIFY 11 EXECUTABLES PASS (8 FORMAL + 3 TEST)'
 
       # 阶段9.3指令三十一 + 阶段10指令一百零七 + 阶段11指令一百一十三：
       # CTest Runtime 硬门禁（禁止 continue-on-error）
@@ -119,10 +123,39 @@ jobs:
           Write-Host 'ACCOUNT RUNTIME TEST PASS'
           Write-Host 'WORLD RUNTIME TEST PASS'
 
-      # 阶段25 指令七十/六十九：Full Runtime Smoke —— 真实四进程链
-      # Login(7100)/Gateway(7300)/World(7200) + Client（AUTO_ENTER + VS_SMOKE 30s）。
+      - name: Server topology smoke (6 services, heartbeat window)
+        shell: pwsh
+        run: |
+          $bin = 'build/bin/Debug'
+          $processes = @()
+          try {
+            foreach ($name in @('LegendDbServer','LegendLogServer','LegendLoginServer','LegendCharacterServer','LegendWorldServer','LegendGateway')) {
+              $processes += Start-Process -FilePath "$bin/$name.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+            }
+            $ports = @(7500,7600,7100,7400,7200,7300)
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $ready = $true
+              foreach ($port in $ports) {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                try { $tcp.Connect('127.0.0.1',$port) } catch { $ready = $false } finally { $tcp.Dispose() }
+              }
+              if (-not $ready) { Start-Sleep -Milliseconds 250 }
+            } until ($ready -or (Get-Date) -ge $deadline)
+            if (-not $ready) { Write-Error 'Topology ports did not become ready'; exit 1 }
+            $holdUntil = (Get-Date).AddSeconds(20)
+            while ((Get-Date) -lt $holdUntil) {
+              foreach ($proc in $processes) { if ($proc.HasExited) { Write-Error "service pid $($proc.Id) exited"; exit 1 } }
+              Start-Sleep -Milliseconds 500
+            }
+            Write-Host 'SERVER TOPOLOGY SMOKE PASS'
+          } finally {
+            foreach ($proc in $processes) { if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } }
+          }
+
+      # Stage25.5: full topology + Client vertical slice.
       # 验证 world-ready 与干净退出（禁止删测试/弱化门禁——独立硬步骤）。
-      - name: Vertical Slice runtime smoke (4-process chain)
+      - name: Vertical Slice runtime smoke (full 7-process chain)
         shell: pwsh
         run: |
           $env:GALLIUM_DRIVER = 'llvmpipe'
@@ -130,11 +163,24 @@ jobs:
           $env:LEGEND_CLIENT_VS_SMOKE = '1'
           $bin = 'build/bin/Debug'
           Remove-Item Logs/latest.log -ErrorAction SilentlyContinue
-          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -WorkingDirectory . -PassThru
-          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -WorkingDirectory . -PassThru
-          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -WorkingDirectory . -PassThru
+          $db = Start-Process -FilePath "$bin/LegendDbServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+          $logServer = Start-Process -FilePath "$bin/LegendLogServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+          $character = Start-Process -FilePath "$bin/LegendCharacterServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
+          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -ArgumentList '--config','Config/servers.json' -WorkingDirectory . -PassThru
           try {
-            Start-Sleep -Seconds 8
+            $ports = @(7500,7600,7100,7400,7200,7300)
+            $readyDeadline = (Get-Date).AddSeconds(30)
+            do {
+              $ready = $true
+              foreach ($port in $ports) {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                try { $tcp.Connect('127.0.0.1',$port) } catch { $ready = $false } finally { $tcp.Dispose() }
+              }
+              if (-not $ready) { Start-Sleep -Milliseconds 250 }
+            } until ($ready -or (Get-Date) -ge $readyDeadline)
+            if (-not $ready) { Write-Error 'Full topology readiness failed'; exit 1 }
             $client = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
             $deadline = (Get-Date).AddSeconds(150)
             while ((Get-Date) -lt $deadline -and -not $client.HasExited) {
@@ -159,9 +205,9 @@ jobs:
               Write-Error 'VsSmoke pass marker missing (30s alive clean quit)'
               exit 1
             }
-            Write-Host 'VERTICAL SLICE RUNTIME SMOKE PASS (login/gateway/world/client)'
+            Write-Host 'VERTICAL SLICE RUNTIME SMOKE PASS (db/log/login/character/world/gateway/client)'
           } finally {
-            foreach ($proc in @($world, $gateway, $login)) {
+            foreach ($proc in @($gateway, $world, $character, $login, $logServer, $db)) {
               if ($proc -and -not $proc.HasExited) {
                 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
               }

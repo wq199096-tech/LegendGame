@@ -1769,7 +1769,7 @@ void RunQuestChainChecks() {
                 QueryScalar(oldDbPath, "SELECT COUNT(*) FROM character_quests;");
             const std::int64_t objectiveRows =
                 QueryScalar(oldDbPath, "SELECT COUNT(*) FROM character_quest_objectives;");
-            ok = ok && version == 4 && characterRows == 1 && itemRows == 1 && levelRow == 7 &&
+            ok = ok && version == account::kCurrentSchemaVersion && characterRows == 1 && itemRows == 1 && levelRow == 7 &&
                  questRows == 0 && objectiveRows == 0;
             upgraded.Close();
         }

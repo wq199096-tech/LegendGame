@@ -60,6 +60,7 @@ struct CharacterRow {
     std::int64_t createdAt = 0;
     std::int64_t lastPlayedAt = 0;
     bool deleted = false;
+    std::uint64_t recordVersion = 1;
 };
 
 namespace AccountRepository {

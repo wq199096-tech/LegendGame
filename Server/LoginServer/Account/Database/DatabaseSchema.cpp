@@ -113,6 +113,10 @@ const char* kMigration4Statements[] = {
     "ON character_quest_objectives(character_id);",
 };
 
+const char* kMigration5Statements[] = {
+    "ALTER TABLE characters ADD COLUMN record_version INTEGER NOT NULL DEFAULT 1;",
+};
+
 struct Migration {
     int version;
     const char* const* statements;
@@ -124,6 +128,7 @@ const Migration kMigrations[] = {
     {2, kMigration2Statements, static_cast<int>(std::size(kMigration2Statements))},
     {3, kMigration3Statements, static_cast<int>(std::size(kMigration3Statements))},
     {4, kMigration4Statements, static_cast<int>(std::size(kMigration4Statements))},
+    {5, kMigration5Statements, static_cast<int>(std::size(kMigration5Statements))},
 };
 
 // ---------------------------------------------------------------------------

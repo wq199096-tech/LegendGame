@@ -40,7 +40,11 @@ Data/
                  （4 文件，Client 视觉资产域【阶段24】）
 Engine/          引擎（渲染/输入/网络 TcpServer/TcpClient/Logger）
 Server/
-  Gateway/       GatewayServer/Session（信封转发）
+  Common/        ServerConfig + PersistenceClient + LogClient（超时/心跳/指数退避）
+  Gateway/       GatewayServer/Session（统一接入、状态机、Login/Character/World 路由）
+  Character/     CharacterServer（角色 List/Create/Delete/Select + SelectionTicket）
+  Db/            DbServer（SQLite/Schema/DbWorker 的正式访问入口）
+  Log/           LogServer（内部审计队列 + 每日 JSONL）
   LoginServer/   LoginServer + Account/(AccountService/CharacterService/SessionService/
                  TicketStore/AccountRepository/DbWorker/Database/DatabaseSchema)
   WorldServer/   WorldServer（编排中枢）+ WorldSession/WorldManager/WorldMapManager/PlayerSession
@@ -105,16 +109,28 @@ PROJECT_CONTEXT.md / CURRENT_STAGE.md / ARCHITECTURE.md / TRAE_CONTINUATION_CONT
 
 ## 服务关系
 ```
-Client --账号--> Gateway 7300 --转发--> LoginServer 7100（DB: accounts/sessions）
-Client --ticket--> WorldServer 7200 --ConsumeTicket(120/121)--> LoginServer
-WorldServer --共享 SQLite--> character_*/inventory_items/character_equipment/character_quests*
-LoginServer --Ticket--> Client --直连 7200--> WorldServer（世界链路）
-WorldServer 内部：io 线程（游戏逻辑/广播） + DbWorker 线程（全部 SQLite 写）
+Client
+  |
+  v
+Gateway 7300
+  |-- Login/Session ------> LoginServer 7100 ----\
+  |-- Character/Select --> CharacterServer 7400 --+--> DbServer 7500 --> SQLite/WAL
+  `-- World/Game --------> WorldServer 7200 -----/
+
+LoginServer / CharacterServer / WorldServer --> LogServer 7600 --> Logs/Services/YYYY-MM-DD/*.jsonl
 ```
 
-## 数据库 Schema（当前 v4）
+- 客户端只连接 Gateway；世界频道由 Gateway 为每个客户端建立独立后端连接并透明代理。
+- 正式 LoginServer 的注册、Argon2id 登录和 Session 校验通过共享 `PersistenceClient` 访问 DbServer。
+- CharacterServer 独占角色列表/创建/删除/选择及 Ticket 签发，WorldServer 只消费 Ticket。
+- 内部协议版本独立为 1，含 ServiceType/InstanceId 握手、requestId、统一错误码、Heartbeat、严格解码和 1 MiB 上限。
+- `Config/servers.json` 是本地服务拓扑单一入口；默认端口 7100/7200/7300/7400/7500/7600。
+- World 的历史 Repository 仍保留在同一进程作为旧测试夹具；后续持久化操作通过 Db RPC 渐进收口，禁止新增 World 侧 SQL。
+
+## 数据库 Schema（当前 v5）
 - accounts / characters(+gold) / sessions / inventory_items / character_equipment /
   character_quests(PK character_id,quest_id) / character_quest_objectives(PK 三列)
+- Migration 5 为 `characters` 增加 `record_version`，供 Db RPC 做乐观并发保护。
 - Definition 类（Map/NPC/MonsterSpawn/Portal/Item/Monster/Skill/Status/Quest/Shop/Teleport/
   LootTable）**不入库**——阶段22/23 起数据驱动：Data/World + Data/Game JSON 为单一事实来源，
   WorldServer Start 加载+校验（错误拒绝启动），8 类 Game Registry + 4 类 World Registry

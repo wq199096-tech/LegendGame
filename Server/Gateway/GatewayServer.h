@@ -25,6 +25,10 @@ struct GatewayConfig {
     std::uint16_t listenPort = 7000;        // 指令四十：默认 127.0.0.1:7000
     std::string loginHost = "127.0.0.1";
     std::uint16_t loginPort = 7100;         // 指令四十一
+    std::string characterHost = "127.0.0.1";
+    std::uint16_t characterPort = 0; // 0 keeps legacy LoginServer character routing for tests
+    std::string worldHost = "127.0.0.1";
+    std::uint16_t worldPort = 0; // 0 disables the dedicated world-channel proxy in legacy tests
     double loginReconnectSeconds = 2.0;     // 指令五十：服务间重连节奏（测试可调短）
     double pendingLoginTimeoutSeconds = 4.0; // 指令六十：3~5 秒无响应超时（测试可调短）
     double clientIdleTimeoutSeconds = 20.0; // 阶段9.1指令三十七/三十八：正式 20s（测试 0.5s）
@@ -62,6 +66,7 @@ public:
         return m_pendingLogins.size();
     }
     bool IsLoginConnected() const { return m_loginAvailable.load(); }
+    bool IsCharacterConnected() const { return m_characterAvailable.load(); }
     void SetHooks(Hooks hooks) { m_hooks = std::move(hooks); }
 
 private:
@@ -88,6 +93,19 @@ private:
     void HandleLoginLinkClosed(); // 阶段10：Login 链路关闭统一入口（self 保活）
     void OnLoginPacket(std::uint64_t linkId, const legend::network::Packet& packet);
     void HandleLoginGatewayResponse(const legend::network::Packet& packet);
+    void ConnectToCharacter();
+    void ScheduleCharacterReconnect();
+    void OnCharacterConnected(legend::net::TcpConnectionPtr connection);
+    void HandleCharacterLinkClosed();
+    void OnCharacterPacket(std::uint64_t linkId, const legend::network::Packet& packet);
+    void StartWorldProxy(std::uint64_t clientConnectionId,
+                         const legend::network::Packet& firstPacket,
+                         const std::shared_ptr<GatewaySession>& session);
+    void OnWorldProxyConnected(std::uint64_t clientConnectionId,
+                               legend::net::TcpConnectionPtr connection);
+    void OnWorldProxyPacket(std::uint64_t clientConnectionId,
+                            const legend::network::Packet& packet);
+    void CloseWorldProxy(std::uint64_t clientConnectionId);
 
     // 阶段10：Account 信封转发 / 响应回送 / 超时合成错误响应
     void ForwardAccountPacket(std::uint64_t clientConnectionId,
@@ -115,18 +133,31 @@ private:
     legend::net::TcpConnectionPtr m_loginConnection;
     std::atomic<bool> m_loginAvailable{false};
     bool m_loginHandshakeDone = false; // 指令九：Gateway→Login 内部握手（io 线程内访问）
+    std::shared_ptr<legend::net::TcpClient> m_characterClient;
+    legend::net::TcpConnectionPtr m_characterConnection;
+    std::atomic<bool> m_characterAvailable{false};
+    bool m_characterHandshakeDone = false;
     std::atomic<bool> m_stopped{false};
     std::atomic<bool> m_reconnectScheduled{false};
+    std::atomic<bool> m_characterReconnectScheduled{false};
 
     std::map<std::uint64_t, std::shared_ptr<GatewaySession>> m_sessions; // connectionId -> session
     std::map<std::uint64_t, PendingLogin> m_pendingLogins;               // requestId -> pending
     std::map<std::uint64_t, PendingAccount> m_pendingAccounts;           // requestId -> pending
+    struct WorldProxy {
+        std::shared_ptr<legend::net::TcpClient> connector;
+        legend::net::TcpConnectionPtr backend;
+        std::shared_ptr<GatewaySession> client;
+        std::vector<legend::network::Packet> pending;
+    };
+    std::map<std::uint64_t, WorldProxy> m_worldProxies;
     // 阶段10：三张表由 io 线程（收包/关闭/超时回调）与主线程（Stop clear）并发
     // 访问——加锁（数据竞态修复；io 侧单线程，锁仅用于与 Stop 的互斥）
     mutable std::mutex m_mapsMutex;
     std::uint64_t m_nextRequestId = 1; // 指令五十八：单调增长
 
     asio::steady_timer m_reconnectTimer;
+    asio::steady_timer m_characterReconnectTimer;
     asio::steady_timer m_pendingTimer;
     asio::steady_timer m_idleTimer; // Client idle scan (idle
 

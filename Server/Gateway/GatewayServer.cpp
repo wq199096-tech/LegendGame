@@ -37,7 +37,9 @@ GatewayServer::GatewayServer(net::NetworkService& service, const GatewayConfig& 
       m_config(config),
       m_server(std::make_shared<net::TcpServer>(service)),
       m_loginClient(std::make_shared<net::TcpClient>(service)),
+      m_characterClient(std::make_shared<net::TcpClient>(service)),
       m_reconnectTimer(service.Io()),
+      m_characterReconnectTimer(service.Io()),
       m_pendingTimer(service.Io()),
       m_idleTimer(service.Io()) {}
 
@@ -48,6 +50,7 @@ bool GatewayServer::Start(std::string& error) {
     m_server->StartAccepting(
         [this](net::TcpConnectionPtr connection) { OnClientAccepted(std::move(connection)); });
     ConnectToLogin(); // 指令四十八：Gateway 启动后建立到 LoginServer 的连接
+    if (m_config.characterPort != 0) ConnectToCharacter();
     SchedulePendingTimeoutCheck();
     ScheduleIdleTimeoutCheck(); // idle scan
     return true;
@@ -56,22 +59,35 @@ bool GatewayServer::Start(std::string& error) {
 void GatewayServer::Stop() {
     m_stopped.store(true);
     m_reconnectTimer.cancel();
+    m_characterReconnectTimer.cancel();
     m_pendingTimer.cancel();
     m_idleTimer.cancel();
     m_loginClient->Cancel();
+    m_characterClient->Cancel();
     if (m_loginConnection) {
         m_loginConnection->Close();
         m_loginConnection.reset();
     }
     m_loginAvailable.store(false);
+    if (m_characterConnection) { m_characterConnection->Close(); m_characterConnection.reset(); }
+    m_characterAvailable.store(false);
     m_server->Stop();
+    std::vector<std::shared_ptr<net::TcpClient>> worldConnectors;
+    std::vector<net::TcpConnectionPtr> worldConnections;
     // 阶段10：与 io 线程回调互斥后清表（数据竞态修复）
     {
         std::lock_guard<std::mutex> lock(m_mapsMutex);
+        for (auto& [id, proxy] : m_worldProxies) {
+            worldConnectors.push_back(proxy.connector);
+            if (proxy.backend) worldConnections.push_back(proxy.backend);
+        }
+        m_worldProxies.clear();
         m_sessions.clear();
         m_pendingLogins.clear();
         m_pendingAccounts.clear();
     }
+    for (const auto& connector : worldConnectors) if (connector) connector->Cancel();
+    for (const auto& connection : worldConnections) if (connection) connection->Close();
 }
 
 std::size_t GatewayServer::ClientCount() const {
@@ -100,6 +116,8 @@ void GatewayServer::OnClientPacket(std::uint64_t connectionId, const Packet& pac
     // 阶段9.1指令三十九：每包日志删除（心跳会刷屏）；INFO 只保留
     // connect/handshake/login/disconnect/timeout
     std::shared_ptr<GatewaySession> session;
+    net::TcpConnectionPtr worldBackend;
+    bool worldProxyPending = false;
     {
         std::lock_guard<std::mutex> lock(m_mapsMutex);
         auto it = m_sessions.find(connectionId);
@@ -107,6 +125,27 @@ void GatewayServer::OnClientPacket(std::uint64_t connectionId, const Packet& pac
             return;
         }
         session = it->second;
+        if (auto proxy = m_worldProxies.find(connectionId); proxy != m_worldProxies.end()) {
+            worldBackend = proxy->second.backend;
+            if (!worldBackend) {
+                if (proxy->second.pending.size() >= 64) {
+                    session->Disconnect();
+                    return;
+                }
+                proxy->second.pending.push_back(packet);
+                worldProxyPending = true;
+            }
+        }
+    }
+    if (worldBackend) {
+        session->Touch();
+        worldBackend->Send(packet);
+        return;
+    }
+    if (worldProxyPending) return;
+    if (static_cast<MessageId>(packet.header.messageId) == MessageId::WorldClientHello) {
+        StartWorldProxy(connectionId, packet, session);
+        return;
     }
     std::string error;
     if (!session->OnPacket(packet, error)) {
@@ -139,8 +178,15 @@ void GatewayServer::OnClientPacket(std::uint64_t connectionId, const Packet& pac
 }
 
 void GatewayServer::OnClientClosed(std::uint64_t connectionId, const std::error_code& ec) {
+    std::shared_ptr<net::TcpClient> worldConnector;
+    net::TcpConnectionPtr worldBackend;
     {
         std::lock_guard<std::mutex> lock(m_mapsMutex);
+        if (auto proxy = m_worldProxies.find(connectionId); proxy != m_worldProxies.end()) {
+            worldConnector = proxy->second.connector;
+            worldBackend = proxy->second.backend;
+            m_worldProxies.erase(proxy);
+        }
         m_sessions.erase(connectionId);
         // 指令六十一：Client 断开 -> 清理该连接的 Pending Login（防无限增长）
         for (auto it = m_pendingLogins.begin(); it != m_pendingLogins.end();) {
@@ -159,10 +205,100 @@ void GatewayServer::OnClientClosed(std::uint64_t connectionId, const std::error_
             }
         }
     }
+    if (worldConnector) worldConnector->Cancel();
+    if (worldBackend) worldBackend->Close();
     if (m_hooks.onClientClosed) {
         m_hooks.onClientClosed(connectionId,
                                ec ? std::string(ec.message()) : std::string("closed"));
     }
+}
+
+void GatewayServer::StartWorldProxy(std::uint64_t clientConnectionId,
+                                    const Packet& firstPacket,
+                                    const std::shared_ptr<GatewaySession>& session) {
+    if (m_config.worldPort == 0) {
+        LOG_WARN("[Gateway] World channel unavailable for client #" +
+                 std::to_string(clientConnectionId));
+        session->Disconnect();
+        return;
+    }
+    auto connector = std::make_shared<net::TcpClient>(m_service);
+    {
+        std::lock_guard<std::mutex> lock(m_mapsMutex);
+        if (m_worldProxies.contains(clientConnectionId)) return;
+        WorldProxy proxy;
+        proxy.connector = connector;
+        proxy.client = session;
+        proxy.pending.push_back(firstPacket);
+        m_worldProxies.emplace(clientConnectionId, std::move(proxy));
+    }
+    session->Touch();
+    auto self = shared_from_this();
+    connector->Connect(
+        m_config.worldHost, m_config.worldPort,
+        [self, connector, clientConnectionId](net::TcpConnectionPtr connection) {
+            self->OnWorldProxyConnected(clientConnectionId, std::move(connection));
+        },
+        [self, connector, clientConnectionId](const std::error_code& ec) {
+            LOG_WARN("[Gateway] World backend unavailable for client #" +
+                     std::to_string(clientConnectionId) + ": " + ec.message());
+            self->CloseWorldProxy(clientConnectionId);
+        });
+}
+
+void GatewayServer::OnWorldProxyConnected(std::uint64_t clientConnectionId,
+                                          net::TcpConnectionPtr connection) {
+    std::vector<Packet> pending;
+    {
+        std::lock_guard<std::mutex> lock(m_mapsMutex);
+        const auto it = m_worldProxies.find(clientConnectionId);
+        if (it == m_worldProxies.end()) {
+            connection->Close();
+            return;
+        }
+        it->second.backend = connection;
+        pending.swap(it->second.pending);
+    }
+    auto self = shared_from_this();
+    connection->Start(
+        [self, clientConnectionId](const Packet& packet) {
+            self->OnWorldProxyPacket(clientConnectionId, packet);
+        },
+        [self, clientConnectionId](std::uint64_t, const std::error_code&) {
+            self->CloseWorldProxy(clientConnectionId);
+        });
+    for (const auto& packet : pending) connection->Send(packet);
+    LOG_INFO("[Gateway] World channel connected for client #" +
+             std::to_string(clientConnectionId));
+}
+
+void GatewayServer::OnWorldProxyPacket(std::uint64_t clientConnectionId,
+                                       const Packet& packet) {
+    std::shared_ptr<GatewaySession> client;
+    {
+        std::lock_guard<std::mutex> lock(m_mapsMutex);
+        const auto it = m_worldProxies.find(clientConnectionId);
+        if (it != m_worldProxies.end()) client = it->second.client;
+    }
+    if (client) {
+        client->Touch();
+        client->SendPacket(packet);
+    }
+}
+
+void GatewayServer::CloseWorldProxy(std::uint64_t clientConnectionId) {
+    std::shared_ptr<GatewaySession> client;
+    net::TcpConnectionPtr backend;
+    {
+        std::lock_guard<std::mutex> lock(m_mapsMutex);
+        const auto it = m_worldProxies.find(clientConnectionId);
+        if (it == m_worldProxies.end()) return;
+        client = it->second.client;
+        backend = it->second.backend;
+        m_worldProxies.erase(it);
+    }
+    if (backend) backend->Close();
+    if (client) client->Disconnect();
 }
 
 void GatewayServer::ConnectToLogin() {
@@ -288,13 +424,83 @@ void GatewayServer::OnLoginPacket(std::uint64_t linkId, const Packet& packet) {
     }
 }
 
+void GatewayServer::ConnectToCharacter() {
+    if (m_stopped.load() || m_config.characterPort == 0) return;
+    auto self = shared_from_this();
+    m_characterClient->Connect(m_config.characterHost, m_config.characterPort,
+        [self](net::TcpConnectionPtr connection) { self->OnCharacterConnected(std::move(connection)); },
+        [self](const std::error_code&) { self->m_characterAvailable.store(false); self->ScheduleCharacterReconnect(); });
+}
+
+void GatewayServer::ScheduleCharacterReconnect() {
+    if (m_stopped.load() || m_config.characterPort == 0 ||
+        m_characterReconnectScheduled.exchange(true)) return;
+    m_characterReconnectTimer.expires_after(std::chrono::milliseconds(
+        static_cast<int>(m_config.loginReconnectSeconds * 1000)));
+    auto self = shared_from_this();
+    m_characterReconnectTimer.async_wait([self](const std::error_code& ec) {
+        self->m_characterReconnectScheduled.store(false);
+        if (!ec && !self->m_stopped.load() && !self->m_characterConnection)
+            self->ConnectToCharacter();
+    });
+}
+
+void GatewayServer::OnCharacterConnected(net::TcpConnectionPtr connection) {
+    if (m_characterConnection) m_characterConnection->Close();
+    m_characterConnection = std::move(connection);
+    m_characterAvailable.store(false);
+    m_characterHandshakeDone = false;
+    auto self = shared_from_this();
+    m_characterConnection->Start(
+        [self, linkId=m_characterConnection->Id()](const Packet& packet) { self->OnCharacterPacket(linkId, packet); },
+        [self](std::uint64_t, const std::error_code&) { self->HandleCharacterLinkClosed(); });
+    ClientHelloPayload hello;
+    hello.protocolVersion = kProtocolVersion;
+    hello.clientBuild = "0.25.5";
+    hello.clientName = "LegendGateway";
+    Packet packet; packet.header.messageId = static_cast<std::uint16_t>(MessageId::ClientHello);
+    if (EncodeClientHello(hello, packet.payload)) m_characterConnection->Send(packet);
+}
+
+void GatewayServer::HandleCharacterLinkClosed() {
+    m_characterConnection.reset();
+    m_characterHandshakeDone = false;
+    m_characterAvailable.store(false);
+    ScheduleCharacterReconnect();
+}
+
+void GatewayServer::OnCharacterPacket(std::uint64_t linkId, const Packet& packet) {
+    if (!m_characterConnection || m_characterConnection->Id() != linkId) return;
+    const auto message = static_cast<MessageId>(packet.header.messageId);
+    if (!m_characterHandshakeDone) {
+        if (message != MessageId::ServerHello) { m_characterConnection->Close(); return; }
+        ServerHelloPayload hello; std::string error;
+        if (!DecodeServerHello(packet.payload.data(), packet.payload.size(), hello, error) || !hello.accepted) {
+            m_characterConnection->Close(); return;
+        }
+        m_characterHandshakeDone = true;
+        m_characterAvailable.store(true);
+        LOG_INFO("[Gateway] Character handshake accepted.");
+        return;
+    }
+    if (message == MessageId::GatewayAccountResponse) HandleAccountResponse(packet);
+}
+
 // ---------------------------------------------------------------------------
 // 阶段10：Account 信封转发（Gateway 只搬运，不解析业务 payload —— 指令五十四）
 // ---------------------------------------------------------------------------
 
 void GatewayServer::ForwardAccountPacket(std::uint64_t clientConnectionId,
                                          const Packet& packet) {
-    if (!m_loginAvailable.load() || !m_loginConnection) {
+    const auto message = static_cast<MessageId>(packet.header.messageId);
+    const bool characterRequest = message == MessageId::CharacterListRequest ||
+        message == MessageId::CharacterCreateRequest ||
+        message == MessageId::CharacterDeleteRequest || message == MessageId::CharacterSelectRequest;
+    const bool separateCharacter = m_config.characterPort != 0;
+    const bool backendAvailable = characterRequest && separateCharacter
+        ? m_characterAvailable.load() && static_cast<bool>(m_characterConnection)
+        : m_loginAvailable.load() && static_cast<bool>(m_loginConnection);
+    if (!backendAvailable) {
         const std::uint16_t responseId =
             legend::network::AccountResponseMessageId(packet.header.messageId);
         std::shared_ptr<GatewaySession> session;
@@ -306,7 +512,8 @@ void GatewayServer::ForwardAccountPacket(std::uint64_t clientConnectionId,
         }
         SendAccountErrorResponse(clientConnectionId, 0, responseId,
                                  AccountErrorCode::ServiceUnavailable,
-                                 "account service unavailable");
+                                 characterRequest ? "character service unavailable"
+                                                  : "login service unavailable");
         if (session) {
             session->EndAccount(packet.header.messageId);
         }
@@ -357,7 +564,8 @@ void GatewayServer::ForwardAccountPacket(std::uint64_t clientConnectionId,
         session->EndAccount(packet.header.messageId);
         return;
     }
-    m_loginConnection->Send(forward);
+    if (characterRequest && separateCharacter) m_characterConnection->Send(forward);
+    else m_loginConnection->Send(forward);
 }
 
 void GatewayServer::HandleAccountResponse(const Packet& packet) {
@@ -389,6 +597,20 @@ void GatewayServer::HandleAccountResponse(const Packet& packet) {
         Packet inner;
         inner.header.messageId = envelope.innerMessageId;
         inner.payload = std::move(envelope.innerPayload);
+        std::string stateError;
+        if (static_cast<MessageId>(inner.header.messageId) == MessageId::AccountLoginResponse) {
+            account::AccountLoginResponsePayload response;
+            if (account::DecodeAccountLoginResponse(inner.payload.data(), inner.payload.size(), response, stateError) && response.success)
+                session->MarkAuthenticated(response.accountId);
+        } else if (static_cast<MessageId>(inner.header.messageId) == MessageId::SessionResumeResponse) {
+            account::SessionResumeResponsePayload response;
+            if (account::DecodeSessionResumeResponse(inner.payload.data(), inner.payload.size(), response, stateError) && response.success)
+                session->MarkAuthenticated(response.accountId);
+        } else if (static_cast<MessageId>(inner.header.messageId) == MessageId::CharacterSelectResponse) {
+            account::CharacterSelectResponsePayload response;
+            if (account::DecodeCharacterSelectResponse(inner.payload.data(), inner.payload.size(), response, stateError) && response.success)
+                session->MarkCharacterSelected(response.character.characterId);
+        }
         session->SendPacket(inner);
     }
 }

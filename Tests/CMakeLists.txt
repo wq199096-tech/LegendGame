@@ -4,6 +4,8 @@
 # ---------------------------------------------------------------------------
 add_executable(LegendNetworkTests
     NetworkChecks.cpp
+    InternalProtocolChecks.cpp
+    ServerTopologyChecks.cpp
 )
 target_include_directories(LegendNetworkTests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendNetworkTests PRIVATE cxx_std_20)
@@ -23,10 +25,14 @@ endif()
 
 add_executable(LegendAccountTests
     AccountChecks.cpp
+    CharacterServerChecks.cpp
+    DbServerChecks.cpp
+    LogServerChecks.cpp
+    PersistenceRpcChecks.cpp
 )
 target_include_directories(LegendAccountTests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendAccountTests PRIVATE cxx_std_20)
-target_link_libraries(LegendAccountTests PRIVATE LegendGatewayCore LegendLoginCore LegendClientAccount)
+target_link_libraries(LegendAccountTests PRIVATE LegendGatewayCore LegendLoginCore LegendClientAccount LegendDbCore LegendCharacterCore LegendLogCore LegendInternalClients)
 
 if(MSVC)
     target_compile_options(LegendAccountTests PRIVATE /utf-8)
@@ -63,6 +69,7 @@ add_executable(LegendWorldTests
     VerticalSliceChecks.cpp
     UiModelChecks.cpp
     ChapterOneChecks.cpp
+    FullServerTopologyCheck.cpp
     ../Tools/MapEditor/Source/WorldDocument.cpp
     ../Tools/MapEditor/Source/GameDataDocument.cpp
 )

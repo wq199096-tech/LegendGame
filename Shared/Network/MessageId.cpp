@@ -111,6 +111,13 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::RespawnRequest: return "RespawnRequest";
         case MessageId::RespawnResponse: return "RespawnResponse";
         case MessageId::PlayerRespawned: return "PlayerRespawned";
+        case MessageId::InternalServiceHandshake: return "InternalServiceHandshake";
+        case MessageId::InternalServiceHandshakeAck: return "InternalServiceHandshakeAck";
+        case MessageId::InternalHeartbeat: return "InternalHeartbeat";
+        case MessageId::InternalDbRequest: return "InternalDbRequest";
+        case MessageId::InternalDbResponse: return "InternalDbResponse";
+        case MessageId::InternalLogEvent: return "InternalLogEvent";
+        case MessageId::InternalLogAck: return "InternalLogAck";
         case MessageId::WorldErrorResponse: return "WorldErrorResponse";
         case MessageId::ErrorResponse: return "ErrorResponse";
     }

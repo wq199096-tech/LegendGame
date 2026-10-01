@@ -1,4 +1,27 @@
-# CURRENT_STAGE — Stage25 Chinese Studio UI Patch 完成
+# CURRENT_STAGE — Stage25.5 Server Architecture Completion V0.255
+
+## Stage25.5（2026-10-01）
+
+- 状态：running；不进入 Stage25.6/Stage26。
+- 新增正式进程：LegendCharacterServer、LegendDbServer、LegendLogServer；正式程序共 8 个，
+  开发测试程序 3 个，总构建 exe 11 个。
+- 新增 `Config/servers.json`、`Shared/InternalProtocol`、共享 `PersistenceClient`/`LogClient`；
+  内部协议含身份握手、Heartbeat、requestId、超时、严格解码、统一错误码和自动重连。
+- Gateway 7300 统一承接账号与世界频道，账号路由 Login/Character，世界流量使用 per-client
+  后端连接代理到 WorldServer；状态机覆盖 Connected/Authenticated/CharacterSelected/InWorld。
+- 正式 LoginServer 的注册/登录/Session 已迁至 DbServer；CharacterServer 的角色四流程均经
+  DbServer，并负责 Ticket；LogServer 输出按日、按服务 JSONL，Login/Character/World 接入异步 LogClient。
+- Schema v5 增加 `characters.record_version`，旧库由事务 Migration 自动升级；配置验证覆盖缺失服务、
+  重复端口、非法 host/port、Heartbeat 与保存周期。
+- Studio Launch Full Game 顺序更新为 Db → Log → Login → Character → World → Gateway → Client，
+  并显示配置路径与七进程状态。
+- 当前验证：完整 Debug 构建通过；NetworkTests、AccountTests 通过；本地六服务 20 秒拓扑 Smoke
+  通过；七进程客户端 Vertical Slice 通过。WorldTests 的唯一新增失败（CTest 工作目录下相对配置路径）
+  已修复，待最终全套复跑后封板。
+
+---
+
+## 历史：Stage25 Chinese Studio UI Patch（completed）
 
 ## Stage25 Chinese Studio UI Patch（2026-09-30）
 - **状态：completed**；未进入 Stage26，未修改服务器业务、协议、数据库或客户端战斗逻辑。

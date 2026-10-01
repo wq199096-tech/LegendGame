@@ -19,6 +19,8 @@ enum class GatewaySessionState {
     HandshakeCompleted, // ServerHello 已发
     LoginPending,       // LoginRequest 已转发 LoginServer
     Authenticated,      // 登录成功
+    CharacterSelected, // 角色归属已由 CharacterServer 确认
+    InWorld,           // WorldServer 已确认进入世界
     Closing,
 };
 
@@ -38,6 +40,10 @@ public:
     // 登录结果回填（阶段9.1指令七：只更新状态，不发送——GatewayServer 统一单发）
     void CompleteLogin(bool success, std::uint64_t accountId, const std::string& displayName,
                        const std::string& message);
+    void MarkAuthenticated(std::uint64_t accountId);
+    void MarkCharacterSelected(std::uint64_t characterId);
+    void MarkInWorld();
+    bool CanRoute(std::uint16_t messageId) const;
 
     // 一次性取出待转发登录数据（GatewayServer 检测到 LoginPending 后调用；
     // token 只在内存暂存，不落日志——指令五十二）
@@ -55,8 +61,15 @@ public:
     bool TakePendingAccountForward(legend::network::Packet& out);
 
     GatewaySessionState State() const { return m_state; }
+    void Touch() { m_lastPacketTime = std::chrono::steady_clock::now(); }
     std::uint64_t ConnectionId() const { return m_connectionId; }
-    bool IsAuthenticated() const { return m_state == GatewaySessionState::Authenticated; }
+    bool IsAuthenticated() const {
+        return m_state == GatewaySessionState::Authenticated ||
+               m_state == GatewaySessionState::CharacterSelected ||
+               m_state == GatewaySessionState::InWorld;
+    }
+    std::uint64_t AccountId() const { return m_accountId; }
+    std::uint64_t CharacterId() const { return m_characterId; }
     const std::string& Username() const { return m_username; }
     std::chrono::steady_clock::time_point LastPacketTime() const { return m_lastPacketTime; }
 
@@ -76,6 +89,7 @@ private:
     std::string m_pendingToken;
     bool m_hasPendingLogin = false;
     std::uint64_t m_accountId = 0;  // 阶段9.1指令十四：accountId 统一 uint64
+    std::uint64_t m_characterId = 0;
     std::string m_displayName;
     std::uint32_t m_lastPingSequence = 0;
     std::chrono::steady_clock::time_point m_lastPacketTime{std::chrono::steady_clock::now()};

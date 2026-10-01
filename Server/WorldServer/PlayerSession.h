@@ -22,6 +22,18 @@
 
 namespace legend::world {
 
+struct PlayerPersistenceState {
+    bool positionDirty = false;
+    bool inventoryDirty = false;
+    bool equipmentDirty = false;
+    bool questDirty = false;
+    bool progressionDirty = false;
+    std::uint64_t recordVersion = 0;
+    bool AnyDirty() const { return positionDirty || inventoryDirty || equipmentDirty ||
+                                  questDirty || progressionDirty; }
+    void Clear() { positionDirty=inventoryDirty=equipmentDirty=questDirty=progressionDirty=false; }
+};
+
 // 阶段15 指令十四：PendingSkillCast —— Cast-Time 技能的进行中施法状态
 //（封装在 PlayerSession；WorldServer Skill Tick 统一检查 castCompleteTime）。
 class PendingSkillCast {
@@ -55,13 +67,14 @@ public:
     std::uint32_t Level() const { return m_level; }
     std::uint16_t MapId() const { return m_mapId; }
     // 阶段20 指令六十五：NPC 传送服务器权威更新 mapId（Client 不能决定）。
-    void SetMapId(std::uint16_t mapId) { m_mapId = mapId; }
+    void SetMapId(std::uint16_t mapId) { m_mapId = mapId; m_persistence.positionDirty = true; }
 
     float PositionX() const { return m_positionX; }
     float PositionY() const { return m_positionY; }
     void SetPosition(float x, float y) {
         m_positionX = x;
         m_positionY = y;
+        m_persistence.positionDirty = true;
     }
 
     std::uint32_t LastProcessedInputSequence() const { return m_lastProcessedInputSequence; }
@@ -69,8 +82,10 @@ public:
         m_lastProcessedInputSequence = sequence;
     }
 
-    bool IsPositionDirty() const { return m_dirtyPosition; }
-    void SetPositionDirty(bool dirty) { m_dirtyPosition = dirty; }
+    bool IsPositionDirty() const { return m_dirtyPosition || m_persistence.positionDirty; }
+    void SetPositionDirty(bool dirty) { m_dirtyPosition = dirty; m_persistence.positionDirty = dirty; }
+    PlayerPersistenceState& Persistence() { return m_persistence; }
+    const PlayerPersistenceState& Persistence() const { return m_persistence; }
 
     std::chrono::steady_clock::time_point LastMoveTime() const { return m_lastMoveTime; }
     void TouchMoveTime() { m_lastMoveTime = std::chrono::steady_clock::now(); }
@@ -116,6 +131,7 @@ public:
     void SetProgression(std::int64_t experience, std::int64_t gold) {
         m_experience = experience;
         m_gold = gold;
+        m_persistence.progressionDirty = true;
     }
     // 指令五/十：等级更新 + 基础属性成长 + CurrentHp 恢复到新 MaxHp（方便测试）。
     // Mana 不升级保持 100（指令十）。Derived Stats 由 WorldServer 统一重算。
@@ -126,6 +142,7 @@ public:
         m_attackPower = BaseAttackPowerForLevel(newLevel);
         m_defense = BaseDefenseForLevel(newLevel);
         m_maxMana = kPlayerMaxMana; // 指令十：BaseMaxMana 不升级
+        m_persistence.progressionDirty = true;
     }
 
     // 指令二十四：扣血（不低于 0；返回是否致死）。
@@ -261,9 +278,9 @@ public:
     // ------------------------------------------------------------------
     // 阶段18 指令六/七：服务器权威背包 + 装备槽（io 线程；持久化经 DbWorker）。
     // ------------------------------------------------------------------
-    InventoryContainer& Inventory() { return m_inventory; }
+    InventoryContainer& Inventory() { m_persistence.inventoryDirty = true; return m_inventory; }
     const InventoryContainer& Inventory() const { return m_inventory; }
-    EquipmentSlots& EquipmentRef() { return m_equipment; }
+    EquipmentSlots& EquipmentRef() { m_persistence.equipmentDirty = true; return m_equipment; }
     const EquipmentSlots& EquipmentRef() const { return m_equipment; }
     // 指令三十一：装备加成（Derived 重算时并入 Base）。
     std::uint32_t EquipmentAttackBonus() const {
@@ -300,7 +317,7 @@ public:
     // 阶段19 指令十四：PlayerQuestContainer —— 任务状态集中在 PlayerSession
     //（不散落 WorldServer 多个 map）。仅 io 线程访问。
     // ------------------------------------------------------------------
-    PlayerQuestContainer& Quests() { return m_quests; }
+    PlayerQuestContainer& Quests() { m_persistence.questDirty = true; return m_quests; }
     const PlayerQuestContainer& Quests() const { return m_quests; }
 
     // 阶段19 指令五十九：最近 64 个成功 Quest requestId（Accept/TurnIn/Abandon
@@ -431,6 +448,7 @@ private:
     float m_positionY = 0.0f;
     std::uint32_t m_lastProcessedInputSequence = 0;
     bool m_dirtyPosition = false;
+    PlayerPersistenceState m_persistence;
     std::chrono::steady_clock::time_point m_lastMoveTime{std::chrono::steady_clock::now()};
     // 阶段12 指令十三：仅 WorldServer io 线程维护。
     std::unordered_set<std::uint64_t> m_visiblePlayers;

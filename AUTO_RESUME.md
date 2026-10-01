@@ -5,7 +5,13 @@
 > 然后执行 git status / git fetch origin / git pull --ff-only / git log -8 --oneline。
 > 禁止 git reset --hard / git clean -fd / checkout .（除非已证明安全）。
 
-## 最新状态：Stage25 Chinese Studio UI Patch completed（2026-09-30）
+## 最新状态：Stage25.5 Server Architecture Completion running（2026-10-01）
+- 当前工作区正在完成六服务架构：Db/Log/Login/Character/World/Gateway + Client；不要丢弃未提交改动。
+- 已验证 11 exe Debug 构建、Network/Account Tests、六服务 Topology Smoke、七进程 Vertical Slice；
+  下一步是全量 CTest 最终复跑、更新 completed 状态、提交/push 并确认 Actions。
+- 不进入 Stage25.6 或 Stage26。
+
+## 历史：Stage25 Chinese Studio UI Patch completed（2026-09-30）
 - 本补丁在原 `LegendMapEditor.exe` 内完成 LegendGame Studio 简体中文专业 UI 重构；
   未创建第 9 个 exe，未修改服务器业务/协议/数据库/战斗逻辑，未进入 Stage26。
 - EditorTheme / EditorStrings、中文字体回退、DPI、自适应可拖动 IDE 布局、真实地图视觉、

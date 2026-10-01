@@ -294,7 +294,7 @@ struct WorldNetworkEvent {
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
-// WorldNetworkClient —— 独立的世界连接（直连 127.0.0.1:7200）。
+// WorldNetworkClient —— 独立的世界频道连接（正式环境经 Gateway 统一接入）。
 // - 异步连接，失败不阻塞游戏（状态 Failed）
 // - network thread -> event queue -> main thread（禁止跨线程改游戏对象）
 // - 独立 Heartbeat 状态（5s Ping / 15s timeout），不复用 GameNetworkClient
@@ -302,7 +302,7 @@ class WorldNetworkClient : public std::enable_shared_from_this<WorldNetworkClien
 public:
     struct Config {
         std::string worldHost = "127.0.0.1";
-        std::uint16_t worldPort = 7200;
+        std::uint16_t worldPort = 7300;
         std::string clientBuild = "0.11.0";
         std::string clientName = "LegendClient";
         double heartbeatIntervalSeconds = 5.0;
@@ -315,7 +315,7 @@ public:
     void Connect(); // 异步（端点经 SetWorldEndpoint 配置）
     void Disconnect(bool notifyServer); // 指令七十九：发 WorldDisconnectNotice
 
-    // 阶段11 指令三：世界端点配置（默认 127.0.0.1:7200）。
+    // Stage25.5：正式默认走 Gateway 7300；测试仍可显式指定 World 端口。
     void SetWorldEndpoint(const std::string& host, std::uint16_t port) {
         m_config.worldHost = host;
         m_config.worldPort = port;

@@ -65,6 +65,11 @@ using legend::gateway::GatewayServer;
 using legend::login::LoginServer;
 namespace account = legend::account;
 
+int RunDbServerChecks();
+int RunCharacterServerChecks();
+int RunLogServerChecks();
+int RunPersistenceRpcChecks();
+
 namespace {
 
 constexpr std::uint16_t kTestGatewayPort = 17220;
@@ -1337,6 +1342,10 @@ int main() {
     RunCharacterServiceChecks();
     RunSchemaHardeningChecks();
     RunDbWorkerChecks();
+    g_failures += RunDbServerChecks();
+    g_failures += RunCharacterServerChecks();
+    g_failures += RunLogServerChecks();
+    g_failures += RunPersistenceRpcChecks();
 
     {
         TestServers servers;

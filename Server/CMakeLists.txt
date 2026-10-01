@@ -6,11 +6,24 @@
 # Logger 单独成库（Gateway/Login/测试共用，避免多库重复编译）
 add_library(LegendServerCommon STATIC
     ../Engine/Debug/Logger.cpp
+    Common/ServerConfig.cpp
 )
 target_include_directories(LegendServerCommon PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendServerCommon PUBLIC cxx_std_20)
+target_link_libraries(LegendServerCommon PUBLIC LegendSharedNetwork nlohmann_json::nlohmann_json)
 if(MSVC)
     target_compile_options(LegendServerCommon PRIVATE /utf-8)
+endif()
+
+add_library(LegendInternalClients STATIC
+    Common/PersistenceClient.cpp
+    Common/LogClient.cpp
+)
+target_include_directories(LegendInternalClients PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendInternalClients PUBLIC cxx_std_20)
+target_link_libraries(LegendInternalClients PUBLIC LegendNetworkTransport LegendServerCommon)
+if(MSVC)
+    target_compile_options(LegendInternalClients PRIVATE /utf-8)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -19,8 +32,12 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(LegendAccountData STATIC
     LoginServer/Account/AccountRepository.cpp
+    LoginServer/Account/AccountService.cpp
     LoginServer/Account/PasswordHasher.cpp
     LoginServer/Account/DbWorker.cpp
+    LoginServer/Account/CharacterService.cpp
+    LoginServer/Account/SessionService.cpp
+    LoginServer/Account/TicketStore.cpp
     LoginServer/Account/Database/Database.cpp
     LoginServer/Account/Database/DatabaseSchema.cpp
 )
@@ -42,10 +59,6 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(LegendLoginCore STATIC
     LoginServer/LoginServer.cpp
-    LoginServer/Account/AccountService.cpp
-    LoginServer/Account/CharacterService.cpp
-    LoginServer/Account/SessionService.cpp
-    LoginServer/Account/TicketStore.cpp
 )
 target_include_directories(LegendLoginCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendLoginCore PUBLIC cxx_std_20)
@@ -54,6 +67,7 @@ target_link_libraries(LegendLoginCore
         LegendNetworkTransport
         LegendServerCommon
         LegendAccountData
+        LegendInternalClients
 )
 if(MSVC)
     target_compile_options(LegendLoginCore PRIVATE /utf-8)
@@ -164,6 +178,7 @@ target_link_libraries(LegendWorldCore
         LegendNetworkTransport
         LegendServerCommon
         LegendAccountData
+        LegendInternalClients
 )
 if(MSVC)
     target_compile_options(LegendWorldCore PRIVATE /utf-8)
@@ -183,4 +198,48 @@ if(MSVC)
         COMMAND_EXPAND_LISTS
         COMMENT "Copying runtime DLLs next to LegendWorldServer.exe"
     )
+endif()
+
+# Stage25.5 formal internal services.
+add_library(LegendDbCore STATIC
+    Db/DbServer.cpp
+)
+target_include_directories(LegendDbCore PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendDbCore PUBLIC cxx_std_20)
+target_link_libraries(LegendDbCore PUBLIC LegendAccountData LegendNetworkTransport LegendServerCommon)
+
+add_executable(LegendDbServer ../Apps/DbServerMain.cpp)
+target_link_libraries(LegendDbServer PRIVATE LegendDbCore)
+
+add_library(LegendCharacterCore STATIC
+    Character/CharacterServer.cpp
+)
+target_include_directories(LegendCharacterCore PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendCharacterCore PUBLIC cxx_std_20)
+target_link_libraries(LegendCharacterCore PUBLIC LegendInternalClients LegendAccountData LegendNetworkTransport LegendServerCommon)
+
+add_executable(LegendCharacterServer ../Apps/CharacterServerMain.cpp)
+target_link_libraries(LegendCharacterServer PRIVATE LegendCharacterCore)
+
+add_library(LegendLogCore STATIC
+    Log/LogServer.cpp
+)
+target_include_directories(LegendLogCore PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_features(LegendLogCore PUBLIC cxx_std_20)
+target_link_libraries(LegendLogCore PUBLIC LegendNetworkTransport LegendServerCommon nlohmann_json::nlohmann_json)
+
+add_executable(LegendLogServer ../Apps/LogServerMain.cpp)
+target_link_libraries(LegendLogServer PRIVATE LegendLogCore)
+
+if(MSVC)
+    foreach(target LegendDbCore LegendDbServer LegendCharacterCore LegendCharacterServer LegendLogCore LegendLogServer)
+        target_compile_options(${target} PRIVATE /utf-8)
+    endforeach()
+    foreach(target LegendDbServer LegendCharacterServer)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_RUNTIME_DLLS:${target}>
+                $<TARGET_FILE_DIR:${target}>
+            COMMAND_EXPAND_LISTS)
+    endforeach()
 endif()
