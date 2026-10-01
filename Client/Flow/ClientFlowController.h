@@ -85,7 +85,7 @@ private:
     bool m_listRequested = false;
     bool m_leaveRequested = false;
     float m_bootElapsed = 0.0f;
-    float m_connectElapsed = 0.0f;
+    std::chrono::steady_clock::time_point m_connectDeadline{}; // 墙钟连接超时
     float m_lastDt = 0.0f;
 
     // 页面内嵌错误记忆（进入新页面时清零）。

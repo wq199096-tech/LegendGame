@@ -103,6 +103,15 @@ public:
     float LastRttMs() const { return m_lastRttMs.load(); }
     std::string LastError() const;
     const Config& GetConfig() const { return m_config; }
+    // Stage26：连接端点注入（测试内联拓扑 17242；生产保持默认 7300）。
+    // 仅在未连接状态下调用有意义（Connect 会以 config 为准重设）。
+    void SetConnectEndpoint(const std::string& host, std::uint16_t port) {
+        if (m_state.load() == NetworkState::Disconnected ||
+            m_state.load() == NetworkState::Failed) {
+            m_config.gatewayHost = host;
+            m_config.gatewayPort = port;
+        }
+    }
 
 private:
     void OnTransportConnected(std::shared_ptr<legend::net::TcpConnection> connection);

@@ -89,7 +89,10 @@ void ClientFlowController::DeriveState() {
             if (!m_observerOnly && m_bootElapsed >= kBootSplashSeconds && !m_connectRequested &&
                 IsNetDown(net)) {
                 m_connectRequested = true;
-                m_connectElapsed = 0.0f;
+                m_connectDeadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<float>(kConnectTimeoutSeconds));
                 LOG_INFO("[Flow] Boot -> connecting gateway.");
                 m_net.Connect(m_net.GetConfig().gatewayHost, m_net.GetConfig().gatewayPort);
                 GoState(ClientFlowState::Connecting);
@@ -108,8 +111,8 @@ void ClientFlowController::DeriveState() {
                 m_model.lastErrorMessage.clear();
                 GoState(ClientFlowState::Login);
             } else if (IsNetDown(net) && m_connectRequested) {
-                m_connectElapsed += m_lastDt;
-                if (m_connectElapsed > kConnectTimeoutSeconds) {
+                // Stage25.5 教训：超时用墙钟（dt 在低帧率/测试快放下与真实时间脱钩）。
+                if (std::chrono::steady_clock::now() >= m_connectDeadline) {
                     MarkError();
                     GoState(ClientFlowState::Disconnected);
                 }
@@ -300,7 +303,10 @@ void ClientFlowController::RequestRetryConnect() {
         return;
     }
     m_connectRequested = true;
-    m_connectElapsed = 0.0f;
+    m_connectDeadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(kConnectTimeoutSeconds));
     m_model.lastErrorCode = 0;
     m_model.lastErrorMessage.clear();
     m_net.Connect(m_net.GetConfig().gatewayHost, m_net.GetConfig().gatewayPort);

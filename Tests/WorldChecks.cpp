@@ -39,6 +39,7 @@ void RunUiModelChecks(); // 阶段25：UI 模型检查（指令六十七）
 void RunChapterOneChecks(); // 阶段25：Chapter One 端到端（真实服务器链路）
 void RunFullServerTopologyCheck(); // Stage25.5: config/topology contract
 int RunLeaveWorldChecks(WorldTestServers& servers); // Stage26 指令十七：主动离开世界
+int RunStage26FlowChecks(WorldTestServers& servers); // Stage26 指令三十六：玩家流程 E2E
 }
 
 namespace {
@@ -914,6 +915,20 @@ int main() {
         RunSaveChecks(servers);
         RunLoginLinkChecks(servers);
         RunRobustnessChecks(servers);
+        servers.StopAll();
+    }
+
+    // ---- Stage26 指令三十六：玩家流程 E2E（注册/登录/建角/进世界/离开/重启持久化；
+    //      独立 servers 生命周期 + Gateway 内联拓扑）----
+    {
+        WorldTestServers servers;
+        servers.dbPath = TempDbPath("stage26_flow");
+        RemoveDb(servers.dbPath);
+        Check("FlowLoginStartCheck", servers.StartLogin());
+        Check("FlowWorldStartCheck", servers.StartWorld());
+        Check("FlowGatewayStartCheck", servers.StartGateway());
+
+        RunStage26FlowChecks(servers);
         servers.StopAll();
     }
 
