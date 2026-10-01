@@ -1266,17 +1266,23 @@ void RunStatusChainChecks() {
         // 阶段21：历史快照不参与校验——多地图布局下怪物游荡会穿越 AOI 边界，
         // "当时可见"无法回溯验证；只校验本检查期间（baseline 后）新到达的快照
         //（C 自身快照 2s 周期必达，窗口内必有新样本）。baseline 用 counts（DrainEvents 递增）。
+        // 阶段25.5 慢机加固：可见集取"窗口前 + 窗口后"两次采样的并集——怪物在
+        // 采样间隙游荡进入可见集会造成假阳性泄漏（CI 慢机实测触发）；并集不削弱
+        // 泄漏检测（跨地图/远处怪永远不会出现在两次采样内），仅消除进入竞态。
+        const auto sampleVisible = [&seedC](WorldTestServers& servers_) {
+            return RunOnWorldIo(servers_.worldService, [&] {
+                auto p = servers_.world->FindPlayerByCharacter(seedC.characterId);
+                if (!p) {
+                    return std::vector<std::uint64_t>{};
+                }
+                return std::vector<std::uint64_t>(p->VisibleMonsters().begin(),
+                                                  p->VisibleMonsters().end());
+            });
+        };
+        const std::vector<std::uint64_t> cVisibleBefore = sampleVisible(servers);
         const int cSnapBaseline = clientC.counts[WorldTestClient::IndexOf(
             WorldNetworkEvent::Type::StatusSnapshotEvent)];
         clientC.DrainEvents();
-        const auto cVisible = RunOnWorldIo(servers.worldService, [&] {
-            auto p = servers.world->FindPlayerByCharacter(seedC.characterId);
-            if (!p) {
-                return std::vector<std::uint64_t>{};
-            }
-            return std::vector<std::uint64_t>(p->VisibleMonsters().begin(),
-                                              p->VisibleMonsters().end());
-        });
         // 等至少一条新快照（2s 快照周期），保证校验窗口非空。
         const bool gotNewSnap = WaitUntil(
             [&] {
@@ -1285,6 +1291,13 @@ void RunStatusChainChecks() {
                            WorldNetworkEvent::Type::StatusSnapshotEvent)] > cSnapBaseline;
             },
             4000);
+        const std::vector<std::uint64_t> cVisibleAfter = sampleVisible(servers);
+        std::vector<std::uint64_t> cVisible = cVisibleBefore;
+        for (const auto entityId : cVisibleAfter) {
+            if (std::find(cVisible.begin(), cVisible.end(), entityId) == cVisible.end()) {
+                cVisible.push_back(entityId);
+            }
+        }
         bool noFar = true;
         const auto& cSnapEvents = clientC.recorded[WorldTestClient::IndexOf(
             WorldNetworkEvent::Type::StatusSnapshotEvent)];
