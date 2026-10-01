@@ -13,7 +13,9 @@ namespace legend::account {
 // 阶段19 指令十六：Migration 4 —— character_quests / character_quest_objectives
 //（旧库自动升级；只保存角色任务状态，任务定义仍在代码，指令六十九）。
 // Stage25.5 Migration 5 adds optimistic record_version without invalidating old rows.
-inline constexpr int kCurrentSchemaVersion = 5;
+// Stage26 Migration 6 —— characters 增加 visual_id 列（指令十一/三十：初始造型槽位，
+// 旧角色默认 1；旧库自动升级，禁止删库重建）。
+inline constexpr int kCurrentSchemaVersion = 6;
 
 // 初始化：quick_check 损坏检测 + 旧结构兼容升级 + 建表 + Migration 到
 // kCurrentSchemaVersion。新库 -> 应用全部 Migration 并写入 version；

@@ -596,36 +596,62 @@ void RunCharacterServiceChecks() {
     Check("CharacterListEmptyCheck: new account -> 0 characters",
           emptyList.success && emptyList.value.empty());
 
-    // ---- CharacterNameValidationCheck（指令三十六）----
-    auto badName = characters.Create(db, accountA.value, " A ", 1, 1);
-    auto badName2 = characters.Create(db, accountA.value, "a", 1, 1);
-    auto badName3 = characters.Create(db, accountA.value, "bad\x01name", 1, 1);
+    // ---- CharacterNameValidationCheck（指令三十六 + 阶段26 指令十一：UTF-8/中文）----
+    auto badName = characters.Create(db, accountA.value, " A ", 1, 1, 1);
+    auto badName2 = characters.Create(db, accountA.value, "a", 1, 1, 1);
+    auto badName3 = characters.Create(db, accountA.value, "bad\x01name", 1, 1, 1);
+    // 阶段26：危险符号 / emoji / 非法 UTF-8 / 超长码点（13 个汉字）/ 单个汉字。
+    auto badSymbol = characters.Create(db, accountA.value, "bad<name>", 1, 1, 1);
+    auto badEmoji = characters.Create(db, accountA.value, "bad\xF0\x9F\x98\x80name", 1, 1, 1);
+    auto badUtf8 = characters.Create(db, accountA.value, "bad\xE4\xB8", 1, 1, 1); // 截断的 UTF-8 序列（E4 B8 后中断）
+    auto badTooLongCn =
+        characters.Create(db, accountA.value,
+                          "\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD"
+                          "\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD"
+                          "\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD", // 13 个"中"
+                          1, 1, 1);
+    auto badSingleCn = characters.Create(db, accountA.value, "\xE4\xB8\xAD", 1, 1, 1); // 1 个汉字
     Check("CharacterNameValidationCheck: invalid names rejected",
-          !badName.success && !badName2.success && !badName3.success);
-    auto badClass = characters.Create(db, accountA.value, "BadClass", 99, 1);
-    auto badGender = characters.Create(db, accountA.value, "BadGender", 1, 9);
+          !badName.success && !badName2.success && !badName3.success && !badSymbol.success &&
+              !badEmoji.success && !badUtf8.success && !badTooLongCn.success &&
+              !badSingleCn.success);
+    // 阶段26 指令十一：中文角色名合法（2~12 码点，白名单内）。
+    auto chineseName = characters.Create(db, accountA.value,
+                                         "\xE4\xB8\xAD\xE6\x96\x87\xE8\x8B\xB1\xE9\x9B\x84", 1, 1,
+                                         1); // "中文英雄"
+    Check("CharacterNameValidationCheck: chinese name accepted",
+          chineseName.success && chineseName.value.name == "\xE4\xB8\xAD\xE6\x96\x87\xE8\x8B\xB1\xE9\x9B\x84");
+    if (chineseName.success) {
+        (void)characters.Delete(db, accountA.value, chineseName.value.characterId);
+    }
+    auto badClass = characters.Create(db, accountA.value, "BadClass", 99, 1, 1);
+    auto badGender = characters.Create(db, accountA.value, "BadGender", 1, 9, 1);
+    auto badVisual = characters.Create(db, accountA.value, "BadVisual", 1, 1, 99);
     Check("ClassGenderValidationCheck: invalid class/gender rejected",
           !badClass.success && !badGender.success);
+    Check("VisualIdValidationCheck: invalid visualId rejected (stage26)", !badVisual.success);
 
     // ---- CharacterCreateCheck（指令八十二）----
-    auto warrior = characters.Create(db, accountA.value, "TestWarrior", 1, 1);
+    auto warrior = characters.Create(db, accountA.value, "TestWarrior", 1, 1, 2);
     Check("CharacterCreateCheck: warrior created, level=1, id>0",
           warrior.success && warrior.value.level == 1 && warrior.value.characterId > 0 &&
               warrior.value.name == "TestWarrior" && warrior.value.classId == 1 &&
               warrior.value.gender == 1);
+    Check("CharacterCreateCheck: visualId persisted (stage26)",
+          warrior.success && warrior.value.visualId == 2);
     Check("CharacterCreateCheck: character row exists",
           QueryScalar(path, "SELECT COUNT(*) FROM characters WHERE name='TestWarrior';") == 1);
 
     // ---- CharacterNameDuplicateCheck（指令八十四）----
-    auto duplicate = characters.Create(db, accountA.value, "TestWarrior", 2, 2);
+    auto duplicate = characters.Create(db, accountA.value, "TestWarrior", 2, 2, 1);
     Check("CharacterNameDuplicateCheck: same name second attempt fails",
           !duplicate.success && duplicate.errorCode == AccountErrorCode::CharacterNameTaken);
 
-    // ---- CharacterLimitCheck（指令八十五）----
-    auto c2 = characters.Create(db, accountA.value, "Hero2", 2, 2);
-    auto c3 = characters.Create(db, accountA.value, "Hero3", 3, 1);
-    auto c4 = characters.Create(db, accountA.value, "Hero4", 1, 2);
-    auto c5 = characters.Create(db, accountA.value, "Hero5", 1, 1);
+    // ---- CharacterLimitCheck（指令八十五 + 阶段26 指令十三）----
+    auto c2 = characters.Create(db, accountA.value, "Hero2", 2, 2, 1);
+    auto c3 = characters.Create(db, accountA.value, "Hero3", 3, 1, 3);
+    auto c4 = characters.Create(db, accountA.value, "Hero4", 1, 2, 1);
+    auto c5 = characters.Create(db, accountA.value, "Hero5", 1, 1, 1);
     Check("CharacterLimitCheck: 4 creations ok, 5th -> CharacterLimitReached",
           c2.success && c3.success && c4.success && !c5.success &&
               c5.errorCode == AccountErrorCode::CharacterLimitReached);

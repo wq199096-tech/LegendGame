@@ -130,7 +130,8 @@ void AccountClientController::SendCharacterList(const std::string& token) {
 }
 
 void AccountClientController::SendCreateCharacter(const std::string& token, const std::string& name,
-                                                  std::uint16_t classId, std::uint16_t gender) {
+                                                  std::uint16_t classId, std::uint16_t gender,
+                                                  std::uint16_t visualId) {
     if (!CanSend()) {
         return;
     }
@@ -140,6 +141,7 @@ void AccountClientController::SendCreateCharacter(const std::string& token, cons
     request.name = name;
     request.classId = classId;
     request.gender = gender;
+    request.visualId = visualId;
     m_lastRequestId = request.requestId;
     std::vector<std::uint8_t> payload;
     if (!legend::account::EncodeCharacterCreateRequest(request, payload)) {

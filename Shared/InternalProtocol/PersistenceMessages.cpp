@@ -24,6 +24,7 @@ bool WriteSummary(ByteWriter& writer, const legend::account::CharacterSummary& v
     writer.WriteUInt32(value.level);
     writer.WriteUInt16(value.mapId);
     writer.WriteUInt64(static_cast<std::uint64_t>(value.lastPlayedAt));
+    writer.WriteUInt16(value.visualId);
     return true;
 }
 
@@ -35,6 +36,7 @@ bool ReadSummary(ByteReader& reader, legend::account::CharacterSummary& value) {
     value.level = reader.ReadUInt32();
     value.mapId = reader.ReadUInt16();
     value.lastPlayedAt = static_cast<std::int64_t>(reader.ReadUInt64());
+    value.visualId = reader.ReadUInt16();
     return reader.IsValid();
 }
 } // namespace
@@ -97,13 +99,15 @@ bool EncodeCharacterCreateCommand(const CharacterCreateCommand& value,
                                   std::vector<std::uint8_t>& out) {
     out.clear(); ByteWriter writer(out); writer.WriteUInt64(value.accountId);
     if (!writer.WriteString(value.name)) return false;
-    writer.WriteUInt16(value.classId); writer.WriteUInt16(value.gender); return true;
+    writer.WriteUInt16(value.classId); writer.WriteUInt16(value.gender);
+    writer.WriteUInt16(value.visualId); return true;
 }
 bool DecodeCharacterCreateCommand(const std::uint8_t* data, std::size_t size,
                                   CharacterCreateCommand& out, std::string& error) {
     ByteReader reader(data, size); out.accountId = reader.ReadUInt64();
     if (!reader.ReadString(out.name)) return false;
-    out.classId = reader.ReadUInt16(); out.gender = reader.ReadUInt16(); return Finish(reader, error);
+    out.classId = reader.ReadUInt16(); out.gender = reader.ReadUInt16();
+    out.visualId = reader.ReadUInt16(); return Finish(reader, error);
 }
 bool EncodeCharacterCommand(const CharacterCommand& value, std::vector<std::uint8_t>& out) {
     out.clear(); ByteWriter writer(out); writer.WriteUInt64(value.accountId);

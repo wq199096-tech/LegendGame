@@ -483,7 +483,7 @@ inline bool SeedAccountAndCharacter(Database& db, AccountService& accounts,
     if (!registered.success) {
         return false;
     }
-    auto created = characters.Create(db, registered.value, charName, 1, 1);
+    auto created = characters.Create(db, registered.value, charName, 1, 1, 1);
     if (!created.success) {
         return false;
     }

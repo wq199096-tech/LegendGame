@@ -24,6 +24,7 @@ struct CharacterCreateCommand {
     std::string name;
     std::uint16_t classId = 0;
     std::uint16_t gender = 0;
+    std::uint16_t visualId = 1; // 阶段26 指令十一：初始造型槽位
 };
 struct CharacterCommand { std::uint64_t accountId = 0; std::uint64_t characterId = 0; };
 

@@ -14,6 +14,7 @@ CharacterSummary CharacterService::ToSummary(const CharacterRow& row) {
     summary.level = row.level;
     summary.mapId = row.mapId;
     summary.lastPlayedAt = row.lastPlayedAt;
+    summary.visualId = row.visualId;
     return summary;
 }
 
@@ -37,9 +38,10 @@ RepositoryResult<std::vector<CharacterSummary>> CharacterService::List(
 RepositoryResult<CharacterSummary> CharacterService::Create(Database& db, std::uint64_t accountId,
                                                             const std::string& name,
                                                             std::uint16_t classId,
-                                                            std::uint16_t gender) const {
+                                                            std::uint16_t gender,
+                                                            std::uint16_t visualId) const {
     RepositoryResult<CharacterSummary> result;
-    // 阶段10 指令三十六/三十七/三十八：入参校验。
+    // 阶段10 指令三十六/三十七/三十八 + 阶段26 指令十一：入参校验（服务器权威）。
     if (!IsValidCharacterName(name)) {
         result.errorCode = AccountErrorCode::InvalidCharacterName;
         result.errorMessage = "invalid character name";
@@ -55,8 +57,14 @@ RepositoryResult<CharacterSummary> CharacterService::Create(Database& db, std::u
         result.errorMessage = "invalid gender id";
         return result;
     }
+    if (!IsValidVisualId(visualId)) {
+        result.errorCode = AccountErrorCode::InvalidCharacterName;
+        result.errorMessage = "invalid visual id";
+        return result;
+    }
     auto created =
-        CharacterRepository::CreateCharacter(db, accountId, name, classId, gender, m_maxCharactersPerAccount);
+        CharacterRepository::CreateCharacter(db, accountId, name, classId, gender, visualId,
+                                             m_maxCharactersPerAccount);
     if (!created.success) {
         result.errorCode = created.errorCode;
         result.errorMessage = created.errorMessage;

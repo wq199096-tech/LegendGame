@@ -220,7 +220,7 @@ namespace CharacterRepository {
 
 RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accountId,
                                                const std::string& name, std::uint16_t classId,
-                                               std::uint16_t gender,
+                                               std::uint16_t gender, std::uint16_t visualId,
                                                std::size_t maxCharactersPerAccount) {
     RepositoryResult<CharacterRow> result;
     std::string error;
@@ -257,10 +257,11 @@ RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accou
         const std::int64_t now = UnixNow();
         // 阶段25 指令四：新角色写"未出生哨兵"(-1,-1) —— WorldServer EnterWorld 检测到
         // 哨兵后按服务器权威地图出生点（Map1 300,300）落地并立即持久化。
+        // 阶段26 指令十一/三十：visual_id 随创建写入（Migration 6）。
         if (!insert.Prepare(db.Handle(),
                             "INSERT INTO characters (account_id, name, class_id, gender, "
-                            "map_id, position_x, position_y, created_at) "
-                            "VALUES (?, ?, ?, ?, 1, -1, -1, ?);",
+                            "visual_id, map_id, position_x, position_y, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, 1, -1, -1, ?);",
                             error)) {
             db.Execute("ROLLBACK;", error);
             return MapSqlError<CharacterRow>("CreateCharacter insert prepare", error);
@@ -269,7 +270,8 @@ RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accou
         insert.BindText(2, name);
         insert.BindInt64(3, classId);
         insert.BindInt64(4, gender);
-        insert.BindInt64(5, now);
+        insert.BindInt64(5, visualId);
+        insert.BindInt64(6, now);
         insert.Step(error);
         if (!error.empty()) {
             db.Execute("ROLLBACK;", error);
@@ -294,6 +296,7 @@ RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accou
         result.value.createdAt = now;
         result.value.lastPlayedAt = 0;
         result.value.deleted = false;
+        result.value.visualId = visualId;
     }
     if (!db.Execute("COMMIT;", error)) {
         return MapSqlError<CharacterRow>("CreateCharacter commit", error);
@@ -307,10 +310,11 @@ RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db
     Statement stmt;
     std::string error;
     // 阶段10 指令四十四：last_played_at DESC，未玩过的按 created_at ASC 排在最后。
-    // 阶段17：SELECT 补 gold 列（Migration 2）。
+    // 阶段17：SELECT 补 gold 列（Migration 2）。阶段26：visual_id（Migration 6）。
     if (!stmt.Prepare(db.Handle(),
                       "SELECT id, account_id, name, class_id, gender, level, exp, gold, map_id, "
-                      "position_x, position_y, created_at, last_played_at, deleted, record_version "
+                      "position_x, position_y, created_at, last_played_at, deleted, record_version, "
+                      "visual_id "
                       "FROM characters WHERE account_id = ? AND deleted = 0 "
                       "ORDER BY last_played_at IS NULL ASC, last_played_at DESC, created_at ASC;",
                       error)) {
@@ -334,6 +338,7 @@ RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db
         row.lastPlayedAt = stmt.ColumnInt64(12);
         row.deleted = stmt.ColumnInt64(13) != 0;
         row.recordVersion = static_cast<std::uint64_t>(stmt.ColumnInt64(14));
+        row.visualId = static_cast<std::uint16_t>(stmt.ColumnInt64(15));
         result.value.push_back(std::move(row));
     }
     if (!error.empty()) {
@@ -350,7 +355,8 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
     std::string error;
     if (!stmt.Prepare(db.Handle(),
                       "SELECT id, account_id, name, class_id, gender, level, exp, gold, map_id, "
-                      "position_x, position_y, created_at, last_played_at, deleted, record_version "
+                      "position_x, position_y, created_at, last_played_at, deleted, record_version, "
+                      "visual_id "
                       "FROM characters WHERE id = ?;",
                       error)) {
         return MapSqlError<std::optional<CharacterRow>>("FindCharacterById prepare", error);
@@ -373,6 +379,7 @@ RepositoryResult<std::optional<CharacterRow>> FindCharacterById(Database& db,
         row.lastPlayedAt = stmt.ColumnInt64(12);
         row.deleted = stmt.ColumnInt64(13) != 0;
         row.recordVersion = static_cast<std::uint64_t>(stmt.ColumnInt64(14));
+        row.visualId = static_cast<std::uint16_t>(stmt.ColumnInt64(15));
         result.success = true;
         result.value = std::move(row);
         return result;

@@ -61,6 +61,8 @@ struct CharacterRow {
     std::int64_t lastPlayedAt = 0;
     bool deleted = false;
     std::uint64_t recordVersion = 1;
+    // 阶段26 指令十一/三十：初始造型槽位（Migration 6 增加，旧角色默认 1）。
+    std::uint16_t visualId = 1;
 };
 
 namespace AccountRepository {
@@ -93,9 +95,10 @@ RepositoryResult<int> RevokeSession(Database& db, std::uint64_t sessionId);
 namespace CharacterRepository {
 
 // 阶段10 指令九十五/九十六：数量检查 + INSERT 必须在同一事务内（并发不超上限）。
+// 阶段26 指令十一：visualId（1~3 造型槽位，由 CharacterService 预校验）。
 RepositoryResult<CharacterRow> CreateCharacter(Database& db, std::uint64_t accountId,
                                                const std::string& name, std::uint16_t classId,
-                                               std::uint16_t gender,
+                                               std::uint16_t gender, std::uint16_t visualId,
                                                std::size_t maxCharactersPerAccount);
 RepositoryResult<std::vector<CharacterRow>> ListCharactersByAccount(Database& db,
                                                                     std::uint64_t accountId);
