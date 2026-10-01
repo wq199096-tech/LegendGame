@@ -22,6 +22,7 @@ std::string TicketStore::Create(std::uint64_t accountId, std::uint64_t character
         ClearExpiredLocked();
         m_entries.emplace(Sha256Hex(ticket), std::move(entry));
     }
+    m_issued.fetch_add(1, std::memory_order_relaxed);
     return ticket;
 }
 
@@ -90,6 +91,7 @@ TicketStore::ConsumeOutcome TicketStore::ConsumeForWorld(const std::string& tick
     outcome.success = true;
     outcome.accountId = entry.accountId;
     outcome.characterId = entry.characterId;
+    m_consumed.fetch_add(1, std::memory_order_relaxed);
     return outcome;
 }
 

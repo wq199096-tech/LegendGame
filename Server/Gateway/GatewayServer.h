@@ -42,6 +42,22 @@ struct LoginResult {
     std::string message;
 };
 
+// Stage25.6 服务器管理台：Gateway 只读统计快照（GUI 线程 Collect 时拷贝）
+struct GatewayStatsSnapshot {
+    std::size_t clientCount = 0;          // 当前客户端连接
+    std::size_t pendingLoginCount = 0;    // 登录转发 in-flight
+    std::size_t stateConnected = 0;       // 状态机分层计数
+    std::size_t stateHandshakeCompleted = 0;
+    std::size_t stateLoginPending = 0;
+    std::size_t stateAuthenticated = 0;
+    std::size_t stateCharacterSelected = 0;
+    std::size_t stateInWorld = 0;
+    std::size_t stateClosing = 0;
+    std::size_t worldProxyCount = 0;      // 活跃 World 代理连接
+    std::uint64_t packetsReceived = 0;    // 客户端侧累计收包
+    std::uint64_t packetsSent = 0;        // 客户端侧累计发包
+};
+
 class GatewayServer : public std::enable_shared_from_this<GatewayServer> {
 public:
     // 测试钩子（阶段9 验收用；正式运行时可空）
@@ -60,6 +76,8 @@ public:
     void Stop();
 
     std::size_t ClientCount() const;
+    // Stage25.6 服务器管理台：只读统计快照（含状态机分层计数与收发包累计）
+    GatewayStatsSnapshot CollectStats() const;
     // 阶段9.1指令三十四：测试只读统计（DisconnectCleanup 验证 Pending 清空）
     std::size_t PendingLoginCount() const {
         std::lock_guard<std::mutex> lock(m_mapsMutex);

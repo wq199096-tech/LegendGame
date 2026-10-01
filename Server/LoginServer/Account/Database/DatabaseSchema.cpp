@@ -188,7 +188,13 @@ bool BootstrapSchemaVersion(Database& db, std::string& error) {
     return true;
 }
 
+// 读版本 / 写版本已提升到 legend::account 作用域（见文件末尾公共定义）。
+
+} // namespace
+
 // 读版本：新格式下 id 是主键，最多一行（无行 = 空库，version 0）。
+// Stage25.6：提升到 legend::account 作用域（DatabaseSchema.h 公共声明），
+// DbServer 管理台在 DB 线程读取运行时 Migration 版本。
 bool ReadSchemaVersion(Database& db, int& outVersion, std::string& error) {
     Statement stmt;
     if (!stmt.Prepare(db.Handle(), "SELECT version FROM schema_version WHERE id = 1;", error)) {
@@ -218,8 +224,6 @@ bool WriteSchemaVersion(Database& db, int version, std::string& error) {
     stmt.Step(error); // SQLITE_DONE
     return error.empty();
 }
-
-} // namespace
 
 bool InitializeSchema(Database& db, std::string& error) {
     // 指令九十八：损坏数据库必须在启动时失败（quick_check），禁止静默重建覆盖。

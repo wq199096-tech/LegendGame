@@ -42,6 +42,12 @@ public:
                                std::uint64_t expectedVersion = 0);
     bool IsAvailable() const { return m_available.load(); }
     std::size_t InFlightCount() const;
+    // Stage25.6 服务器管理台：请求统计 + 降级判定（连续失败 >= 3 视为 Degraded）
+    std::uint64_t RequestsTotal() const { return m_requestsTotal.load(std::memory_order_relaxed); }
+    std::uint64_t RequestsFailed() const { return m_requestsFailed.load(std::memory_order_relaxed); }
+    bool IsDegraded() const {
+        return m_available.load() && m_consecutiveFailures.load(std::memory_order_relaxed) >= 3;
+    }
 
 private:
     struct Pending {
@@ -72,6 +78,10 @@ private:
     std::chrono::steady_clock::time_point m_lastHeartbeat{};
     mutable std::mutex m_mutex;
     std::map<std::uint64_t, Pending> m_pending;
+    // Stage25.6 管理台埋点
+    std::atomic<std::uint64_t> m_requestsTotal{0};
+    std::atomic<std::uint64_t> m_requestsFailed{0};
+    std::atomic<std::uint64_t> m_consecutiveFailures{0};
 };
 
 } // namespace legend::server

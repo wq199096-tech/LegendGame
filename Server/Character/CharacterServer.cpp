@@ -158,6 +158,7 @@ void CharacterServer::HandleAccount(std::uint64_t linkId, const AccountEnvelope&
     const auto message = static_cast<MessageId>(envelope.innerMessageId);
     auto self = shared_from_this(); std::string error;
     if (message == MessageId::CharacterListRequest) {
+        m_listRequests.fetch_add(1, std::memory_order_relaxed);
         legend::account::CharacterListRequestPayload request;
         if (!legend::account::DecodeCharacterListRequest(envelope.innerPayload.data(), envelope.innerPayload.size(), request, error)) return;
         ValidateSession(request.sessionToken, [self, linkId, envelope, request](bool ok, std::uint64_t accountId, std::uint16_t code, std::string message) mutable {
@@ -180,6 +181,7 @@ void CharacterServer::HandleAccount(std::uint64_t linkId, const AccountEnvelope&
         }); return;
     }
     if (message == MessageId::CharacterCreateRequest) {
+        m_createRequests.fetch_add(1, std::memory_order_relaxed);
         legend::account::CharacterCreateRequestPayload request;
         if (!legend::account::DecodeCharacterCreateRequest(envelope.innerPayload.data(), envelope.innerPayload.size(), request, error)) return;
         ValidateSession(request.sessionToken, [self, linkId, envelope, request](bool ok, std::uint64_t accountId, std::uint16_t code, std::string message) mutable {
@@ -188,20 +190,22 @@ void CharacterServer::HandleAccount(std::uint64_t linkId, const AccountEnvelope&
             std::vector<std::uint8_t> payload; legend::internal::EncodeCharacterCreateCommand({accountId,request.name,request.classId,request.gender},payload);
             self->m_persistence->AsyncRequest(DbOperation::CreateCharacter,std::move(payload),[self,linkId,envelope,request,accountId](legend::internal::DbResponse db) mutable {
                 legend::account::CharacterCreateResponsePayload out; out.requestId=request.requestId; out.success=db.errorCode==InternalErrorCode::Ok; out.errorCode=out.success?0:AccountCode(db.errorCode); out.message=out.success?"ok":db.message; std::string decode;
-                if(out.success&&!legend::internal::DecodeCharacterSummary(db.payload.data(),db.payload.size(),out.character,decode)){out.success=false;out.errorCode=static_cast<std::uint16_t>(AccountErrorCode::InternalError);out.message=decode;}if(out.success)self->Audit(legend::internal::LogEventType::CharacterCreate,accountId,out.character.characterId,"character created");
+                if(out.success&&!legend::internal::DecodeCharacterSummary(db.payload.data(),db.payload.size(),out.character,decode)){out.success=false;out.errorCode=static_cast<std::uint16_t>(AccountErrorCode::InternalError);out.message=decode;}if(out.success)self->Audit(legend::internal::LogEventType::CharacterCreate,accountId,out.character.characterId,"character created");if(out.success)self->m_createSuccess.fetch_add(1,std::memory_order_relaxed);
                 std::vector<std::uint8_t> bytes; legend::account::EncodeCharacterCreateResponse(out,bytes); self->SendAccount(linkId,envelope.requestId,envelope.clientConnectionId,static_cast<std::uint16_t>(MessageId::CharacterCreateResponse),std::move(bytes)); });
         }); return;
     }
     if (message == MessageId::CharacterDeleteRequest) {
+        m_deleteRequests.fetch_add(1, std::memory_order_relaxed);
         legend::account::CharacterDeleteRequestPayload request;
         if (!legend::account::DecodeCharacterDeleteRequest(envelope.innerPayload.data(), envelope.innerPayload.size(), request, error)) return;
         ValidateSession(request.sessionToken,[self,linkId,envelope,request](bool ok,std::uint64_t accountId,std::uint16_t code,std::string message) mutable {
             if(!ok){legend::account::CharacterDeleteResponsePayload out{request.requestId,false,request.characterId,code,std::move(message)};std::vector<std::uint8_t> bytes;legend::account::EncodeCharacterDeleteResponse(out,bytes);self->SendAccount(linkId,envelope.requestId,envelope.clientConnectionId,static_cast<std::uint16_t>(MessageId::CharacterDeleteResponse),std::move(bytes));return;}
             std::vector<std::uint8_t> payload;legend::internal::EncodeCharacterCommand({accountId,request.characterId},payload);
-            self->m_persistence->AsyncRequest(DbOperation::DeleteCharacter,std::move(payload),[self,linkId,envelope,request,accountId](legend::internal::DbResponse db) mutable {legend::account::CharacterDeleteResponsePayload out{request.requestId,db.errorCode==InternalErrorCode::Ok,request.characterId,static_cast<std::uint16_t>(db.errorCode==InternalErrorCode::Ok?0:AccountCode(db.errorCode)),db.errorCode==InternalErrorCode::Ok?"ok":db.message};if(out.success)self->Audit(legend::internal::LogEventType::CharacterDelete,accountId,request.characterId,"character deleted");std::vector<std::uint8_t> bytes;legend::account::EncodeCharacterDeleteResponse(out,bytes);self->SendAccount(linkId,envelope.requestId,envelope.clientConnectionId,static_cast<std::uint16_t>(MessageId::CharacterDeleteResponse),std::move(bytes));});
+            self->m_persistence->AsyncRequest(DbOperation::DeleteCharacter,std::move(payload),[self,linkId,envelope,request,accountId](legend::internal::DbResponse db) mutable {legend::account::CharacterDeleteResponsePayload out{request.requestId,db.errorCode==InternalErrorCode::Ok,request.characterId,static_cast<std::uint16_t>(db.errorCode==InternalErrorCode::Ok?0:AccountCode(db.errorCode)),db.errorCode==InternalErrorCode::Ok?"ok":db.message};if(out.success)self->Audit(legend::internal::LogEventType::CharacterDelete,accountId,request.characterId,"character deleted");if(out.success)self->m_deleteSuccess.fetch_add(1,std::memory_order_relaxed);std::vector<std::uint8_t> bytes;legend::account::EncodeCharacterDeleteResponse(out,bytes);self->SendAccount(linkId,envelope.requestId,envelope.clientConnectionId,static_cast<std::uint16_t>(MessageId::CharacterDeleteResponse),std::move(bytes));});
         }); return;
     }
     if (message == MessageId::CharacterSelectRequest) {
+        m_selectRequests.fetch_add(1, std::memory_order_relaxed);
         legend::account::CharacterSelectRequestPayload request;
         if (!legend::account::DecodeCharacterSelectRequest(envelope.innerPayload.data(), envelope.innerPayload.size(), request, error)) return;
         ValidateSession(request.sessionToken,[self,linkId,envelope,request](bool ok,std::uint64_t accountId,std::uint16_t code,std::string message) mutable {
@@ -224,5 +228,24 @@ void CharacterServer::SendAccount(std::uint64_t id,std::uint64_t requestId,std::
 void CharacterServer::Send(std::uint64_t id,const Packet& packet){legend::net::TcpConnectionPtr connection;{std::lock_guard<std::mutex>lock(m_mutex);auto it=m_links.find(id);if(it!=m_links.end())connection=it->second.connection;}if(connection)connection->Send(packet);}
 
 void CharacterServer::Audit(legend::internal::LogEventType type,std::uint64_t accountId,std::uint64_t characterId,std::string message){if(!m_log)return;legend::internal::LogEvent event;event.timestampMs=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());event.service=legend::internal::ServiceType::CharacterServer;event.level=2;event.eventType=type;event.accountId=accountId;event.characterId=characterId;event.message=std::move(message);event.extraJson="{}";m_log->Emit(std::move(event));}
+
+CharacterServer::CharacterStatsSnapshot CharacterServer::CollectStats() const {
+    CharacterStatsSnapshot stats;
+    stats.connectionCount = ConnectionCount();
+    stats.listRequests = m_listRequests.load(std::memory_order_relaxed);
+    stats.createRequests = m_createRequests.load(std::memory_order_relaxed);
+    stats.createSuccess = m_createSuccess.load(std::memory_order_relaxed);
+    stats.deleteRequests = m_deleteRequests.load(std::memory_order_relaxed);
+    stats.deleteSuccess = m_deleteSuccess.load(std::memory_order_relaxed);
+    stats.selectRequests = m_selectRequests.load(std::memory_order_relaxed);
+    stats.ticketsIssued = m_tickets.IssuedCount();
+    stats.ticketsConsumed = m_tickets.ConsumedCount();
+    if (m_server) {
+        stats.packetsReceived = m_server->PacketsReceived();
+        stats.packetsSent = m_server->PacketsSent();
+    }
+    stats.dbAvailable = IsPersistenceAvailable();
+    return stats;
+}
 
 } // namespace legend::character

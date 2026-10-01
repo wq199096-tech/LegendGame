@@ -1111,7 +1111,20 @@ void WorldServer::ScheduleSnapshotTimer() {
         if (ec || self->m_stopped.load()) {
             return;
         }
+        // Stage25.6 管理台：tick 耗时计量（平均/最大，微秒精度）
+        const auto tickStart = std::chrono::steady_clock::now();
         self->SendPositionSnapshots();
+        const auto tickUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() - tickStart)
+                                .count();
+        self->m_snapshotTickCount.fetch_add(1, std::memory_order_relaxed);
+        self->m_snapshotTickTotalUs.fetch_add(static_cast<std::uint64_t>(tickUs),
+                                              std::memory_order_relaxed);
+        auto prevMax = self->m_snapshotTickMaxUs.load(std::memory_order_relaxed);
+        while (static_cast<std::uint64_t>(tickUs) > prevMax &&
+               !self->m_snapshotTickMaxUs.compare_exchange_weak(
+                   prevMax, static_cast<std::uint64_t>(tickUs), std::memory_order_relaxed)) {
+        }
         self->ScheduleSnapshotTimer();
     });
 }
@@ -6597,6 +6610,38 @@ bool WorldServer::TestSetPlayerGold(std::uint64_t characterId, std::int64_t gold
         }
     });
     return true;
+}
+
+// Stage25.6 服务器管理台：World 只读统计快照（GUI 线程每 500ms 调用）。
+WorldServer::WorldStatsSnapshot WorldServer::CollectStats() const {
+    WorldStatsSnapshot stats;
+    stats.playerCount = m_players.PlayerCount();
+    stats.map1Players = m_mapManager.PlayerCount(1);
+    stats.map2Players = m_mapManager.PlayerCount(2);
+    stats.map3Players = m_mapManager.PlayerCount(3);
+    stats.monsterCount = m_monsters.Count();
+    stats.npcCount = m_npcs.Count();
+    stats.portalCount = m_portals.Count();
+    stats.dropCount = m_itemDrops.Count();
+    stats.castingPlayers = CastingPlayerCount();
+    const auto count = m_snapshotTickCount.load(std::memory_order_relaxed);
+    const auto totalUs = m_snapshotTickTotalUs.load(std::memory_order_relaxed);
+    stats.snapshotTickCount = count;
+    stats.tickAvgMs = count > 0 ? static_cast<double>(totalUs) / count / 1000.0 : 0.0;
+    stats.tickMaxMs = static_cast<double>(m_snapshotTickMaxUs.load(std::memory_order_relaxed)) / 1000.0;
+    if (m_server) {
+        stats.packetsReceived = m_server->PacketsReceived();
+        stats.packetsSent = m_server->PacketsSent();
+    }
+    if (m_persistence) {
+        stats.dbAvailable = m_persistence->IsAvailable();
+        stats.dbDegraded = m_persistence->IsDegraded();
+    } else {
+        // dbPort=0 legacy 隔离模式：本地 SQLite/DB Worker
+        stats.dbAvailable = m_config.dbPort == 0;
+        stats.dbDegraded = false;
+    }
+    return stats;
 }
 
 } // namespace legend::world

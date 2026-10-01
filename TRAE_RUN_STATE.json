@@ -1,58 +1,27 @@
 {
   "project": "LegendGame",
-  "branch": "main",
-  "stage": "25.5",
-  "status": "completed",
-  "currentTask": "",
-  "nextTask": "Wait for user Stage25.6 instruction",
-  "headSha": "be338e705a04f7fc6df6fd82b5933acd889806f1",
-  "lastCheckpointSha": "2d48702 (wip stage25.5 codex handoff checkpoint)",
-  "finalSha": "see feature commit feat(server): complete multi-service server architecture",
-  "buildStatus": "Stage25.5 Debug build PASS (11/11 executables; TRAE re-verified after World RPC migration)",
-  "networkTests": "PASS / 0 failures",
-  "accountTests": "PASS / 0 failures (DbServerChecks extended: world persistence RPC sequence)",
-  "worldTests": "PASS / 0 failures",
-  "runtimeSmoke": "Six-service topology PASS; seven-process Vertical Slice PASS (entered-world via World->DbServer RPC)",
-  "actionsRunId": "pending",
-  "actionsStatus": "CI running for feat(server) commit",
-  "resumeRequired": false,
-  "codexHandoff": true,
-  "codexHandoffReport": {
-    "takenOverAt": "2026-10-01T12:30:00+08:00",
-    "gitStateAtTakeover": "HEAD=be338e7 (origin/main), 35 modified files (+894/-104), 17 untracked paths; all Stage25.5 work uncommitted in working tree",
-    "completedByCodex": [
-      "Config/servers.json (6 services + persistence/heartbeat/rpc/security)",
-      "Shared/InternalProtocol (v1, ServiceHandshake/Ack, Heartbeat, Persistence/Character/Log messages, strict decode, 1MB cap)",
-      "Server/Db LegendDbServer (LegendDbCore, account/character persistence RPC)",
-      "Server/Character LegendCharacterServer (LegendCharacterCore, GetCharacterList/Create/Delete/Select + ticket)",
-      "Server/Log LegendLogServer (LegendLogCore, JSONL per-day/per-service)",
-      "Server/Common PersistenceClient + LogClient + ServerConfig (requestId/timeout/in-flight/auto-reconnect)",
-      "Gateway state machine Connected/Authenticated/CharacterSelected/InWorld + world proxy routing",
-      "LoginServer registration/login/session migrated to DbServer; schema v5 characters.record_version",
-      "Studio Launch Full Game order Db->Log->Login->Character->World->Gateway->Client + Process Status 7 services",
-      "CI: Verify 11 exe, Server topology smoke (6 services), Vertical Slice 7-process smoke",
-      "New tests: InternalProtocolChecks/CharacterServerChecks/DbServerChecks/LogServerChecks/ServerTopologyChecks/PersistenceRpcChecks/FullServerTopologyCheck",
-      "Apps: CharacterServerMain/DbServerMain/LogServerMain; Graceful shutdown + heartbeat wired"
-    ],
-    "partiallyCompleted": [
-      "WorldServer persistence RPC migration (PlayerSession dirty flags + PersistenceClient existed; DbServer world ops NOT implemented; WorldServer still on local DbWorker)"
-    ],
-    "notStarted": [
-      "World persistence RPC ops (protocol payloads, DbServer Execute cases, WorldServer dual-mode call sites)"
-    ],
-    "completedByTrae": [
-      "InternalProtocol DbOperation 19-32 (ItemInsertWrite/EquipItemWrite/UnequipItemWrite/QuestInsertWrite/QuestTurnInWrite/QuestAbandonWrite/QuestObjectiveWrite/QuestStateWrite/OfflineKillWrite/ShopBuyWrite/ShopSellWrite/SaveGoldWrite/AddRewardsWrite/LoadCharacterFull) + strict codecs in PersistenceMessages",
-      "Repository layer: InventoryRepository InsertOrMergeItem/RunShopBuyTransaction/RunShopSellTransaction + CharacterRepository SaveGold (new LegendWorldData static lib shared by WorldCore and DbCore)",
-      "DbServer Execute: all 10 missing world persistence ops incl. atomic transactions",
-      "WorldServer dual-mode (dbPort=0 legacy isolated tests / dbPort!=0 DbServer RPC): Start/Stop drain, EnterWorld 3-segment load chain, position/progression/gold/offline-reward helpers, pickup/equip/unequip/quest x5/shop buy+sell call sites; graceful shutdown via PersistenceClient::Drain",
-      "WorldServerMain: dbPort/serviceToken/rpcTimeout wired from Config/servers.json",
-      "Tests: DbServerChecks extended with real RPC world-op sequence (position/progression/gold/item insert+merge/equip/unequip/quest insert/objective/state/roundtrip/offline kill/shop buy+sell/rewards/turn-in/abandon/malformed reject); PersistenceRpcChecks extended with world codec roundtrips + truncation rejection",
-      "Fixed OfflineKillWrite semantics (false = no InProgress quest to advance, not an error)",
-      "Fixed MSVC argument-evaluation-order bug (lambda move init-capture emptied request payload before parameter copy)"
-    ]
-  },
-  "stage25ChineseStudioPatch": {
-    "status": "completed, pushed, CI success",
-    "finalSha": "b7be2dc24731d5e91605389776c9785d3ed7b656"
-  }
+  "branch": "stage25.6-integration",
+  "stage": "25.6",
+  "status": "running",
+  "resumeRequired": true,
+  "stage25_5_ci_status": "success",
+  "stage25_5_failed_gate": "resolved (Run #68 all green)",
+  "stage25_6_wip_preserved": true,
+  "currentTask": "CI Run #68 (36858823913) ALL GREEN on PR #1 (stage25.6-integration -> main); awaiting user decision on merging PR #1; Stage25.6 GUI acceptance already PASS (6 servers + Studio server center, evidence in testlogs/gui-acceptance)",
+  "nextTask": "After PR #1 merge decision: Stage25.6 may resume (user rule: CI green unlocks Stage25.6); do not push main directly",
+  "headSha": "a0c7181 (fix(stage25.5): restore ctest stability after gui handoff)",
+  "wipBackupBranch": "backup/stage25.6-wip",
+  "wipBackupSha": "f200669c09817e78ac8fbf9cbefc305fd959c150",
+  "integrationBranch": "stage25.6-integration",
+  "integrationBaseSha": "c140e00054db9790e9dd2c2fa87b668bb3110da5",
+  "integrationWipSha": "3686db1 (cherry-pick of f200669c, conflict-free)",
+  "buildStatus": "CI Build all targets PASS + Verify 11 exe PASS; local 11/11 exe (VS2022 BuildTools, VS-bundled CMake 3.31)",
+  "networkTests": "PASS (CI Run #68 CTest hard gate)",
+  "accountTests": "PASS (CI Run #68 CTest hard gate)",
+  "worldTests": "PASS (CI Run #68 CTest hard gate; StatusSnapshotCheck hardened)",
+  "runtimeSmoke": "Run #68: Runtime gate PASS; Server topology smoke PASS; Vertical Slice full 7-process chain PASS",
+  "actionsRunId": "36858823913",
+  "actionsStatus": "success",
+  "constraints": "Preserve Stage25.6 WIP (Server/AdminUi, Tools/UiCore, six-server GUI, Logger capture, EditorStrings/EditorTheme migration, Studio server center); no test deletion / weaker assertions / continue-on-error / long sleeps / CTest bypass; semantic merge only, no ours/theirs wholesale overwrite",
+  "codexHandoff": false
 }

@@ -48,6 +48,24 @@ public:
 
     explicit LoginServer(legend::net::NetworkService& service);
 
+    // Stage25.6 服务器管理台：Login 只读统计快照（GUI 线程 Collect 时拷贝）
+    struct LoginStatsSnapshot {
+        std::size_t gatewayCount = 0;      // 登录连接（Gateway）
+        std::uint64_t authRequests = 0;    // 认证请求
+        std::uint64_t authSuccess = 0;     // 认证成功
+        std::uint64_t authFail = 0;        // 认证失败
+        std::uint64_t accountRequests = 0; // 账号链路请求（注册/登录/会话/角色）
+        std::uint64_t sessionsCreated = 0; // Session 创建次数
+        std::uint64_t ticketsIssued = 0;   // Ticket 签发次数
+        std::uint64_t ticketsConsumed = 0; // Ticket 消费次数
+        std::size_t ticketsLive = 0;       // 未消费 Ticket 数
+        std::uint64_t packetsReceived = 0;
+        std::uint64_t packetsSent = 0;
+        bool dbRemote = false;             // true=DbServer RPC 模式 / false=本地 SQLite
+        bool dbAvailable = false;          // DbServer 状态 / 本地 DB 打开状态
+    };
+    LoginStatsSnapshot CollectStats() const;
+
     struct Config {
         std::uint16_t listenPort = 7100;          // 指令四十一：默认 127.0.0.1:7100
         std::string databasePath = "data/legend_account.db"; // 指令四
@@ -64,7 +82,10 @@ public:
     bool Start(std::string& error);
     void Stop();
     Config& GetConfig() { return m_config; } // 测试可改端口/DB 路径（Start 前设置）
-    std::size_t GatewayCount() const { return m_gateways.size(); }
+    std::size_t GatewayCount() const {
+        std::lock_guard<std::mutex> lock(m_gatewaysMutex);
+        return m_gateways.size();
+    }
     void SetHooks(Hooks hooks) { m_hooks = std::move(hooks); }
     // 测试钩子：直接访问内存 TicketStore（Validate/Consume 单元测试）。
     legend::account::TicketStore& Tickets() { return m_ticketStore; }
@@ -98,10 +119,17 @@ private:
     std::shared_ptr<legend::net::TcpServer> m_server;
     // 阶段10：m_gateways 由 io 线程（accept/packet/close 回调）与主线程（Stop）
     // 并发访问——加锁（Stop clear vs OnGatewayClosed erase 数据竞态修复）
-    std::mutex m_gatewaysMutex;
+    mutable std::mutex m_gatewaysMutex;
     std::map<std::uint64_t, GatewayLink> m_gateways;
     std::atomic<bool> m_stopped{false};
     Hooks m_hooks;
+
+    // Stage25.6 管理台埋点（原子计数，DB/io 线程写，GUI 线程读）
+    std::atomic<std::uint64_t> m_authRequests{0};
+    std::atomic<std::uint64_t> m_authSuccess{0};
+    std::atomic<std::uint64_t> m_authFail{0};
+    std::atomic<std::uint64_t> m_accountRequests{0};
+    std::atomic<std::uint64_t> m_sessionsCreated{0};
 
     // 阶段10：SQLite + 账号/角色/Session 服务（连接只在 DB Worker 线程使用）。
     legend::account::Database m_database;

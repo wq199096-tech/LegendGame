@@ -6,6 +6,7 @@
 #include "Shared/Network/NetworkConstants.h"
 #include "Shared/Network/Protocol.h" // 阶段9.1：LoginErrorCode/payload Encode/Decode
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -83,7 +84,8 @@ private:
 
     legend::net::TcpConnectionPtr m_connection;
     std::uint64_t m_connectionId = 0;
-    GatewaySessionState m_state = GatewaySessionState::Connected;
+    // Stage25.6：atomic——管理台 GUI 线程 CollectStats 与 io 线程并发读写同一状态
+    std::atomic<GatewaySessionState> m_state{GatewaySessionState::Connected};
     std::string m_username;
     std::string m_pendingUsername; // 暂存待转发（token 不落日志，指令五十二）
     std::string m_pendingToken;

@@ -39,6 +39,8 @@ enum class InternalErrorCode : std::uint16_t {
     Timeout = 8,
     ProtocolMismatch = 9,
     InternalError = 10,
+    // 阶段25.5：账号/密码错误（保留语义供上层注册回退等流程使用）。
+    InvalidCredentials = 11,
 };
 
 enum class DbOperation : std::uint16_t {

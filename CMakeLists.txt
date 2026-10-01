@@ -123,6 +123,8 @@ add_subdirectory(Engine)
 add_subdirectory(Engine/Network)
 add_subdirectory(Server)
 add_subdirectory(Client)
+# Stage25.6：UI 基建（legend_imgui + EditorTheme/EditorStrings）先于 MapEditor 定义
+add_subdirectory(Tools/UiCore)
 add_subdirectory(Tools/MapEditor)
 # 阶段10 指令一百零五/一百零七：根目录 enable_testing —— ctest 从 Build 根
 # 即可发现 NetworkTests + AccountTests（原先只在 Tests 子目录生效，根 ctest 找不到测试）

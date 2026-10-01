@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -103,11 +104,19 @@ private:
     void DrawQuestFlowWindow();           // 章节任务链流程视图
     void DrawBossEditorWindow();          // Boss（怪物+掉落+刷新）绑定编辑
     void DrawProcessStatusWindow();       // 本地游戏进程状态
+    void DrawServerCenterWindow();        // Stage25.6：服务器中心（集中启停 6 服务）
     void ValidateAll();                   // World + Game + Assets 全量校验
     void LaunchFullGame();                // Stage25.5 七进程完整拓扑
     bool LaunchEditorProcess(const char* name, const std::string& exeName,
-                             const std::string& args = "");
+                             const std::string& args = "",
+                             unsigned long creationFlags = 0);
     void StopLocalGame();
+    // Stage25.6 服务器中心 helpers（全部真实逻辑）
+    bool LaunchService(int serviceIndex); // 0..5 = Db/Log/Login/Character/World/Gateway
+    void StopServiceAt(int rowIndex);     // 优雅停机：PostMessageW(WM_CLOSE)
+    void OpenServiceWindow(int serviceIndex); // FindWindowW(固定标题) + ShowWindow
+    void StopAllServices();               // 逐个优雅停机（不 TerminateProcess）
+    void ReapFinishedProcesses();         // 回收已退出进程句柄
     void DrawQuestAreaOverlay();          // ReachArea 圈层绘制 + 拾取模式提示
     // 加载/缓存整张 sheet 纹理（ImGui GL 纹理 id）；失败返回 0。
     unsigned int GetOrLoadSheetTexture(const legend::visual::AssetManifestEntry* sheet);
@@ -139,9 +148,14 @@ private:
         bool launchFailed = false;
         DWORD exitCode = 0;
         bool exitCodeValid = false;
+        // Stage25.6 服务器中心：服务身份与优雅停机状态（-1 = 非服务器，如 Client）
+        int serviceIndex = -1;
+        bool gracefulStopSent = false;
+        std::chrono::steady_clock::time_point stopSentAt{};
     };
     std::vector<EditorProcess> m_processes;
     std::string m_serverConfigPath = "Config/servers.json";
+    bool m_showServerCenter = false; // Stage25.6：服务器中心窗口
 
     // ---- 阶段24：Visual Asset 绑定 / Assets Validation / Visual Preview ----
     void LoadVisualCatalog();              // Initialize 时加载 Data/Assets（失败降级）

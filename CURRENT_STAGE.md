@@ -1,11 +1,69 @@
-# CURRENT_STAGE — Stage25.5 Server Architecture Completion V0.255
+# CURRENT_STAGE — Stage25.6 Server Management GUI V0.256
 
-## Stage25.5（2026-10-01）— feature-complete, CI stabilization in progress
+## Stage25.6（2026-10-01）
 
-- 状态：**feature-complete, CI stabilization in progress**（CI Run #66 =
-  36827770559 FAILURE：仅 Vertical Slice runtime smoke (full 7-process chain)
-  失败；其余 Configure/Build/Verify 11 exe/CTest/Runtime gate/Topology smoke 全绿）。
-  Vertical Slice 全绿之前不得标记 completed；不进入 Stage25.6/Stage26。
+- 状态：**implementation WIP preserved + GUI 验收 PASS（2026-10-01 本机实测）**。
+  六服务器（Login/Character/Gateway/World/Db/Log）逐一实测：SDL3+ImGui 真图形窗口、
+  全简体中文、GUI 模式 CMD=0、五页签（概览/连接/性能/日志/配置）+状态栏、
+  通用 12 项+专属指标全齐、依赖服务状态实时 Healthy、WM_CLOSE 优雅停机 6/6
+  （exit 0 + "graceful shutdown/Shutting down" 日志）、--console 模式 6/6 正常；
+  Studio 服务器中心实测：六行服务/启动全部(全绿+无CMD)/停止全部/单独启停/
+  打开管理窗口/日志过滤四级/清空显示 均真实生效。截图证据：
+  testlogs/gui-acceptance/。**未经 CI 全绿前不宣称封板**——Run #68 已全绿，
+  待合并 PR #1 后此条自动满足。
+- 整合方式：WIP 已备份于 `backup/stage25.6-wip`（f200669c），cherry-pick 至
+  `stage25.6-integration`（基于 Stage25.5 c140e00）。在 Stage25.5 CI 修复全绿之前
+  **暂停 Stage25.6 开发**（用户指令：CI 全绿才能继续 Stage25.6）。
+- 交付内容（用户 15 条硬性要求逐项落实）：
+  - **统一 Admin UI 框架**：新静态库 `LegendServerAdminUi`（Server/AdminUi/）——
+    ServerAdminApp（SDL3+Dear ImGui+EditorTheme，概览/连接/性能/日志/配置五页签+状态栏，
+    全简体中文）、ServerMainRunner（统一入口/参数预扫描/GUI+worker 双线程/优雅停机）、
+    LogCapture（Logger sink→4096 行环形缓冲→实时日志面板：级别过滤/搜索/暂停滚动/清空）。
+  - **UI 基建共享**：legend_imgui + EditorTheme/EditorStrings 抽取至 `Tools/UiCore`，
+    Studio 与六服务器共链（一套主题/中文字体链/DPI，零重复实现）。
+  - **六个服务器 exe**：`WIN32_EXECUTABLE + /ENTRY:mainCRTStartup`——双击打开
+    「LegendGame <服务中文名> 管理台」GUI 窗口（无 CMD）；`--console` 开发/CI 模式
+    （保留 asio signal_set，AttachConsole/AllocConsole 兜底）；`--hidden` 隐藏窗口
+    （Studio 服务器中心启动用）。关窗=WM_CLOSE→Graceful Shutdown，绝不 TerminateProcess。
+  - **每服专属指标**（CollectStats 快照，GUI 线程 500ms 拉取，原子计数）：
+    Login(网关连接/认证成功失败/Session 创建/Ticket 三计数/Db 状态)、
+    Character(角色增删列表选择计数/Ticket/Db 状态)、Gateway(状态机分层
+    Connected→InWorld 计数/收发包/Login+Character+World 状态)、
+    World(在线玩家/Map1-3 人数/怪物/NPC/掉落/Tick avg+max ms/Persistence Degraded/Db/Log)、
+    Db(SQLite 状态/DB 路径/DbWorker/查询/写入/事务/失败/Queue 长度/运行时 Migration 版本)、
+    Log(接收/写入/Queue/丢弃/当前文件/文件大小/fallback 状态)。
+  - **埋点**：Logger::SetSink；TcpConnection/TcpServer 收发包计数（关闭并入，单调）；
+    PersistenceClient 请求统计+连续失败 Degraded 判定；DbWorker QueueLength/IsRunning；
+    TicketStore 计数；World 100ms tick 计时；DbServer 运行时 ReadSchemaVersion（公开 API）。
+  - **Studio 服务器中心**：运行菜单新增「服务器中心」——集中显示 Db/Log/Login/Character/
+    World/Gateway（端口/PID/状态/操作列），启动全部/停止全部/单独启停/打开对应管理窗口
+    （FindWindowW 固定标题）/启动客户端，全部按钮真实接线；重复启动防护、优雅停机状态
+    （优雅停止中…/未响应）。「启动完整游戏」改为 --hidden 静默拉起六服务 +
+    CREATE_NO_WINDOW 隐藏客户端控制台（不再弹 CMD）；StopLocalGame 删除 TerminateProcess，
+    全部改 EnumWindows/FindWindowW + WM_CLOSE 优雅停机。
+  - **CI**：两处 smoke 六进程 ArgumentList 追加 `--console`（GUI 子系统无人值守兼容）。
+- 本地验证：
+  - Debug 构建 **11/11 exe** 全绿（含六服务器 GUI 子系统入口）。
+  - 3 套 CTest 串行干净运行 **全 PASS 0 failures**（Network/Account/World；
+    注：并行多实例会因测试端口 7100-7600 争用产生假失败，须串行）。
+  - Gateway GUI 试点：双击等价启动→窗口出现/无 CMD→7300 就绪→WM_CLOSE→exit 0+
+    latest.log「Shutting down」；DbServer --hidden 试点：MainWindowHandle=0/7500 就绪/
+    隐藏窗口 WM_CLOSE→exit 0+「graceful shutdown」；6 服务 --console 拓扑冒烟通过。
+- 待办（不阻塞代码封板）：人工 GUI 视觉验收清单（五页签数据/日志过滤搜索暂停清空/
+  服务器中心启停全链）；git 提交与 GitHub Actions CI（本机无 git）。
+
+---
+
+## 历史：Stage25.5 Server Architecture Completion V0.255
+
+## Stage25.5（2026-10-01）— feature-complete, CI all green
+
+- 状态：**CI 全绿（Run #68 = 36858823913 SUCCESS，PR #1 / stage25.6-integration 分支）**。
+  七步骤逐项确认：Configure / Build / Verify 11 exe / **CTest hard gate**（#67 失败点已修复）/
+  Runtime gate / Server topology smoke / **Vertical Slice full 7-process chain**（#66 失败点）
+  全部 SUCCESS。main 尚未合并（PR #1 待用户决定）。
+  历史失败：Run #67（CTest hard gate，StatusSnapshotCheck 慢机竞态）→ 已修复；
+  Run #66（仅 Vertical Slice smoke）。不进入 Stage26。
 - 稳定化修复（仅动失败链路，不重构已通过的 Db/Character/Log/Gateway/
   Persistence RPC/Topology smoke）：
   - Client AutoEnter 墙钟节流：原实现每帧 -1/60 为帧率依赖，CI llvmpipe 软渲染
@@ -16,6 +74,12 @@
     即依赖服务尚未 Healthy）退避 2s 重试（建角有界 5 次），替换原一次性标志位死锁。
   - Client 进世界失败重试：EnterWorld 失败（ticket 一次性作废）→ 重新选角换新
     ticket 重试，替换原 Failed 态死等。
+  - StatusSnapshotCheck 慢机加固（Run #67 CTest hard gate 失败点，诊断
+    `[Diag] Snapshot: got=1 effects=0`）：怪物 6 在 Burn 施加前生成的旧空快照
+    仍留在客户端队列且更新，快照等待反向扫描先命中它 → effects=0 假失败。
+    修复：检查前白盒重施 Burn（保证效果存活）+ 内容断言（2003/1 层）并入
+    等待谓词（跳过旧空快照；服务器快照漏带效果时 6s 内无匹配照样失败，
+    断言强度不变）。修复后本地 CTest 3/3 PASS。
   - CI Vertical Slice 步骤失败诊断：任何失败路径 dump 客户端+六服务日志尾部 30 行
     （不改变断言强度/不加 sleep/不 continue-on-error）。
 - 正式进程 8 个：LegendClient / LegendMapEditor(Studio) / LegendLoginServer /

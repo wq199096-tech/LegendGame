@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -38,6 +39,14 @@ public:
     // 一次性消费：校验未过期 + 未消费，成功返回 ticket 绑定的 accountId/characterId。
     ConsumeOutcome ConsumeForWorld(const std::string& ticket);
 
+    // Stage25.6 服务器管理台只读统计（原子计数，GUI 线程可随时读）
+    std::uint64_t IssuedCount() const { return m_issued.load(std::memory_order_relaxed); }
+    std::uint64_t ConsumedCount() const { return m_consumed.load(std::memory_order_relaxed); }
+    std::size_t LiveCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_entries.size();
+    }
+
 private:
     struct TicketEntry {
         std::uint64_t accountId = 0;
@@ -50,6 +59,8 @@ private:
 
     mutable std::mutex m_mutex;
     std::unordered_map<std::string, TicketEntry> m_entries; // key = ticketHash
+    std::atomic<std::uint64_t> m_issued{0};   // Stage25.6 管理台埋点
+    std::atomic<std::uint64_t> m_consumed{0};
 };
 
 } // namespace legend::account

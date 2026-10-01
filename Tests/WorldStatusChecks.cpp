@@ -1239,18 +1239,28 @@ void RunStatusChainChecks() {
 
     // ---- StatusSnapshot 系列（指令五十九/六十/一百一十六/一百一十七）----
     {
+        // 阶段25.5 慢机加固（CI Run #67 实测）：上一检查的 Burn 刷新距本检查隔着
+        // 两道 Updated 等待（慢机可达数秒），Burn 8s 时长可能已到期 -> 怪物快照
+        // effects=0 假失败。检查前白盒重施一次，把"效果仍存活"变为测试内保证
+        //（不削弱断言：快照必须携带效果的要求原样保留）。
+        ApplyWhitebox(servers, kTypeMonster, 6, kStatusEffectIdBurn, seedA.characterId);
+        // 内容断言并入谓词：等"携带 Burn(2003)/1 层"的怪物快照，而非任意怪物快照——
+        // 慢机上重施前过期窗口内生成的空快照可能仍在队列且更新，先命中会造成
+        // effects=0 假失败（CI Run #67 实测）。重施后 8s 窗口内服务器生成的快照
+        // 必然携带 2003，若服务器快照漏带效果则 6s 内无任何匹配 -> 照样失败，
+        // 断言强度不变。
         WorldNetworkEvent snap;
         const bool got = WaitStatusEvent(
             clientA, WorldNetworkEvent::Type::StatusSnapshotEvent,
             [&](const WorldNetworkEvent& e) {
-                return e.status.targetType == kTypeMonster && e.status.targetEntityId == 6;
+                return e.status.targetType == kTypeMonster &&
+                       e.status.targetEntityId == 6 &&
+                       !e.status.snapshotEffects.empty() &&
+                       e.status.snapshotEffects[0].effectId == 2003 &&
+                       e.status.snapshotEffects[0].stacks == 1;
             },
             snap, 6000);
-        bool ok = got && !snap.status.snapshotEffects.empty();
-        if (ok) {
-            ok = ok && snap.status.snapshotEffects[0].effectId == 2003 &&
-                 snap.status.snapshotEffects[0].stacks == 1;
-        }
+        bool ok = got;
         // A 自身快照到达（Player targetType；BF 若已过期则 effects 为空属合法）
         WorldNetworkEvent selfSnap;
         const bool selfGot = WaitStatusEvent(

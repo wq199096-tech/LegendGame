@@ -303,6 +303,12 @@ void LoginServer::HandleAuthRequest(std::uint64_t gatewayConnectionId, const Pac
         return;
     }
     connection->Send(responsePacket);
+    m_authRequests.fetch_add(1, std::memory_order_relaxed);
+    if (success) {
+        m_authSuccess.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        m_authFail.fetch_add(1, std::memory_order_relaxed);
+    }
     if (m_hooks.onAuthResult) {
         m_hooks.onAuthResult(requestId, username, success, out.accountId);
     }
@@ -409,6 +415,7 @@ void LoginServer::HandleAccountForward(std::uint64_t gatewayConnectionId, const 
     }
     const std::uint64_t requestId = envelope.requestId;
     const std::uint64_t clientConnectionId = envelope.clientConnectionId;
+    m_accountRequests.fetch_add(1, std::memory_order_relaxed);
 
     if (m_persistence) {
         HandleRemoteAccountForward(gatewayConnectionId, envelope);
@@ -502,6 +509,9 @@ void LoginServer::HandleAccountForward(std::uint64_t gatewayConnectionId, const 
                                            ? "ok"
                                            : std::string(legend::account::AccountErrorCodeName(
                                                  static_cast<std::uint16_t>(outcome.errorCode)));
+                    if (response.success) {
+                        m_sessionsCreated.fetch_add(1, std::memory_order_relaxed);
+                    }
                     if (!outcome.success) {
                         // 指令六十九：日志绝不含 password / token
                         LOG_WARN("[Login] Login failed for user=" + username + " code=" +
@@ -746,6 +756,8 @@ void LoginServer::HandleRemoteAccountForward(
     };
     const auto accountError = [](InternalErrorCode code) {
         if (code == InternalErrorCode::NotAuthenticated) return AccountErrorCode::SessionInvalid;
+        if (code == InternalErrorCode::InvalidCredentials)
+            return AccountErrorCode::InvalidCredentials;
         if (code == InternalErrorCode::DatabaseUnavailable || code == InternalErrorCode::Timeout ||
             code == InternalErrorCode::ServiceUnavailable) return AccountErrorCode::ServiceUnavailable;
         return AccountErrorCode::InternalError;
@@ -780,7 +792,8 @@ void LoginServer::HandleRemoteAccountForward(
             std::vector<std::uint8_t> payload;
             if (!EncodeAccountCredentials({request.username, request.password}, payload)) return;
             m_persistence->AsyncRequest(DbOperation::LoadAccount, std::move(payload),
-                [reply, requestId = request.requestId, accountError](DbResponse db) mutable {
+                [self = shared_from_this(), reply, requestId = request.requestId,
+                 accountError](DbResponse db) mutable {
                     AccountLoginResponsePayload response; response.requestId = requestId;
                     response.success = db.errorCode == InternalErrorCode::Ok;
                     response.errorCode = static_cast<std::uint16_t>(accountError(db.errorCode));
@@ -790,6 +803,9 @@ void LoginServer::HandleRemoteAccountForward(
                         response.accountId = result.accountId; response.sessionToken = std::move(result.sessionToken);
                         response.expiresAt = result.expiresAt;
                     } else if (response.success) { response.success = false; response.message = "invalid database response"; }
+                    if (response.success) {
+                        self->m_sessionsCreated.fetch_add(1, std::memory_order_relaxed);
+                    }
                     std::vector<std::uint8_t> bytes; EncodeAccountLoginResponse(response, bytes);
                     reply(static_cast<std::uint16_t>(MessageId::AccountLoginResponse), std::move(bytes));
                 });
@@ -820,6 +836,26 @@ void LoginServer::HandleRemoteAccountForward(
             LOG_WARN("[Login] Character request reached LoginServer while CharacterServer routing is enabled.");
             return;
     }
+}
+
+LoginServer::LoginStatsSnapshot LoginServer::CollectStats() const {
+    LoginStatsSnapshot stats;
+    stats.gatewayCount = GatewayCount();
+    stats.authRequests = m_authRequests.load(std::memory_order_relaxed);
+    stats.authSuccess = m_authSuccess.load(std::memory_order_relaxed);
+    stats.authFail = m_authFail.load(std::memory_order_relaxed);
+    stats.accountRequests = m_accountRequests.load(std::memory_order_relaxed);
+    stats.sessionsCreated = m_sessionsCreated.load(std::memory_order_relaxed);
+    stats.ticketsIssued = m_ticketStore.IssuedCount();
+    stats.ticketsConsumed = m_ticketStore.ConsumedCount();
+    stats.ticketsLive = m_ticketStore.LiveCount();
+    if (m_server) {
+        stats.packetsReceived = m_server->PacketsReceived();
+        stats.packetsSent = m_server->PacketsSent();
+    }
+    stats.dbRemote = m_persistence != nullptr;
+    stats.dbAvailable = m_persistence ? m_persistence->IsAvailable() : m_database.IsOpen();
+    return stats;
 }
 
 } // namespace legend::login

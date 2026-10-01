@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <string>
 #include <fstream>
@@ -16,6 +17,12 @@ enum class LogLevel {
 // 全局日志：同时输出到控制台与 Logs/latest.log
 class Logger {
 public:
+    // 进程内日志钩子（Stage25.6 服务器管理台实时日志面板）。
+    // 回调在 Logger 内部锁内触发：sink 内禁止再调用任何 Logger API（防死锁）。
+    using Sink = std::function<void(LogLevel, const std::string& formattedLine)>;
+    static void SetSink(Sink sink);
+    static void ClearSink();
+
     static void Init(const std::string& logDirectory = "Logs");
     static void Shutdown();
 
@@ -29,6 +36,7 @@ private:
 
     static std::mutex s_mutex;
     static std::ofstream s_file;
+    static Sink s_sink;
 };
 
 } // namespace legend::debug

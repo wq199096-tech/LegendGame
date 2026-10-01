@@ -1,40 +1,16 @@
 # ---------------------------------------------------------------------------
 # LegendMapEditor：地图编辑器 Prototype（使用 Dear ImGui 开发工具 UI）
+# legend_imgui / EditorTheme / EditorStrings 已抽取至 Tools/UiCore（Stage25.6，
+# 与六服务器管理台共用同一套 UI 基建与主题）。
 # ---------------------------------------------------------------------------
-set(IMGUI_DIR ${imgui_SOURCE_DIR})
-
-add_library(legend_imgui STATIC
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-)
-
-target_include_directories(legend_imgui PUBLIC
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-)
-
-target_link_libraries(legend_imgui
-    PUBLIC
-        SDL3::SDL3
-)
-
-if(WIN32)
-    target_link_libraries(legend_imgui PRIVATE opengl32)
-endif()
-
 add_executable(LegendMapEditor
     Source/Main.cpp
     Source/EditorApp.cpp
-    Source/EditorTheme.cpp
     Source/WorldDocument.cpp
     Source/GameDataDocument.cpp
 )
 
-target_link_libraries(LegendMapEditor PRIVATE legend_engine legend_imgui LegendSharedNetwork LegendVisualData)
+target_link_libraries(LegendMapEditor PRIVATE legend_engine legend_ui_core LegendSharedNetwork LegendVisualData)
 
 if(MSVC)
     target_compile_options(LegendMapEditor PRIVATE /utf-8)
