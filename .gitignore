@@ -1,6 +1,7 @@
 # 构建产物
 Build/
 build-stage255/
+dist/
 
 # 运行时日志
 Logs/
