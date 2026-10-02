@@ -1,9 +1,10 @@
 # CURRENT_STAGE — Stage26 Production Login & Character Lobby V0.26
 
-## Stage26（2026-10-01/02）— **completed（代码封板，待 PR + main CI 后正式封板）**
+## Stage26（2026-10-01/02）— **completed（封板）**
 
-- **状态：completed（本地）**。目标达成：LegendClient.exe 已升级为普通玩家完整入口：
-  启动画面 → 连接 → 登录/注册 → 角色大厅 → 创建/删除/选择角色 → 进入世界 → 正式游戏。
+- **状态：completed（正式封板）**。PR #2 已合并 main（merge SHA a972063），
+  PR 分支 CI Run 36916004962 全绿，main CI Run 36918395388 七步骤 SUCCESS，
+  本机 GUI 人工验收 PASS（14 张截图）。等待 Stage27 指令。
 - 交付内容（五大批次，分支 `stage26-production-client-entry`，基线 6f02d42）：
   1. **服务器规则层（批次 A）**：角色名 UTF-8 码点规则（2~12 码点，CJK+ASCII 白名单，
      严格解码拒绝截断/overlong/代理区）；visualId 持久化（DB Migration 6，
