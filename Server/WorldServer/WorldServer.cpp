@@ -1404,6 +1404,9 @@ void WorldServer::HandleChatSendRequest(std::uint64_t connectionId,
     // 指令四十四：正常日志（不打印 Token/Ticket/密码）。
     LOG_INFO("[Chat] sent player=" + player->CharacterName() + " channel=" +
              std::to_string(request.channel) + " len=" + std::to_string(request.text.size()));
+    // 提交成功回执（客户端以 ChatSendResponse 为准；防重放重复请求的幂等回执
+    // 也走同一接口——重复请求在上方提前返回）。
+    SendChatSendResponse(player, request.requestId, true, chat::ChatErrorCode::None);
     // 指令十八：审计（LogServer 不可用由 EmitChatAudit 内部 warning 兜底）。
     chat::ChatAuditRecord audit;
     audit.timestampMs = event.timestamp;

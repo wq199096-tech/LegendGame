@@ -57,7 +57,7 @@ void ClientNetworkController::Update(legend::input::InputManager& input, float d
                 m_account.State() == AccountFlowState::Unauthenticated) {
                 LOG_INFO("[Account] Dev auto login requested (Shift+F10).");
                 m_devLoginStage = DevLoginStage::LoggingIn;
-                m_account.SendAccountLogin(kDevUsername, kDevPassword);
+                m_account.SendAccountLogin(DevUsername(), DevPassword());
             }
         }
     }
@@ -233,7 +233,7 @@ void ClientNetworkController::UpdateAutoEnter() {
         if (!m_autoEnterLoggedIn) {
             LOG_INFO("[AutoEnter] dev login (LEGEND_CLIENT_AUTO_ENTER).");
             m_devLoginStage = DevLoginStage::LoggingIn;
-            m_account.SendAccountLogin(kDevUsername, kDevPassword);
+            m_account.SendAccountLogin(DevUsername(), DevPassword());
             m_autoEnterLoggedIn = true;
             AutoEnterWait(0.5f);
         } else if (IsRetryableAccountCode(m_account.LastErrorCode())) {
@@ -262,9 +262,14 @@ void ClientNetworkController::UpdateAutoEnter() {
         !m_account.HasSelectedCharacter()) {
         if (m_account.Characters().empty()) {
             if (!m_autoEnterCreated) {
-                LOG_INFO("[AutoEnter] creating character 'Hero' (class 1).");
+                // Stage27：LEGEND_CLIENT_DEV_CHARNAME 允许双冒烟客户端用不同角色名
+                //（角色名全局唯一，两个客户端同名创建会被服务器拒绝）。
+                const char* nameEnv = SDL_getenv("LEGEND_CLIENT_DEV_CHARNAME");
+                const std::string charName =
+                    nameEnv != nullptr && nameEnv[0] != '\0' ? std::string(nameEnv) : std::string("Hero");
+                LOG_INFO("[AutoEnter] creating character '" + charName + "' (class 1).");
                 // gender 从 1 开始（0 = 非法，服务器拒绝）。
-                m_account.SendCreateCharacter(m_account.SessionToken(), "Hero", 1, 1);
+                m_account.SendCreateCharacter(m_account.SessionToken(), charName, 1, 1);
                 m_autoEnterCreated = true;
                 ++m_autoEnterCreateAttempts;
                 AutoEnterWait(0.5f);
@@ -369,7 +374,7 @@ void ClientNetworkController::UpdateDevAutoLogin(float) {
             LOG_INFO("[Account] Dev account missing; registering (auto).");
             m_devLoginStage = DevLoginStage::Registering;
             m_devRegisterAttempted = true;
-            m_account.SendRegister(kDevUsername, kDevPassword);
+            m_account.SendRegister(DevUsername(), DevPassword());
             return;
         }
         m_devLoginStage = DevLoginStage::Done;
@@ -379,7 +384,7 @@ void ClientNetworkController::UpdateDevAutoLogin(float) {
         m_account.State() == AccountFlowState::Unauthenticated) {
         LOG_INFO("[Account] Dev account ready; logging in (F10).");
         m_devLoginStage = DevLoginStage::LoggingIn;
-        m_account.SendAccountLogin(kDevUsername, kDevPassword);
+        m_account.SendAccountLogin(DevUsername(), DevPassword());
         return;
     }
     if (m_account.State() == AccountFlowState::Authenticated) {

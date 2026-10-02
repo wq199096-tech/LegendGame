@@ -153,6 +153,16 @@ void GameScene::OnLoad() {
     m_visualSmoke = SDL_getenv("LEGEND_CLIENT_VISUAL_SMOKE") != nullptr;
     // 阶段25 指令六十九：Vertical Slice Client Smoke —— AutoEnter 进世界后 30s 存活。
     m_vsSmoke = SDL_getenv("LEGEND_CLIENT_VS_SMOKE") != nullptr;
+    // Stage27 Multiplayer Chat Smoke —— 进世界后发一条世界聊天 + 等对方消息。
+    m_chatSmoke = SDL_getenv("LEGEND_CLIENT_CHAT_SMOKE") != nullptr;
+    if (m_chatSmoke) {
+        const char* text = SDL_getenv("LEGEND_CLIENT_CHAT_TEXT");
+        const char* expect = SDL_getenv("LEGEND_CLIENT_CHAT_EXPECT");
+        m_chatSmokeText = text != nullptr ? text : "";
+        m_chatSmokeExpect = expect != nullptr ? expect : "";
+        LOG_INFO("[ChatSmoke] enabled (send=\"" + m_chatSmokeText + "\" expect=\"" +
+                 m_chatSmokeExpect + "\")");
+    }
     if (m_visualSmoke) {
         LOG_INFO("[VisualSmoke] game-scene-started");
     }
@@ -478,6 +488,13 @@ void GameScene::Update(float deltaTime) {
                 if (m_visualRuntime != nullptr && m_networkController != nullptr) {
                     m_visualRuntime->OnWorldEvent(event, m_networkController->World());
                 }
+                // Stage27 Multiplayer Chat Smoke：收到期望文本 -> 标记（Update 退出）。
+                if (m_chatSmoke && !m_chatSmokeReceived &&
+                    event.type == legend::client::WorldNetworkEvent::Type::ChatMessageEvent &&
+                    !m_chatSmokeExpect.empty() && event.chat.text == m_chatSmokeExpect) {
+                    m_chatSmokeReceived = true;
+                    LOG_INFO("[ChatSmoke] received expected text=" + event.chat.text);
+                }
             });
         m_visualHookWired = true;
     }
@@ -647,6 +664,33 @@ void GameScene::Update(float deltaTime) {
             LOG_INFO("[VsSmoke] pass — client alive 30s (world-ready=" +
                      std::to_string(m_vsSmokeWorldReadyLogged ? 1 : 0) + "), quitting cleanly.");
             legend::Engine::Get().Quit();
+        }
+    }
+    if (m_chatSmoke && m_networkController != nullptr) {
+        // Stage27 Multiplayer Chat Smoke：进世界 3s 后发世界频道消息；
+        // 收到对方文本（见视觉钩子）即 [ChatSmoke] pass 干净退出；90s 超时兜底。
+        auto& world = m_networkController->World();
+        if (m_chatSmokeStartMs == 0 && world.IsWorldReady()) {
+            m_chatSmokeStartMs = SDL_GetTicks();
+        }
+        if (m_chatSmokeStartMs != 0) {
+            if (!m_chatSmokeSent && !m_chatSmokeText.empty() &&
+                SDL_GetTicks() - m_chatSmokeStartMs >= 3000) {
+                world.SendChat(static_cast<std::uint8_t>(legend::chat::ChatChannel::World), "",
+                               m_chatSmokeText);
+                LOG_INFO("[ChatSmoke] sent world text=" + m_chatSmokeText);
+                m_chatSmokeSent = true;
+            }
+            if (m_chatSmokeReceived && !m_chatSmokePassed) {
+                m_chatSmokePassed = true;
+                LOG_INFO("[ChatSmoke] pass — received expected text, quitting cleanly.");
+                legend::Engine::Get().Quit();
+            }
+            if (!m_chatSmokePassed && SDL_GetTicks() - m_chatSmokeStartMs >= 90000) {
+                LOG_INFO("[ChatSmoke] timeout (sent=" + std::to_string(m_chatSmokeSent ? 1 : 0) +
+                         " received=" + std::to_string(m_chatSmokeReceived ? 1 : 0) + ")");
+                legend::Engine::Get().Quit();
+            }
         }
     }
 
