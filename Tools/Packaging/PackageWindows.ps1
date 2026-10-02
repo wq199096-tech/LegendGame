@@ -64,6 +64,9 @@ $KeyJsons = @(
 )
 
 function Fail([string]$Message) {
+    # Emit ::error:: so the failure reason shows up in the Actions page
+    # Annotations without needing admin log download.
+    Write-Host "::error::$Message"
     Write-Error $Message
     exit 1
 }
@@ -80,24 +83,58 @@ function Require-Dir([string]$Path, [string]$Description) {
     }
 }
 
-function Find-VcRedistCrtDir {
-    # Locate the VC++ redist CRT directory via vswhere (no hard-coded paths).
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { return $null }
-    $installPath = & $vswhere -latest -products * `
-        -requires Microsoft.VisualStudio.Component.VC.Tools `
-        -property installationPath 2>$null
-    if (-not $installPath) { return $null }
-    $redistBase = Join-Path $installPath 'VC\Redist\MSVC'
+function Find-CrtUnderVcRoot([string]$VcRoot) {
+    if (-not $VcRoot) { return $null }
+    $redistBase = Join-Path $VcRoot 'VC\Redist\MSVC'
     if (-not (Test-Path -LiteralPath $redistBase -PathType Container)) { return $null }
-    $latest = Get-ChildItem -LiteralPath $redistBase -Directory |
+    $latest = Get-ChildItem -LiteralPath $redistBase -Directory -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -First 1
     if (-not $latest) { return $null }
-    $x64 = Join-Path $latest.FullName 'x64'
-    $crt = Get-ChildItem -LiteralPath $x64 -Directory -Filter 'Microsoft.VC*.CRT' |
+    $crt = Get-ChildItem -LiteralPath (Join-Path $latest.FullName 'x64') -Directory `
+        -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -First 1
     if (-not $crt) { return $null }
     return $crt.FullName
+}
+
+function Find-VcRedistCrtDir {
+    # Locate the VC++ redist CRT directory (no hard-coded dev-machine paths).
+    # Strategy 1: vswhere.
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    Write-Host "CRT lookup: vswhere candidate = $vswhere"
+    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+        $installPath = (& $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools `
+            -property installationPath 2>$null | Select-Object -First 1)
+        Write-Host "CRT lookup: vswhere installationPath = '$installPath'"
+        $dir = Find-CrtUnderVcRoot $installPath
+        if ($dir) { return $dir }
+        Write-Host 'CRT lookup: vswhere path yielded no CRT dir'
+    } else {
+        Write-Host 'CRT lookup: vswhere.exe not found'
+    }
+    # Strategy 2: well-known VS 2022 roots (glob over editions, still generic).
+    foreach ($pf in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
+        if (-not $pf) { continue }
+        $root2022 = Join-Path $pf 'Microsoft Visual Studio\2022'
+        Write-Host "CRT lookup: scanning $root2022"
+        if (-not (Test-Path -LiteralPath $root2022 -PathType Container)) { continue }
+        foreach ($edition in (Get-ChildItem -LiteralPath $root2022 -Directory -ErrorAction SilentlyContinue)) {
+            $dir = Find-CrtUnderVcRoot $edition.FullName
+            if ($dir) { return $dir }
+        }
+    }
+    # Strategy 3: VCToolsRedistDir env (set by some CI images; points at the
+    # redist version dir, CRT lives under x64\Microsoft.VC*.CRT).
+    if (${env:VCToolsRedistDir}) {
+        Write-Host "CRT lookup: trying VCToolsRedistDir = ${env:VCToolsRedistDir}"
+        $crt = Get-ChildItem -LiteralPath (Join-Path ${env:VCToolsRedistDir} 'x64') `
+            -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if ($crt) { return $crt.FullName }
+    }
+    Write-Host 'CRT lookup: all strategies exhausted, no CRT dir found'
+    return $null
 }
 
 Write-Host "=== LegendGame Windows packaging ==="
