@@ -62,6 +62,7 @@ add_library(LegendClientUi STATIC
     Ui/PlayerFacingErrorCatalog.cpp
     Ui/CharacterVisualCatalog.cpp
     Ui/FlowUiModel.cpp
+    Ui/PlayerFacingText.cpp
     Ui/ChatUiTheme.cpp
     Ui/ChatModel.cpp
 )

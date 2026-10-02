@@ -1,6 +1,7 @@
 #include "Client/Visuals/VisualRuntime.h"
 
 #include "Client/Ui/CharacterVisualCatalog.h"
+#include "Client/Ui/PlayerFacingText.h"
 #include "Client/WorldNetwork/RemoteMonsterManager.h"
 #include "Client/WorldNetwork/RemotePlayerManager.h"
 #include "Client/WorldNetwork/WorldClientController.h"
@@ -57,51 +58,52 @@ const Color kTextGray(0.62f, 0.65f, 0.70f, 1.0f);
 constexpr const char* kClientSettingsPath = "savedata/client_settings.json";
 
 // 常见服务器错误码 -> 玩家可读 Toast 文案（指令五十五：不能只打印 Console）。
+// Stage27 中文化专项：玩家可见文案全部简体中文。
 std::string SkillErrorText(std::uint8_t code) {
     switch (static_cast<world::SkillResultCode>(code)) {
-        case world::SkillResultCode::Cooldown: return "Skill is on cooldown";
-        case world::SkillResultCode::NotEnoughMana: return "Not enough mana";
-        case world::SkillResultCode::OutOfRange: return "Target too far";
-        case world::SkillResultCode::InvalidTarget: return "Invalid target";
-        case world::SkillResultCode::TargetDead: return "Target is dead";
-        case world::SkillResultCode::AlreadyCasting: return "Already casting";
-        default: return "Cannot use skill";
+        case world::SkillResultCode::Cooldown: return "技能冷却中";
+        case world::SkillResultCode::NotEnoughMana: return "法力不足";
+        case world::SkillResultCode::OutOfRange: return "目标太远";
+        case world::SkillResultCode::InvalidTarget: return "无效目标";
+        case world::SkillResultCode::TargetDead: return "目标已死亡";
+        case world::SkillResultCode::AlreadyCasting: return "正在施法";
+        default: return "无法使用该技能";
     }
 }
 
 std::string ItemErrorText(std::uint8_t code) {
     switch (static_cast<world::ItemResultCode>(code)) {
-        case world::ItemResultCode::InventoryFull: return "Inventory full";
-        case world::ItemResultCode::TooFar: return "Too far away";
-        case world::ItemResultCode::NotVisible: return "Item not visible";
-        case world::ItemResultCode::OwnerLocked: return "Item is owned by another player";
-        case world::ItemResultCode::DropNotFound: return "Item is gone";
-        case world::ItemResultCode::Dead: return "Cannot do that while dead";
-        default: return "Item action failed";
+        case world::ItemResultCode::InventoryFull: return "背包已满";
+        case world::ItemResultCode::TooFar: return "距离太远";
+        case world::ItemResultCode::NotVisible: return "看不到该物品";
+        case world::ItemResultCode::OwnerLocked: return "该物品已被其他人拾取";
+        case world::ItemResultCode::DropNotFound: return "物品已消失";
+        case world::ItemResultCode::Dead: return "死亡状态下无法操作";
+        default: return "物品操作失败";
     }
 }
 
 std::string QuestErrorText(std::uint8_t code) {
     switch (static_cast<world::QuestResultCode>(code)) {
-        case world::QuestResultCode::LevelTooLow: return "Level too low for this quest";
-        case world::QuestResultCode::PrerequisiteNotMet: return "Complete the previous quest first";
-        case world::QuestResultCode::AlreadyAccepted: return "Quest already accepted";
-        case world::QuestResultCode::AlreadyCompleted: return "Quest already completed";
-        case world::QuestResultCode::QuestLogFull: return "Quest log is full";
-        case world::QuestResultCode::NotAccepted: return "Quest not accepted";
-        case world::QuestResultCode::NotReady: return "Quest objectives not complete";
-        case world::QuestResultCode::InventoryFull: return "Inventory full (reward lost?)";
-        default: return "Quest action failed";
+        case world::QuestResultCode::LevelTooLow: return "等级不足，无法接取该任务";
+        case world::QuestResultCode::PrerequisiteNotMet: return "请先完成前置任务";
+        case world::QuestResultCode::AlreadyAccepted: return "该任务已在进行中";
+        case world::QuestResultCode::AlreadyCompleted: return "该任务已完成";
+        case world::QuestResultCode::QuestLogFull: return "任务日志已满";
+        case world::QuestResultCode::NotAccepted: return "尚未接取该任务";
+        case world::QuestResultCode::NotReady: return "任务目标尚未完成";
+        case world::QuestResultCode::InventoryFull: return "背包已满（奖励可能丢失）";
+        default: return "任务操作失败";
     }
 }
 
 std::string ShopErrorText(std::uint8_t code) {
     switch (static_cast<world::ShopResultCode>(code)) {
-        case world::ShopResultCode::TooFar: return "Too far from merchant";
-        case world::ShopResultCode::CannotBuy: return "Cannot buy this item";
-        case world::ShopResultCode::SessionExpired: return "Shop session expired";
-        case world::ShopResultCode::ItemNotInShop: return "Item not sold here";
-        default: return "Shop action failed";
+        case world::ShopResultCode::TooFar: return "距离商人太远";
+        case world::ShopResultCode::CannotBuy: return "无法购买该物品";
+        case world::ShopResultCode::SessionExpired: return "商店会话已过期";
+        case world::ShopResultCode::ItemNotInShop: return "该物品不在出售列表中";
+        default: return "商店操作失败";
     }
 }
 
@@ -268,12 +270,12 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event,
             // 阶段25 指令二十五/二十六：+X Gold / +X EXP 反馈。
             if (event.progression.goldGranted > 0) {
                 m_toasts.Push(ui::ToastLevel::Success,
-                              "+" + std::to_string(event.progression.goldGranted) + " Gold");
+                              "获得 " + std::to_string(event.progression.goldGranted) + " 金币");
                 m_audio.PlaySfx(SfxId::Gold);
             }
             if (event.progression.expGranted > 0) {
                 m_toasts.Push(ui::ToastLevel::Info,
-                              "+" + std::to_string(event.progression.expGranted) + " EXP");
+                              "获得 " + std::to_string(event.progression.expGranted) + " 经验");
             }
             break;
         }
@@ -282,40 +284,40 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event,
             m_levelUpFx.Trigger();
             m_audio.PlaySfx(SfxId::LevelUp);
             m_toasts.Push(ui::ToastLevel::Success,
-                          "Level Up! Now level " + std::to_string(event.progression.level));
+                          "升级！当前等级 " + std::to_string(event.progression.level));
             break;
         }
         case WorldNetworkEvent::Type::QuestStateChangedEvent: {
             // 阶段25 指令二十二/四十七：任务完成反馈 + Chapter 完成判定。
             const auto newState = static_cast<world::QuestState>(event.questState);
             if (newState == world::QuestState::ReadyToTurnIn) {
-                m_toasts.Push(ui::ToastLevel::Warning, "Quest Ready to Turn In");
+                m_toasts.Push(ui::ToastLevel::Warning, "任务已完成，可以交付");
             } else if (newState == world::QuestState::Completed) {
-                m_toasts.Push(ui::ToastLevel::Success, "Quest Complete");
+                m_toasts.Push(ui::ToastLevel::Success, "任务完成");
                 m_audio.PlaySfx(SfxId::QuestComplete);
                 // 阶段25：Chapter Complete 数据驱动（chapters.json finalQuestId 命中）。
                 std::string chapterTitle;
                 if (m_chapterDisplay.ChapterCompletion(event.questId, chapterTitle)) {
                     m_toasts.Push(ui::ToastLevel::Success,
-                                  "Chapter Complete: " + chapterTitle);
-                    m_toasts.Push(ui::ToastLevel::Info, "More content coming soon");
+                                  "章节完成：" + chapterTitle);
+                    m_toasts.Push(ui::ToastLevel::Info, "更多内容敬请期待");
                 }
             }
             break;
         }
         case WorldNetworkEvent::Type::QuestRewardGrantedEvent: {
             // 阶段25 指令二十二：Turn In 成功 -> Quest Complete + Rewards。
-            std::string rewardText = "Rewards:";
+            std::string rewardText = "奖励：";
             if (event.questRewardExp > 0) {
-                rewardText += " " + std::to_string(event.questRewardExp) + " EXP";
+                rewardText += " " + std::to_string(event.questRewardExp) + " 经验";
             }
             if (event.questRewardGold > 0) {
-                rewardText += " " + std::to_string(event.questRewardGold) + " Gold";
+                rewardText += " " + std::to_string(event.questRewardGold) + " 金币";
             }
             if (event.questRewardItemDefinitionId != 0) {
                 const std::string itemName =
                     m_itemDisplay.DisplayName(event.questRewardItemDefinitionId);
-                rewardText += " " + (itemName.empty() ? "Item" : itemName);
+                rewardText += " " + (itemName.empty() ? "物品" : itemName);
             }
             m_toasts.Push(ui::ToastLevel::Success, rewardText);
             break;
@@ -1478,7 +1480,7 @@ void VisualRuntime::RenderLoading(float viewportWidth, float viewportHeight) {
                        {viewportWidth / 64.0f, viewportHeight / 64.0f}, 0.0f,
                        Color(0.0f, 0.0f, 0.0f, 0.45f));
     m_text.DrawStringShadow(m_uiBatch, {viewportWidth * 0.5f, viewportHeight * 0.5f},
-                            "Loading...", 26.0f * scale, theme.textPrimary, true, true);
+                            "正在加载...", 26.0f * scale, theme.textPrimary, true, true);
     m_uiBatch.End();
     m_stats.drawCalls += m_uiBatch.GetDrawCallCount() - m_uiDrawCallBase;
 }
@@ -1548,11 +1550,11 @@ void VisualRuntime::PushErrorToast(std::uint16_t errorCode) {
     // 常见服务器错误（指令五十五）：TooFar/NotVisible/Cooldown/NoMana/InventoryFull/
     // NotEnoughGold/LevelTooLow -> 短 Toast。
     switch (errorCode) {
-        case 8: m_toasts.Push(ui::ToastLevel::Error, "Too far away"); break;      // TooFar
-        case 7: m_toasts.Push(ui::ToastLevel::Error, "Not visible"); break;       // NotVisible
-        case 10: m_toasts.Push(ui::ToastLevel::Error, "Inventory full"); break;   // InventoryFull
-        case 4: m_toasts.Push(ui::ToastLevel::Error, "Level too low"); break;     // LevelTooLow
-        case 11: m_toasts.Push(ui::ToastLevel::Error, "Not enough gold"); break;  // NotEnoughGold
+        case 8: m_toasts.Push(ui::ToastLevel::Error, "距离太远"); break;      // TooFar
+        case 7: m_toasts.Push(ui::ToastLevel::Error, "看不到目标"); break;    // NotVisible
+        case 10: m_toasts.Push(ui::ToastLevel::Error, "背包已满"); break;     // InventoryFull
+        case 4: m_toasts.Push(ui::ToastLevel::Error, "等级不足"); break;      // LevelTooLow
+        case 11: m_toasts.Push(ui::ToastLevel::Error, "金币不足"); break;     // NotEnoughGold
         default: break;
     }
 }
@@ -1680,7 +1682,7 @@ void VisualRuntime::RenderHudV2(const WorldClientController& world, const std::s
         }
         if (haveText) {
             const std::string displayName =
-                playerName.empty() ? (m_localName.empty() ? std::string("Player") : m_localName)
+                playerName.empty() ? (m_localName.empty() ? std::string("冒险者") : m_localName)
                                    : playerName;
             m_text.DrawString(m_uiBatch, {84.0f * s, 14.0f * s}, displayName, 15.0f * s,
                               theme.textPrimary);
@@ -1698,7 +1700,7 @@ void VisualRuntime::RenderHudV2(const WorldClientController& world, const std::s
         DrawBar(m_uiBatch, {barX, 54.0f * s}, barW, 13.0f * s, hpPct, theme.hpFill);
         if (haveText) {
             char hpText[64];
-            std::snprintf(hpText, sizeof(hpText), "HP %u/%u",
+            std::snprintf(hpText, sizeof(hpText), "生命 %u/%u",
                           static_cast<unsigned>(world.LocalCurrentHp()),
                           static_cast<unsigned>(world.LocalMaxHp()));
             m_text.DrawString(m_uiBatch, {barX + 6.0f * s, 55.0f * s}, hpText, 10.0f * s,
@@ -1712,7 +1714,7 @@ void VisualRuntime::RenderHudV2(const WorldClientController& world, const std::s
         DrawBar(m_uiBatch, {barX, 72.0f * s}, barW, 11.0f * s, manaPct, theme.manaFill);
         if (haveText) {
             char manaText[64];
-            std::snprintf(manaText, sizeof(manaText), "MP %u/%u",
+            std::snprintf(manaText, sizeof(manaText), "法力 %u/%u",
                           static_cast<unsigned>(world.LocalCurrentMana()),
                           static_cast<unsigned>(world.LocalMaxMana()));
             m_text.DrawString(m_uiBatch, {barX + 6.0f * s, 72.5f * s}, manaText, 9.0f * s,
@@ -1726,7 +1728,7 @@ void VisualRuntime::RenderHudV2(const WorldClientController& world, const std::s
         // Gold / Attack / Defense（指令十五：装备后立即变化——数值来自服务器事件镜像）。
         if (haveText) {
             char line2[128];
-            std::snprintf(line2, sizeof(line2), "Gold %lld   ATK %u   DEF %u",
+            std::snprintf(line2, sizeof(line2), "金币 %lld   攻击 %u   防御 %u",
                           static_cast<long long>(world.LocalGold()),
                           static_cast<unsigned>(world.LocalAttackPower()),
                           static_cast<unsigned>(world.LocalDefensePower()));
@@ -1810,7 +1812,7 @@ void VisualRuntime::RenderTracker(const WorldClientController& world, float view
         ui::QuestTrackerEntry entry;
         entry.questId = questId;
         const visual::QuestDisplay* display = m_catalog->FindQuestDisplay(questId);
-        entry.title = display != nullptr ? display->name : ("Quest " + std::to_string(questId));
+        entry.title = display != nullptr ? display->name : ("任务 " + std::to_string(questId));
         entry.readyToTurnIn = state.state == world::QuestState::ReadyToTurnIn;
         // 目标文案（展示字段来自 quests.json；进度来自服务器事件镜像）。
         if (display != nullptr && !display->objectives.empty()) {
@@ -1821,15 +1823,15 @@ void VisualRuntime::RenderTracker(const WorldClientController& world, float view
                 entry.required = progress.required;
             }
             if (objective.type == "KillMonster") {
-                entry.objectiveText = "Slay";
+                entry.objectiveText = "击败";
             } else if (objective.type == "CollectItem") {
-                entry.objectiveText = "Collect";
+                entry.objectiveText = "收集";
             } else if (objective.type == "ReachLevel") {
-                entry.objectiveText = "Reach level";
+                entry.objectiveText = "等级达到";
             } else if (objective.type == "ReachArea") {
-                entry.objectiveText = "Explore";
+                entry.objectiveText = "前往";
             } else {
-                entry.objectiveText = "Progress";
+                entry.objectiveText = "进度";
             }
         }
         entries.push_back(std::move(entry));
@@ -1845,13 +1847,13 @@ void VisualRuntime::RenderTracker(const WorldClientController& world, float view
     DrawPanel(m_uiBatch, {trackerX, trackerY - 6.0f * s}, 250.0f * s, 26.0f * s, 0.6f);
     if (haveText) {
         m_text.DrawString(m_uiBatch, {trackerX + 8.0f * s, trackerY - 4.0f * s},
-                          "Quest Tracker", 13.0f * s, theme.textGold);
+                          "任务追踪", 13.0f * s, theme.textGold);
     }
     trackerY += 24.0f * s;
     for (const auto& entry : entries) {
         char line[192];
         if (entry.readyToTurnIn) {
-            std::snprintf(line, sizeof(line), "%s — Ready to Turn In!", entry.title.c_str());
+            std::snprintf(line, sizeof(line), "%s — 可以交付！", entry.title.c_str());
         } else {
             std::snprintf(line, sizeof(line), "%s\n  %s %u/%u", entry.title.c_str(),
                           entry.objectiveText.c_str(), static_cast<unsigned>(entry.current),
@@ -1942,7 +1944,7 @@ void VisualRuntime::RenderGlobalOverlays(const WorldClientController& world,
     if (m_levelUpFx.Active() && haveText) {
         const float a = m_levelUpFx.Alpha();
         m_text.DrawStringShadow(m_uiBatch, {viewportWidth * 0.5f, viewportHeight * 0.42f},
-                                "LEVEL UP!", 42.0f * s,
+                                "等 级 提 升", 42.0f * s,
                                 Color(theme.levelUpText.r, theme.levelUpText.g,
                                       theme.levelUpText.b, a),
                                 true, true);
@@ -1972,10 +1974,10 @@ void VisualRuntime::RenderGlobalOverlays(const WorldClientController& world,
     // ---- 新手提示（指令六：第一次进入显示，仅一次，本地保存）----
     if (haveText && !m_tutorialShown && world.IsWorldReady()) {
         const char* hintLines[] = {
-            "WASD / Arrow Keys = Move",
-            "E = Interact    F = Portal",
-            "1 / 2 / 3 = Skills",
-            "I = Inventory   C = Character",
+            "WASD / 方向键 = 移动",
+            "E = 交互    F = 传送门",
+            "1 / 2 / 3 = 技能",
+            "I = 背包   C = 角色",
         };
         const float boxW = 300.0f * s;
         const float boxH = 96.0f * s;
@@ -2115,9 +2117,9 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
         const float h = 420.0f;
         const float x = 940.0f;
         const float y = 180.0f;
-        windowBg(x, y, w, h, "Shop");
+        windowBg(x, y, w, h, "商店");
         char gold[64];
-        std::snprintf(gold, sizeof(gold), "Gold: %lld",
+        std::snprintf(gold, sizeof(gold), "金币：%lld",
                       static_cast<long long>(world.LocalGold()));
         if (haveText) {
             m_text.DrawString(m_uiBatch, P(x + w - 140.0f, y + 10.0f), gold, 14.0f * s,
@@ -2138,10 +2140,10 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
             drawIcon(m_itemDisplay.IconAsset(entry.itemDefinitionId), x + 28.0f, ey + 17.0f, 24.0f);
             if (haveText) {
                 char line[160];
-                std::snprintf(line, sizeof(line), "%s  -  %u G%s",
+                std::snprintf(line, sizeof(line), "%s  -  %u 金%s",
                               m_itemDisplay.DisplayName(entry.itemDefinitionId).c_str(),
                               entry.buyPrice,
-                              entry.canBuy ? "" : "  (cannot buy)");
+                              entry.canBuy ? "" : "（不可购买）");
                 m_text.DrawString(m_uiBatch, P(x + 48.0f, ey + 9.0f), line, 13.0f * s,
                                   theme.textPrimary);
             }
@@ -2152,14 +2154,14 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
             }
         }
         // Buy 选中条目（服务器权威）。
-        if (button(x + w - 150.0f, y + h - 46.0f, 130.0f, 32.0f, "Buy", m_selectedShopIndex >= 0)) {
+        if (button(x + w - 150.0f, y + h - 46.0f, 130.0f, 32.0f, "购买", m_selectedShopIndex >= 0)) {
             UiRequest req;
             req.kind = UiRequest::Kind::ShopBuy;
             req.index = m_selectedShopIndex;
             m_uiRequests.push_back(req);
         }
         // Sell：卖出背包选中物品（Material/装备皆可——服务器验证价格）。
-        if (button(x + w - 290.0f, y + h - 46.0f, 130.0f, 32.0f, "Sell",
+        if (button(x + w - 290.0f, y + h - 46.0f, 130.0f, 32.0f, "出售",
                    m_selectedInventorySlot >= 0)) {
             const auto& slot = world.Inventory().Slot(
                 static_cast<std::size_t>(m_selectedInventorySlot));
@@ -2178,7 +2180,7 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
         const float h = 330.0f;
         const float x = 940.0f;
         const float y = 180.0f;
-        windowBg(x, y, w, h, "Inventory (I)");
+        windowBg(x, y, w, h, "背包 (I)");
         const float cell = 44.0f;
         const float gap = 5.0f;
         for (std::size_t i = 0; i < ui::InventoryUiModel::kSlots; ++i) {
@@ -2241,11 +2243,12 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
                     windowBg(tx, ty, tw, th, display->name);
                     if (haveText) {
                         char line[128];
-                        std::snprintf(line, sizeof(line), "Type: %s (%s)",
-                                      display->type.c_str(), display->equipSlot.c_str());
+                        std::snprintf(line, sizeof(line), "类型：%s（可装备槽：%s）",
+                                      ui::ItemTypeName(display->type),
+                                      ui::EquipSlotName(display->equipSlot));
                         m_text.DrawString(m_uiBatch, P(tx + 12.0f, ty + 34.0f), line, 12.0f * s,
                                           theme.textDim);
-                        std::snprintf(line, sizeof(line), "ATK +%u   DEF +%u",
+                        std::snprintf(line, sizeof(line), "攻击 +%u   防御 +%u",
                                       display->attackBonus, display->defenseBonus);
                         m_text.DrawString(m_uiBatch, P(tx + 12.0f, ty + 54.0f), line, 12.0f * s,
                                           theme.textPrimary);
@@ -2257,8 +2260,9 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
                                 havePrice = true;
                             }
                         }
-                        std::snprintf(line, sizeof(line), "Sell: %s",
-                                      havePrice ? std::to_string(sellPrice).c_str() : "N/A");
+                        std::snprintf(line, sizeof(line), "出售价：%s",
+                                      havePrice ? (std::to_string(sellPrice) + " 金币").c_str()
+                                                : "暂无");
                         m_text.DrawString(m_uiBatch, P(tx + 12.0f, ty + 74.0f), line, 12.0f * s,
                                           theme.textGold);
                     }
@@ -2273,36 +2277,36 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
         const float h = 400.0f;
         const float x = 60.0f;
         const float y = 140.0f;
-        windowBg(x, y, w, h, "Character (C)");
+        windowBg(x, y, w, h, "角色 (C)");
         const int classId = m_localClassId != 0 ? m_localClassId : 1;
-        const char* className = classId == 1 ? "Warrior" : classId == 2 ? "Mage" : "Taoist";
+        const char* className = ui::ClassName(classId);
         if (haveText) {
             char line[160];
-            std::snprintf(line, sizeof(line), "%s  (%s)",
-                          m_localName.empty() ? "Player" : m_localName.c_str(), className);
+            std::snprintf(line, sizeof(line), "%s  （%s）",
+                          m_localName.empty() ? "冒险者" : m_localName.c_str(), className);
             m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 32.0f), line, 14.0f * s,
                               theme.textPrimary);
-            std::snprintf(line, sizeof(line), "Level %u    EXP %lld/%lld",
+            std::snprintf(line, sizeof(line), "等级 %u    经验 %lld/%lld",
                           static_cast<unsigned>(world.LocalLevel()),
                           static_cast<long long>(world.LocalExperience()),
                           static_cast<long long>(world.LocalExpToNext()));
             m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 56.0f), line, 12.0f * s,
                               theme.textDim);
-            std::snprintf(line, sizeof(line), "HP %u/%u   MP %u/%u",
+            std::snprintf(line, sizeof(line), "生命 %u/%u   法力 %u/%u",
                           static_cast<unsigned>(world.LocalCurrentHp()),
                           static_cast<unsigned>(world.LocalMaxHp()),
                           static_cast<unsigned>(world.LocalCurrentMana()),
                           static_cast<unsigned>(world.LocalMaxMana()));
             m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 76.0f), line, 12.0f * s,
                               theme.textDim);
-            std::snprintf(line, sizeof(line), "Attack %u (+%u equip)   Defense %u (+%u equip)",
+            std::snprintf(line, sizeof(line), "攻击 %u（+装备 %u）   防御 %u（+装备 %u）",
                           static_cast<unsigned>(world.LocalAttackPower()),
                           static_cast<unsigned>(world.Equipment().AttackBonus()),
                           static_cast<unsigned>(world.LocalDefensePower()),
                           static_cast<unsigned>(world.Equipment().DefenseBonus()));
             m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 96.0f), line, 12.0f * s,
                               theme.textDim);
-            std::snprintf(line, sizeof(line), "Gold %lld",
+            std::snprintf(line, sizeof(line), "金币 %lld",
                           static_cast<long long>(world.LocalGold()));
             m_text.DrawString(m_uiBatch, P(x + 14.0f, y + 116.0f), line, 13.0f * s,
                               theme.textGold);
@@ -2320,9 +2324,9 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
             }
             if (haveText) {
                 char line[160];
-                std::snprintf(line, sizeof(line), "%s: %s", slotLabel,
+                std::snprintf(line, sizeof(line), "%s：%s", slotLabel,
                               filled ? m_itemDisplay.DisplayName(definitionId).c_str()
-                                     : "(empty)");
+                                     : "（空）");
                 m_text.DrawString(m_uiBatch, P(x + 52.0f, ry + 10.0f), line, 12.0f * s,
                                   filled ? theme.textPrimary : theme.textDim);
             }
@@ -2335,8 +2339,8 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
                 mouseClicked = false;
             }
         };
-        equipSlotRow(y + 150.0f, "Weapon", world.Equipment().WeaponDefinitionId(), 1);
-        equipSlotRow(y + 192.0f, "Armor", world.Equipment().ArmorDefinitionId(), 2);
+        equipSlotRow(y + 150.0f, "武器", world.Equipment().WeaponDefinitionId(), 1);
+        equipSlotRow(y + 192.0f, "护甲", world.Equipment().ArmorDefinitionId(), 2);
     }
 
     // ================= Settings（指令五十二：Esc —— Resolution/Fullscreen/音量）====
@@ -2345,12 +2349,12 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
         const float h = 330.0f;
         const float x = 750.0f;
         const float y = 300.0f;
-        windowBg(x, y, w, h, "Settings (Esc)");
+        windowBg(x, y, w, h, "设置 (Esc)");
         // Resolution（1280x720 / 1600x900 / 1920x1080 循环；指令六十二）。
         {
             static const char* kRes[3] = {"1280 x 720", "1600 x 900", "1920 x 1080"};
             char resLabel[64];
-            std::snprintf(resLabel, sizeof(resLabel), "Resolution: %s",
+            std::snprintf(resLabel, sizeof(resLabel), "分辨率：%s",
                           kRes[m_resolutionIndex < 0 || m_resolutionIndex > 2 ? 1
                                                                               : m_resolutionIndex]);
             if (button(x + 20.0f, y + 44.0f, 240.0f, 32.0f, resLabel, true)) {
@@ -2362,7 +2366,7 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
         }
         // Fullscreen / Windowed。
         if (button(x + 20.0f, y + 86.0f, 240.0f, 32.0f,
-                   m_fullscreen ? "Mode: Fullscreen" : "Mode: Windowed", true)) {
+                   m_fullscreen ? "模式：全屏" : "模式：窗口", true)) {
             UiRequest req;
             req.kind = UiRequest::Kind::WindowFullscreen;
             req.index = m_fullscreen ? 0 : 1;
@@ -2388,10 +2392,10 @@ void VisualRuntime::RenderWindows(const WorldClientController& world, float view
                 mouseClicked = false;
             }
         };
-        volumeBar(y + 140.0f, "Master", m_masterVolume);
-        volumeBar(y + 172.0f, "Music", m_musicVolume);
-        volumeBar(y + 204.0f, "SFX", m_sfxVolume);
-        if (button(x + 20.0f, y + h - 46.0f, 120.0f, 32.0f, "Resume", true)) {
+        volumeBar(y + 140.0f, "主音量", m_masterVolume);
+        volumeBar(y + 172.0f, "音乐", m_musicVolume);
+        volumeBar(y + 204.0f, "音效", m_sfxVolume);
+        if (button(x + 20.0f, y + h - 46.0f, 120.0f, 32.0f, "返回游戏", true)) {
             m_settingsVisible = false;
         }
     }

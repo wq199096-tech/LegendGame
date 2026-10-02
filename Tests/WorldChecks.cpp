@@ -41,6 +41,7 @@ void RunFullServerTopologyCheck(); // Stage25.5: config/topology contract
 int RunLeaveWorldChecks(WorldTestServers& servers); // Stage26 指令十七：主动离开世界
 int RunStage26FlowChecks(WorldTestServers& servers); // Stage26 指令三十六：玩家流程 E2E
 int RunStage27ChatChecks(WorldTestServers& servers); // Stage27：身份同步 + 聊天 E2E
+int RunPlayerFacingLocalizationChecks(); // Stage27 中文化专项：玩家可见文本简体中文
 }
 
 namespace {
@@ -895,6 +896,7 @@ int main() {
 
     RunWorldProtocolChecks();
     RunFullServerTopologyCheck();
+    RunPlayerFacingLocalizationChecks(); // Stage27 中文化专项（纯数据检查）
 
     // ---- Stage27 指令四十：玩家身份同步 + 聊天 E2E（独立 servers 生命周期；
     //      注入短限流窗口——指令三十五：明确时间控制，不靠长 sleep）。

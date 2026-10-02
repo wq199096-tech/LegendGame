@@ -1166,8 +1166,7 @@ std::string WorldClientController::MapStatusText() const {
                                   : 0.0;
         char buf[160];
         std::snprintf(buf, sizeof(buf),
-                      "[YOU DIED] Respawn in %.1fs | R = Current Map Respawn (%uG) | T = Town "
-                      "Respawn (Free)\n",
+                      "你已死亡，%.1f 秒后可复活 | R = 本图复活（%u 金币）| T = 返回城镇复活（免费）\n",
                       remain, static_cast<unsigned>(legend::world::kRespawnCurrentMapGoldCost));
         text += buf;
     } else if (m_localRespawnTime.time_since_epoch().count() != 0) {
@@ -1175,8 +1174,9 @@ std::string WorldClientController::MapStatusText() const {
             std::chrono::duration<double>(std::chrono::steady_clock::now() - m_localRespawnTime)
                 .count();
         if (sinceRespawn < legend::world::kRespawnProtectionSeconds) {
-            text += "[Respawn Protection] " +
-                    std::to_string(legend::world::kRespawnProtectionSeconds - sinceRespawn) + "s\n";
+            text += "复活保护中，剩余 " +
+                    std::to_string(legend::world::kRespawnProtectionSeconds - sinceRespawn) +
+                    " 秒\n";
         }
     }
     return text;

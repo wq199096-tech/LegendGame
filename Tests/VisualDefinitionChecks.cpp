@@ -166,8 +166,8 @@ void RunVisualDefinitionLogicChecks() {
             Check("VisualDef: catalog map visual lookup by id",
                   catalog.FindMapVisual("vmap_slime_meadow") != nullptr);
             Check("VisualDef: map display name lookup",
-                  catalog.MapDisplayName(1) == "Greenfield Village" &&
-                  catalog.MapDisplayName(99) == "Unknown Map");
+                  catalog.MapDisplayName(1) == "绿野村" &&
+                  catalog.MapDisplayName(99) == "未知地图");
         }
 
         // 引用不存在的 visualMapId → 全量校验拒绝。
