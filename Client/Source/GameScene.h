@@ -213,12 +213,14 @@ private:
     bool m_vsSmokeWorldReadyLogged = false;
     std::uint64_t m_visualSmokeStartMs = 0; // 墙钟起点（SDL_GetTicks；游戏时间会被低 FPS 钳制）
     // Stage27 Multiplayer Chat Smoke（LEGEND_CLIENT_CHAT_SMOKE=1）：
-    // 进世界 3s 后发 LEGEND_CLIENT_CHAT_TEXT；收到 LEGEND_CLIENT_CHAT_EXPECT 即 pass 退出。
+    // 进世界后每 3.3s 重发 LEGEND_CLIENT_CHAT_TEXT；收到 LEGEND_CLIENT_CHAT_EXPECT
+    // 且已发送过 -> pass 干净退出（覆盖双客户端进入顺序竞态）。
     bool m_chatSmoke = false;
     bool m_chatSmokeSent = false;
     bool m_chatSmokeReceived = false;
     bool m_chatSmokePassed = false;
     std::uint64_t m_chatSmokeStartMs = 0;
+    std::uint64_t m_chatSmokeLastSendMs = 0; // 周期重发节流（3.3s；> 世界限流窗口）
     std::string m_chatSmokeText;
     std::string m_chatSmokeExpect;
     float m_playerRespawnTimer = 0.0f; // 死亡后复活倒计时

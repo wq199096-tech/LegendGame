@@ -667,26 +667,29 @@ void GameScene::Update(float deltaTime) {
         }
     }
     if (m_chatSmoke && m_networkController != nullptr) {
-        // Stage27 Multiplayer Chat Smoke：进世界 3s 后发世界频道消息；
-        // 收到对方文本（见视觉钩子）即 [ChatSmoke] pass 干净退出；90s 超时兜底。
+        // Stage27 Multiplayer Chat Smoke：进世界后每 3.3s 周期重发自己的世界消息
+        //（覆盖双方进入世界顺序竞态；3.3s > 世界限流窗口 3s，不触发限流）；
+        // 收到对方文本且自己已发送过 -> [ChatSmoke] pass 干净退出；150s 超时兜底。
         auto& world = m_networkController->World();
         if (m_chatSmokeStartMs == 0 && world.IsWorldReady()) {
             m_chatSmokeStartMs = SDL_GetTicks();
+            m_chatSmokeLastSendMs = 0;
         }
         if (m_chatSmokeStartMs != 0) {
-            if (!m_chatSmokeSent && !m_chatSmokeText.empty() &&
-                SDL_GetTicks() - m_chatSmokeStartMs >= 3000) {
+            const std::uint64_t elapsed = SDL_GetTicks() - m_chatSmokeStartMs;
+            if (!m_chatSmokeText.empty() && elapsed - m_chatSmokeLastSendMs >= 3300) {
                 world.SendChat(static_cast<std::uint8_t>(legend::chat::ChatChannel::World), "",
                                m_chatSmokeText);
-                LOG_INFO("[ChatSmoke] sent world text=" + m_chatSmokeText);
                 m_chatSmokeSent = true;
+                m_chatSmokeLastSendMs = elapsed;
+                LOG_INFO("[ChatSmoke] sent world text=" + m_chatSmokeText);
             }
-            if (m_chatSmokeReceived && !m_chatSmokePassed) {
+            if (m_chatSmokeReceived && m_chatSmokeSent && !m_chatSmokePassed) {
                 m_chatSmokePassed = true;
                 LOG_INFO("[ChatSmoke] pass — received expected text, quitting cleanly.");
                 legend::Engine::Get().Quit();
             }
-            if (!m_chatSmokePassed && SDL_GetTicks() - m_chatSmokeStartMs >= 90000) {
+            if (!m_chatSmokePassed && elapsed >= 150000) {
                 LOG_INFO("[ChatSmoke] timeout (sent=" + std::to_string(m_chatSmokeSent ? 1 : 0) +
                          " received=" + std::to_string(m_chatSmokeReceived ? 1 : 0) + ")");
                 legend::Engine::Get().Quit();
