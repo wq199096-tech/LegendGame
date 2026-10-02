@@ -536,6 +536,7 @@ bool EncodeWorldCharacterRow(const WorldCharacterRow& value, std::vector<std::ui
     writer.WriteFloat(value.positionX);
     writer.WriteFloat(value.positionY);
     writer.WriteBool(value.deleted);
+    writer.WriteUInt16(value.visualId); // Stage27 指令五：持久化造型
     return true;
 }
 bool DecodeWorldCharacterRow(const std::uint8_t* data, std::size_t size,
@@ -553,6 +554,7 @@ bool DecodeWorldCharacterRow(const std::uint8_t* data, std::size_t size,
     out.positionX = reader.ReadFloat();
     out.positionY = reader.ReadFloat();
     out.deleted = reader.ReadBool();
+    out.visualId = reader.ReadUInt16();
     return Finish(reader, error);
 }
 bool EncodeWorldQuestStateList(const WorldQuestStateList& value, std::vector<std::uint8_t>& out) {

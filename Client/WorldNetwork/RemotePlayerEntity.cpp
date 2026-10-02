@@ -19,6 +19,8 @@ void RemotePlayerEntity::ApplySpawn(const world::PlayerSpawnPayload& spawn) {
     m_classId = spawn.classId;
     m_gender = spawn.gender;
     m_level = spawn.level;
+    m_visualId = spawn.visualId;   // Stage27 指令五：真实造型（服务器权威）
+    m_direction = spawn.direction; // Stage27 指令四：朝向
     m_mapId = spawn.mapId;
     // 阶段14 指令十六/六十四：Spawn 携带 HP。
     m_currentHp = spawn.currentHp;
@@ -40,7 +42,8 @@ void RemotePlayerEntity::ApplySpawn(const world::PlayerSpawnPayload& spawn) {
     m_active = true;
 }
 
-void RemotePlayerEntity::ApplySnapshot(float serverX, float serverY, std::uint64_t serverTime) {
+void RemotePlayerEntity::ApplySnapshot(float serverX, float serverY, std::uint64_t serverTime,
+                                       std::uint8_t direction) {
     if (!m_active) {
         return; // 指令四十八：Spawn 前的 snapshot 由 Manager 丢弃，防御性兜底
     }
@@ -48,6 +51,9 @@ void RemotePlayerEntity::ApplySnapshot(float serverX, float serverY, std::uint64
     const float deltaY = serverY - m_serverY;
     // 指令四十一：相邻两次服务器位置差估算移动方向（Walk/Idle）。
     m_moving = (deltaX * deltaX + deltaY * deltaY) > kMovingEpsilonSq;
+    // Stage27 指令四：服务器权威朝向（移动中由客户端位置差分驱动表现；
+    // 静止时以服务器朝向为准，保证转头可见）。
+    m_direction = direction;
     m_serverX = serverX;
     m_serverY = serverY;
     m_lastSnapshotServerTime = serverTime;

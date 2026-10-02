@@ -21,6 +21,17 @@ struct ServerConfig {
     std::uint32_t heartbeatIntervalSeconds = 5;
     std::uint32_t heartbeatTimeoutSeconds = 15;
     std::uint32_t rpcTimeoutMilliseconds = 5000;
+    // Stage27 指令四十六：聊天参数（Config/servers.json "chat" 节；缺省 = 代码默认）。
+    float chatNearbyRadius = 1200.0f;   // 附近聊天半径（world units）
+    int chatMaxCodePoints = 120;        // 消息码点上限
+    int chatNearbyWindowMs = 1000;      // 附近窗口
+    int chatNearbyMaxPerWindow = 2;     // 附近 1 秒最多 2 条
+    int chatWorldWindowMs = 3000;       // 世界窗口
+    int chatWorldMaxPerWindow = 1;      // 世界 3 秒最多 1 条
+    int chatWhisperWindowMs = 1000;     // 私聊窗口
+    int chatWhisperMaxPerWindow = 3;    // 私聊 1 秒最多 3 条
+    int chatBurstWindowMs = 10000;      // 跨频道突发窗口
+    int chatBurstMaxMessages = 8;       // 10 秒最多 8 条
 };
 
 ServerConfig MakeDefaultServerConfig();

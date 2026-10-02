@@ -43,6 +43,9 @@ public:
     bool IsTextInputActive() const { return m_textInputDepth > 0; }
     // 本帧收到的 UTF-8 文本片段（IME 提交后的完整字符串；每帧清空）。
     const std::vector<std::string>& FrameTextInput() const { return m_frameTextInput; }
+    // Stage27 指令三：当前 IME 组合串（SDL_EVENT_TEXT_EDITING；跨帧保持，
+    // 提交/会话结束即清空）。输入框用它做实时组合预览；非空时抑制 Enter 提交。
+    const std::string& CompositionText() const { return m_compositionText; }
 
 private:
     static constexpr int kMouseButtonCount = 4; // SDL 按钮 1=左 2=中 3=右
@@ -60,6 +63,7 @@ private:
 
     int m_textInputDepth = 0;
     std::vector<std::string> m_frameTextInput;
+    std::string m_compositionText; // Stage27：IME 组合串（跨帧保持）
     SDL_Window* m_targetWindow = nullptr;
 };
 

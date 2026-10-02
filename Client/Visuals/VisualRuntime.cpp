@@ -241,6 +241,11 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event,
             m_localCharacterId = event.characterId;
             m_localName = event.characterName;
             m_localClassId = event.classId;
+            // Stage27 指令五：服务器权威造型兜底（AutoEnter/无大厅选择时，
+            // 用 EnterWorldResponse 携带的持久化 visualId 渲染本地玩家）。
+            if (event.visualId != 0) {
+                m_localVisualOverride = static_cast<std::uint16_t>(event.visualId);
+            }
             break;
         }
         case WorldNetworkEvent::Type::Disconnected: {
@@ -705,23 +710,36 @@ void VisualRuntime::Update(const WorldClientController& world, float deltaTime) 
             auto& ev = EnsureVisual(m_playerVisuals, characterId, EntityKind::RemotePlayer,
                                     std::string());
             if (ev.visualId.empty()) {
-                const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(
-                    remote.ClassId() != 0 ? static_cast<int>(remote.ClassId()) : 1);
-                if (def != nullptr) {
-                    ev.visualId = def->visualId;
+                // Stage27 指令五：远程玩家用服务器权威 visualId 读取 CharacterVisualCatalog；
+                // 禁止客户端按 classId 猜测（仅 visualId 缺失时保留旧链路兜底）。
+                if (remote.VisualId() != 0) {
+                    ev.visualId = legend::ui::CharacterVisualEntityName(remote.VisualId());
                     ApplyEntityDefinition(ev);
+                } else {
+                    const visual::VisualEntityDef* def = m_catalog->FindPlayerEntityByClass(
+                        remote.ClassId() != 0 ? static_cast<int>(remote.ClassId()) : 1);
+                    if (def != nullptr) {
+                        ev.visualId = def->visualId;
+                        ApplyEntityDefinition(ev);
+                    }
                 }
             }
-            // 方向（render 位置差分）
-            if (ev.hasPrev) {
-                const float dx = remote.RenderX() - ev.prevX;
-                const float dy = remote.RenderY() - ev.prevY;
-                if (dx * dx + dy * dy > 0.5f) {
-                    const legend::entity::Direction8 dir = legend::entity::DirectionFromVector(
-                        Vector2(dx, dy), static_cast<legend::entity::Direction8>(ev.direction));
-                    ev.direction = static_cast<int>(dir);
-                    ev.player.SetDirection(ev.direction);
+            // 方向：移动中由 render 位置差分驱动（指令十四）；静止时以服务器权威
+            // 朝向为准（Stage27 指令四：转头/初始朝向对端可见）。
+            if (remote.IsMoving()) {
+                if (ev.hasPrev) {
+                    const float dx = remote.RenderX() - ev.prevX;
+                    const float dy = remote.RenderY() - ev.prevY;
+                    if (dx * dx + dy * dy > 0.5f) {
+                        const legend::entity::Direction8 dir = legend::entity::DirectionFromVector(
+                            Vector2(dx, dy), static_cast<legend::entity::Direction8>(ev.direction));
+                        ev.direction = static_cast<int>(dir);
+                        ev.player.SetDirection(ev.direction);
+                    }
                 }
+            } else if (ev.direction != static_cast<int>(remote.Direction())) {
+                ev.direction = static_cast<int>(remote.Direction());
+                ev.player.SetDirection(ev.direction);
             }
             UpdateEntityVisual(ev, deltaTime, remote.IsMoving(), remote.Casting(),
                                remote.Alive());
@@ -1302,7 +1320,9 @@ void VisualRuntime::RenderOverlays(legend::render::SpriteBatch& batch,
     }
     const bool haveText = m_text.IsReady();
 
-    // ---- 远程玩家：名字板 + HP（指令十八/二十二/二十三；本地走 HUD）----
+    // ---- 远程玩家：名字板（角色名 + 等级）+ HP（指令十八/二十二/二十三；本地走 HUD）----
+    // Stage27 指令六/七：名字板显示 中文/英文/数字角色名 + Lv.等级（服务器权威数据，
+    // 经 PlayerSpawn 携带）；RenderOverlays 在 Y 排序实体之后绘制，天然盖在实体之上。
     for (const auto& [characterId, remote] : world.RemotePlayers().All()) {
         if (!remote.Alive() || characterId == m_localCharacterId) {
             continue;
@@ -1315,9 +1335,24 @@ void VisualRuntime::RenderOverlays(legend::render::SpriteBatch& batch,
         DrawBar(batch, feet + Vector2(-22.0f, -78.0f), 44.0f, 5.0f, hpPct,
                 hpPct > 0.35f ? Color(0.35f, 0.85f, 0.35f, 0.95f) : kHpFill);
         if (haveText) {
-            m_text.DrawStringShadow(batch, feet + Vector2(0.0f, -96.0f), remote.Name(), 13.0f,
+            char label[160];
+            std::snprintf(label, sizeof(label), "%s Lv.%u", remote.Name().c_str(),
+                          static_cast<unsigned>(remote.Level()));
+            m_text.DrawStringShadow(batch, feet + Vector2(0.0f, -96.0f), label, 13.0f,
                                   kTextWhite, false, true);
         }
+    }
+
+    // ---- 本地玩家：名字板（可配置显示；Stage27 指令七：第一版默认显示）----
+    if (m_showLocalName && haveText && m_localHasServerPos) {
+        const Vector2 feet(m_localVisualX, m_localVisualY);
+        std::uint32_t level = 0;
+        char label[160];
+        level = world.LocalLevel();
+        std::snprintf(label, sizeof(label), "%s Lv.%u", m_localName.c_str(),
+                      static_cast<unsigned>(level));
+        m_text.DrawStringShadow(batch, feet + Vector2(0.0f, -96.0f), label, 13.0f,
+                              Color(0.85f, 0.93f, 1.0f, 0.95f), false, true);
     }
 
     // ---- 怪物：名字 + 等级 + HP（指令十九/二十二/二十三）----
@@ -1545,6 +1580,8 @@ void VisualRuntime::RenderHUD(const WorldClientController& world, const std::str
     if (!m_ready || m_spriteShader == nullptr) {
         return;
     }
+    // Stage27 指令三：每帧兜底上传脏字形图集（输入框/名字板/聊天窗口 CJK 同帧可见）。
+    m_text.BeginFrame();
     m_uiDrawCallBase = m_uiBatch.GetDrawCallCount();
     // Camera2D 位置语义 = 视口中心的世界坐标 → identity 变换需将位置设为视口中心
     //（否则屏幕坐标整体偏移 viewportCenter，HUD 面板跑到画面中央）。

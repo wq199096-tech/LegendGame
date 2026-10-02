@@ -33,6 +33,15 @@ void InputManager::ProcessEvent(const SDL_Event& event) {
                 LOG_INFO("[TextInput] frame text received (depth=" +
                          std::to_string(m_textInputDepth) + ")");
             }
+            // Stage27 指令三：提交即组合结束——清空组合预览串。
+            m_compositionText.clear();
+            break;
+
+        case SDL_EVENT_TEXT_EDITING:
+            // Stage27 指令三：IME 组合过程实时预览（拼音/候选中）。空串 = 组合结束。
+            if (m_textInputDepth > 0 && event.edit.text != nullptr) {
+                m_compositionText = event.edit.text;
+            }
             break;
 
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -108,6 +117,7 @@ void InputManager::EndTextInput() {
                 SDL_StopTextInput(window);
             }
             m_frameTextInput.clear();
+            m_compositionText.clear();
         }
     }
 }

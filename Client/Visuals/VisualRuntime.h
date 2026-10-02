@@ -124,6 +124,9 @@ public:
     bool InventoryVisible() const { return m_inventoryVisible; }
     bool CharacterPanelVisible() const { return m_characterVisible; }
     bool SettingsVisible() const { return m_settingsVisible; }
+    // Stage27 指令七：本地玩家名字板可配置显示（第一版默认显示）。
+    void ToggleShowLocalName() { m_showLocalName = !m_showLocalName; }
+    bool ShowLocalName() const { return m_showLocalName; }
     // Settings 值（Audio 模块每帧读取；G 任务）。
     float MasterVolume() const { return m_masterVolume; }
     float MusicVolume() const { return m_musicVolume; }
@@ -251,6 +254,7 @@ private:
     bool m_inventoryVisible = false;
     bool m_characterVisible = false;
     bool m_settingsVisible = false;
+    bool m_showLocalName = true; // Stage27 指令七：本地玩家名字板默认显示
     int m_selectedInventorySlot = -1;
     int m_selectedShopIndex = -1;
     int m_lastClickedInventorySlot = -1;

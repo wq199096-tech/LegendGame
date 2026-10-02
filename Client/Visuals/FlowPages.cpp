@@ -97,6 +97,8 @@ void VisualRuntime::RenderFlowPages(const legend::flow::FlowUiModel& model, floa
     if (!m_ready || m_spriteShader == nullptr) {
         return;
     }
+    // Stage27 指令三：每帧兜底上传脏字形图集（登录/注册/创建/删除 输入框 CJK 同帧可见）。
+    m_text.BeginFrame();
     m_uiDrawCallBase = m_uiBatch.GetDrawCallCount();
     m_identityCamera.SetPosition({viewportWidth * 0.5f, viewportHeight * 0.5f});
     m_identityCamera.SetZoom(1.0f);
@@ -181,8 +183,12 @@ void VisualRuntime::RenderFlowPages(const legend::flow::FlowUiModel& model, floa
                            {(r.x + r.w) * scale, r.y * scale + r.h * scale * 0.5f},
                            {t / 64.0f, r.h * scale / 64.0f}, 0.0f, border);
 
+        // Stage27 指令三：聚焦字段实时拼接 IME 组合串（组合中每个字符即时可见；
+        // 提交后由 TEXT_INPUT 进入字段缓冲，此处仅展示预览）。
+        const bool composing = focused && !model.compositionText.empty();
         const std::string shown =
-            masked ? std::string(std::min<std::size_t>(text.size(), 24), '*') : text;
+            masked ? std::string(std::min<std::size_t>(text.size(), 24), '*')
+                   : (composing ? text + model.compositionText : text);
         if (!shown.empty()) {
             drawText({r.x + 12.0f, r.y + r.h * 0.5f}, shown, 16.0f, theme.textPrimary, false,
                      false);

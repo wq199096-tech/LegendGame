@@ -214,6 +214,9 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             spawn.currentHp = event.currentHp;
             spawn.maxHp = event.maxHp;
             spawn.alive = event.alive;
+            // Stage27 指令四/五：真实造型 + 朝向（服务器权威）
+            spawn.visualId = static_cast<std::uint16_t>(event.visualId);
+            spawn.direction = event.direction;
             m_remotePlayers.HandleSpawn(spawn);
             LOG_DEBUG("[World] PlayerSpawn #" + std::to_string(event.characterId) + " " +
                       event.characterName);

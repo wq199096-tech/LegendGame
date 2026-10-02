@@ -282,6 +282,7 @@ DbResponse DbServer::Execute(const DbRequest& request) {
             out.positionX = static_cast<float>(row.positionX);
             out.positionY = static_cast<float>(row.positionY);
             out.deleted = row.deleted;
+            out.visualId = row.visualId; // Stage27 指令五：持久化造型下发 World
             if (!EncodeWorldCharacterRow(out, response.payload)) {
                 LOG_ERROR("[Db] LoadCharacterFull encode failed (nameSize=" +
                           std::to_string(row.name.size()) + " deleted=" +

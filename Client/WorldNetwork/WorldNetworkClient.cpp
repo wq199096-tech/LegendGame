@@ -529,6 +529,8 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             // 阶段15 指令六十九：进入世界返回玩家 Mana
             event.currentMana = response.currentMana;
             event.maxManaVal = response.maxMana;
+            // Stage27 指令五：本人造型（服务器权威）
+            event.visualId = response.visualId;
             event.errorCode = response.errorCode;
             event.message = response.message;
             PushEvent(std::move(event));
@@ -599,6 +601,9 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.currentHp = spawn.currentHp;
             event.maxHp = spawn.maxHp;
             event.alive = spawn.alive;
+            // Stage27 指令四/五：真实造型 + 朝向（服务器权威）
+            event.visualId = spawn.visualId;
+            event.direction = spawn.direction;
             PushEvent(std::move(event));
             return;
         }
@@ -629,7 +634,8 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.serverTime = snapshot.serverTime;
             event.batchPlayers.push_back({snapshot.characterId, snapshot.positionX,
                                           snapshot.positionY,
-                                          snapshot.lastProcessedInputSequence});
+                                          snapshot.lastProcessedInputSequence,
+                                          snapshot.direction});
             PushEvent(std::move(event));
             return;
         }

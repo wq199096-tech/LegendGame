@@ -1,4 +1,56 @@
-# CURRENT_STAGE — Stage26 Production Login & Character Lobby V0.26
+# CURRENT_STAGE — Stage27 Player Identity & Chat Core V0.27
+
+## Stage27（2026-10-02 起）— **running**
+
+- **状态：running**。分支 `stage27-player-identity-chat`（基线 5b0705bd，main）。
+- 指令书：开始 LegendGame Stage27 — Player Identity & Chat Core V0.27
+  （中文名：玩家身份同步与聊天系统）。
+- **范围（仅做）**：
+  1. Stage26 两个遗留收口：①客户端文本框运行时中文输入部分帧不显示（须彻底定位，
+     输入过程实时可见，人工实测 PASS）；②远程玩家 visualId 服务器权威同步。
+  2. PlayerSpawn/PlayerSnapshot 升级：characterId/characterName/visualId/level/
+     mapId/x/y/direction/hp/maxHp；**禁止发送 accountId/username/SessionToken/
+     SelectionTicket**。
+  3. visualId/角色名服务器权威（CharacterServer/DbServer 持久化 → WorldServer 进世界
+     加载 → AOI Spawn 携带真实值）；客户端 RemotePlayerView 按 visualId 查
+     CharacterVisualCatalog，禁止客户端猜。
+  4. 名字板：角色名+Lv.（中文/英文/数字，现有 Font 系统）；层级与 Y 排序正确；
+     离开 AOI 销毁；本地玩家名字可配置显示。
+  5. 聊天四频道：Nearby（kNearbyChatRadius 建议 1200，服务器算距离）/World/
+     Whisper（/w 玩家名，目标须在线，否则"该玩家当前不在线"）/System（仅服务器）。
+  6. Shared/Chat 协议：ChatProtocol/ChatMessages/ChatCodec/ChatConstants；
+     MessageId 新区间（建议 340+，先查现有区间）；requestId 防重放；
+     严格 UTF-8、120 码点上限、禁控制字符/换行、空与纯空格拒绝。
+  7. 服务器权威限流：附近 1s/2 条、世界 3s/1 条、私聊 1s/3 条、突发 10s/8 条；
+     超限中文提示"发言过于频繁，请稍后再试"。
+  8. OnlinePlayerDirectory（characterId/characterName → session，O(1)）；
+     PlayerIdentity 统一模型（characterId/name/visualId/level）。
+  9. LogServer 聊天审计（不含密码/Token/Ticket）；LogServer 不可用仅 warning 不断聊天。
+  10. 客户端聊天 GUI：左下角半透明窗口，频道标签 综合/附近/世界/私聊/系统，
+      展开/收起、滚动、输入框、发送、频道选择；Enter 开输入→Enter 发送、Esc 取消；
+      不与技能快捷键冲突；ChatUiTheme 统一配色（附近浅色/世界金/私聊紫/系统绿黄/错误红）；
+      点击角色名→私聊菜单；内存历史 每频道200/综合500 FIFO；输入历史 20 条 ↑↓；
+      快捷命令 /n /w /world（/s 禁用）。
+  11. 配置 chat.*（nearbyRadius/maxCodepoints/各冷却/burst）入 Config/servers.json，
+      非法配置启动报错或回退明确默认，不得静默 0 冷却。
+- **禁止进入**：好友/公会/组队/交易/邮件/拍卖行/排行榜/PvP/商城/充值/第二章/新地图/新Boss；
+  聊天不入 SQLite；不大改 Studio（最多聊天参数只读展示）；不上线广播。
+- **测试纪律**：仍 3 个 CTest exe（新增 Checks 进 LegendWorldTests：PlayerIdentity/
+  RemoteAppearance/ChatCodec/ChatValidation/ChatNearby/ChatWorld/ChatWhisper/
+  ChatRateLimit/ChatReplay/ChatSecurity）；CI 保留全部旧门禁 + 可新增 Multiplayer
+  Chat Smoke（Db/Log/Login/Character/Gateway/World/ClientA/ClientB 双端 InWorld 互见聊天到达）。
+- **验收硬项**：两客户端不同 visualId 互见（A1/B2 重登一致）；三玩家附近范围隔离、
+  跨地图 Nearby 隔离；恶意包（非法channel/超长/非法UTF-8/截断/多余字节/空text/
+  伪System/空target/超长target）拒绝且不崩服；中文输入/多人造型/聊天 GUI 截图存
+  testlogs/stage27-ui-acceptance/。
+- **提交策略**：wip(stage27): fix cjk input and sync player identity →
+  wip(stage27): add authoritative chat core → wip(stage27): add chat client ui →
+  test(stage27): add multiplayer identity and chat e2e →
+  feat(multiplayer): add player identity and chat core；push 分支建 PR，不直接 push main。
+
+---
+
+## 历史：Stage26 Production Login & Character Lobby V0.26
 
 ## Stage26（2026-10-01/02）— **completed（封板）**
 

@@ -189,6 +189,8 @@ struct WorldNetworkEvent {
     float positionX = 0.0f;
     float positionY = 0.0f;
     std::uint16_t errorCode = 0;
+    // Stage27 指令四：服务器权威朝向（Direction8；PlayerSpawn/批量快照携带）。
+    std::uint8_t direction = 0;
 
     // PlayerPositionSnapshot 字段（指令四十二）
     std::uint32_t lastProcessedInputSequence = 0;

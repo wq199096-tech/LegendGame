@@ -19,6 +19,18 @@
   "rpc": {
     "timeoutMilliseconds": 5000
   },
+  "chat": {
+    "nearbyRadius": 1200,
+    "maxCodepoints": 120,
+    "nearbyWindowMs": 1000,
+    "nearbyMaxPerWindow": 2,
+    "worldWindowMs": 3000,
+    "worldMaxPerWindow": 1,
+    "whisperWindowMs": 1000,
+    "whisperMaxPerWindow": 3,
+    "burstWindowMs": 10000,
+    "burstMaxMessages": 8
+  },
   "security": {
     "serviceToken": ""
   }

@@ -85,6 +85,10 @@ struct FlowUiModel {
     // ---- 提示 ----
     float busyElapsed = 0.0f; // busy 动画计时
 
+    // Stage27 指令三：当前 IME 组合串（仅展示；TEXT_INPUT 提交后才进字段缓冲）。
+    // 渲染层把它拼在聚焦字段文本之后做实时预览；绝不写回账号/密码/角色名。
+    std::string compositionText;
+
     // 本帧收集的动作（GameScene::Update 消费后清空）。
     std::vector<FlowUiAction> pendingActions;
     void PushAction(FlowUiAction::Kind kind, int index = 0) {

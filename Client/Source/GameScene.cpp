@@ -496,7 +496,8 @@ void GameScene::Update(float deltaTime) {
         auto& flow27 = *m_flow;
         const bool inWorld = flow27.State() == legend::flow::ClientFlowState::InWorld;
         // 本地玩家造型覆盖（大厅选中的 visualId -> 进世界渲染；指令十一）。
-        if (m_visualRuntime != nullptr && m_networkController->Account().HasSelectedCharacter()) {
+        if (m_visualRuntime != nullptr && m_networkController->Account().HasSelectedCharacter() &&
+            m_networkController->Account().SelectedCharacter().visualId != 0) {
             m_visualRuntime->SetLocalPlayerVisualOverride(
                 m_networkController->Account().SelectedCharacter().visualId);
         }
@@ -505,11 +506,14 @@ void GameScene::Update(float deltaTime) {
             if (!input.IsTextInputActive()) {
                 input.BeginTextInput();
             }
+            // Stage27 指令三：IME 组合串实时预览（先喂组合再喂提交文本）。
+            flow27.SetCompositionText(input.CompositionText());
             flow27.FeedTextInput(input.FrameTextInput(),
                                  input.IsKeyPressed(SDL_SCANCODE_BACKSPACE));
-            // Enter 提交。
-            if (input.IsKeyPressed(SDL_SCANCODE_RETURN) ||
-                input.IsKeyPressed(SDL_SCANCODE_KP_ENTER)) {
+            // Enter 提交（Stage27 指令三：组合中不触发——避免 IME 确认拼音被误当提交）。
+            if ((input.IsKeyPressed(SDL_SCANCODE_RETURN) ||
+                 input.IsKeyPressed(SDL_SCANCODE_KP_ENTER)) &&
+                input.CompositionText().empty()) {
                 switch (flow27.State()) {
                     case legend::flow::ClientFlowState::Login:
                         flow27.RequestLogin();
