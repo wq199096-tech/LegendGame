@@ -672,10 +672,13 @@ void GameScene::Update(float deltaTime) {
         LOG_INFO(m_progressionDebug ? "Progression/Loot debug: enabled (F5)"
                                     : "Progression/Loot debug: disabled (F5)");
     }
-    // ---- 阶段14 指令五十九/六十/九十：Space = Debug 攻击最近可见 alive Monster ----
+    // ---- 阶段14 指令五十九/一百五十九：Space = Debug 攻击最近可见 alive Monster ----
     // Client 只发目标（SendAttack），伤害/距离/冷却全部服务器验证（指令一/三/六十）；
     // 按下时不做本地预测扣血（指令六十六，等 CombatEvent）。
-    if (input.IsKeyPressed(SDL_SCANCODE_SPACE) && m_networkController != nullptr &&
+    // Stage27 指令二十：聊天输入打开时吞掉游戏快捷键。
+    const bool chatInputOpen =
+        m_visualRuntime != nullptr && m_visualRuntime->Chat().InputOpen();
+    if (input.IsKeyPressed(SDL_SCANCODE_SPACE) && !chatInputOpen && m_networkController != nullptr &&
         m_networkController->World().IsWorldReady()) {
         auto& world = m_networkController->World();
         const float selfX = world.ServerPositionX();
@@ -711,7 +714,7 @@ void GameScene::Update(float deltaTime) {
         input.IsKeyDown(SDL_SCANCODE_LCTRL) || input.IsKeyDown(SDL_SCANCODE_RCTRL) ||
         input.IsKeyDown(SDL_SCANCODE_LALT) || input.IsKeyDown(SDL_SCANCODE_RALT) ||
         input.IsKeyDown(SDL_SCANCODE_LSHIFT) || input.IsKeyDown(SDL_SCANCODE_RSHIFT);
-    if (!questModifierDown && m_networkController != nullptr &&
+    if (!questModifierDown && !chatInputOpen && m_networkController != nullptr &&
         m_networkController->World().IsWorldReady()) {
         auto& world = m_networkController->World();
         std::uint32_t skillId = 0;
@@ -824,7 +827,8 @@ void GameScene::Update(float deltaTime) {
     }
     // ---- 阶段21 指令三十三/一百一十三：死亡状态 R/T 复活请求（服务器权威 3 秒/
     // 费用校验；Client 倒计时只是显示）----
-    if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+    if (m_networkController != nullptr && m_networkController->World().IsWorldReady() &&
+        !chatInputOpen) {
         auto& world = m_networkController->World();
         if (!world.LocalAlive()) {
             if (input.IsKeyPressed(SDL_SCANCODE_R)) {
@@ -873,7 +877,7 @@ void GameScene::Update(float deltaTime) {
 
     // ---- 阶段7：Z = 装备背包中第一件 Equipment / X = 卸下 Weapon（Debug 键） ----
     // ---- 阶段8指令七十七：SkillCasting 期间 Z/X 换装拒绝（装备入口检查 ActionState） ----
-    if (input.IsKeyPressed(SDL_SCANCODE_Z) && m_player != nullptr) {
+    if (input.IsKeyPressed(SDL_SCANCODE_Z) && !chatInputOpen && m_player != nullptr) {
         if (m_player->GetActionState() == legend::entity::CharacterActionState::SkillCasting) {
             LOG_INFO("[Skill] cannot equip while SkillCasting (Z rejected).");
         } else {
@@ -898,7 +902,7 @@ void GameScene::Update(float deltaTime) {
             }
         }
     }
-    if (input.IsKeyPressed(SDL_SCANCODE_X) && m_player != nullptr) {
+    if (input.IsKeyPressed(SDL_SCANCODE_X) && !chatInputOpen && m_player != nullptr) {
         if (m_player->GetActionState() == legend::entity::CharacterActionState::SkillCasting) {
             LOG_INFO("[Skill] cannot unequip while SkillCasting (X rejected).");
         } else {
@@ -911,7 +915,7 @@ void GameScene::Update(float deltaTime) {
 
     // ---- 阶段6：E 拾取最近 GroundLoot（<=80 world units） ----
     // ---- 阶段20 指令十七：E 优先 NPC 交互（visible NPC <=120）——否则回落拾取 ----
-    if (input.IsKeyPressed(SDL_SCANCODE_E) && m_player != nullptr) {
+    if (input.IsKeyPressed(SDL_SCANCODE_E) && !chatInputOpen && m_player != nullptr) {
         bool npcInteracted = false;
         if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
             auto& world = m_networkController->World();
@@ -934,7 +938,8 @@ void GameScene::Update(float deltaTime) {
 
     // ---- 阶段20 指令八十/八十一：NPC 对话/商店 Debug 键 ----
     // 对话打开时：数字键 1~9 选择 Option（优先于技能键）；B 买 / S 卖 / T 传送选项。
-    if (m_networkController != nullptr && m_networkController->World().IsWorldReady()) {
+    if (m_networkController != nullptr && m_networkController->World().IsWorldReady() &&
+        !chatInputOpen) {
         auto& world = m_networkController->World();
         if (world.Dialogue().Active()) {
             for (int digit = 1; digit <= 9; ++digit) {
@@ -970,17 +975,73 @@ void GameScene::Update(float deltaTime) {
     }
 
     // ---- 阶段25 指令十六~五十二：正式 UI 开关键（I/C/Esc；鼠标状态喂入）----
+    // Stage27：聊天输入打开时吞掉 I/C/Esc（Esc 由聊天块处理=取消输入）。
     if (m_visualRuntime != nullptr && m_networkController != nullptr &&
         m_networkController->World().IsWorldReady()) {
         auto& world25 = m_networkController->World();
-        if (input.IsKeyPressed(SDL_SCANCODE_I)) {
-            m_visualRuntime->ToggleInventory();
+        // ---- Stage27 指令二十：聊天窗口键盘（Enter 打开/发送，Esc 取消，↑↓ 历史）----
+        auto& chat27 = m_visualRuntime->Chat();
+        // 发送草稿（Enter 与聊天窗口"发送"按钮同一条路径；服务器仍权威校验）。
+        auto SendChatDraft = [&]() {
+            legend::chat::ChatChannel sendChannel = legend::chat::ChatChannel::Nearby;
+            std::string sendTarget;
+            std::string sendText;
+            chat27.ParseCommand(sendChannel, sendTarget, sendText);
+            if (legend::chat::IsValidChatText(sendText, legend::chat::kChatMaxCodePoints)) {
+                world25.SendChat(static_cast<std::uint8_t>(sendChannel), sendTarget, sendText);
+            } else {
+                // 本地预检失败（空/纯空格/含控制符）：红字提示（服务器仍权威重验）。
+                legend::client::ChatEntry localError;
+                localError.isError = true;
+                localError.text = chat27.Draft().empty() ? std::string("不能发送空消息")
+                                                         : std::string("消息包含非法字符");
+                chat27.AddMessage(localError);
+            }
+            chat27.CommitDraftToHistory();
+            chat27.CloseInput();
+        };
+        const bool enterPressed =
+            (input.IsKeyPressed(SDL_SCANCODE_RETURN) || input.IsKeyPressed(SDL_SCANCODE_KP_ENTER));
+        if (enterPressed && !chatInputOpen && input.CompositionText().empty()) {
+            chat27.OpenInput(chat27.DefaultChannel());
+        } else if (enterPressed && chatInputOpen && input.CompositionText().empty()) {
+            SendChatDraft();
         }
-        if (input.IsKeyPressed(SDL_SCANCODE_C)) {
-            m_visualRuntime->ToggleCharacterPanel();
+        if (chatInputOpen) {
+            if (!input.IsTextInputActive()) {
+                input.BeginTextInput(); // 聊天输入需要 IME/文本会话
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_ESCAPE)) {
+                chat27.CloseInput(); // 指令二十：Esc 取消输入
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_UP)) {
+                chat27.NavigateHistory(+1); // 指令二十五：↑ 切换历史
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_DOWN)) {
+                chat27.NavigateHistory(-1);
+            }
+            m_visualRuntime->SetChatComposition(input.CompositionText());
+            // 提交文本吸收 + 退格（FlowPages 同模式；Esc/Enter 已在上面处理）。
+            chat27.FeedTextInput(input.FrameTextInput(),
+                                 input.IsKeyPressed(SDL_SCANCODE_BACKSPACE));
+        } else {
+            m_visualRuntime->SetChatComposition(std::string());
+            if (input.IsTextInputActive()) {
+                input.EndTextInput(); // 关闭聊天即结束文本会话
+            }
         }
-        if (input.IsKeyPressed(SDL_SCANCODE_ESCAPE)) {
-            m_visualRuntime->ToggleSettings();
+        // 滚轮喂入（聊天历史滚动）。
+        m_visualRuntime->SetMouseWheel(input.GetMouseWheelDelta());
+        if (!chatInputOpen) {
+            if (input.IsKeyPressed(SDL_SCANCODE_I)) {
+                m_visualRuntime->ToggleInventory();
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_C)) {
+                m_visualRuntime->ToggleCharacterPanel();
+            }
+            if (input.IsKeyPressed(SDL_SCANCODE_ESCAPE)) {
+                m_visualRuntime->ToggleSettings();
+            }
         }
         m_visualRuntime->SetMouseState(input.GetMousePosition().x, input.GetMousePosition().y,
                                        input.IsMouseButtonPressed(1));
@@ -1009,6 +1070,12 @@ void GameScene::Update(float deltaTime) {
                 case K::WindowResolution:
                     SetWindowResolution(engine, req.index);
                     break;
+                case K::Chat:
+                    // Stage27 指令二十：聊天窗口"发送"按钮（index 1 = 发送草稿）。
+                    if (req.index == 1 && chat27.InputOpen()) {
+                        SendChatDraft();
+                    }
+                    break;
                 default:
                     break;
             }
@@ -1029,6 +1096,9 @@ void GameScene::Update(float deltaTime) {
     // ---- Movement Lock：Attacking / HitReact / Dead / SkillCasting 禁止移动 ----
     if (m_player->GetActionState() != legend::entity::CharacterActionState::Normal) {
         // 攻击/受击/施法/死亡动画期间不执行移动（保持站立，动画由 UpdateAnimation 驱动）
+    } else if (chatInputOpen) {
+        // Stage27 指令二十：聊天输入中键盘属于聊天（禁止 WASD/方向键移动）。
+        m_playerController.SetVirtualInput({0.0f, 0.0f});
     } else if (m_autoDirCycle) {
         UpdateDirectionCycle();
         m_playerController.Update(input, m_characterController, *m_player, *m_map, deltaTime);

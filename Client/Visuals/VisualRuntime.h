@@ -18,6 +18,7 @@
 #include "Client/Assets/AssetManager.h"
 #include "Client/Audio/AudioRuntime.h"
 #include "Client/Ui/ChapterDisplayCatalog.h"
+#include "Client/Ui/ChatModel.h"
 #include "Client/Ui/ItemDisplayCatalog.h"
 #include "Client/Ui/UiModels.h"
 #include "Client/Ui/UiTheme.h"
@@ -127,6 +128,18 @@ public:
     // Stage27 指令七：本地玩家名字板可配置显示（第一版默认显示）。
     void ToggleShowLocalName() { m_showLocalName = !m_showLocalName; }
     bool ShowLocalName() const { return m_showLocalName; }
+
+    // ---- Stage27：聊天窗口（指令十九~二十六；模型纯数据，渲染在本类）----
+    ChatModel& Chat() { return m_chat; }
+    const ChatModel& Chat() const { return m_chat; }
+    // GameScene 每帧喂入 IME 组合串（仅展示预览，不进 draft）。
+    void SetChatComposition(const std::string& composition) { m_chatComposition = composition; }
+    // GameScene 每帧喂入滚轮增量（聊天历史滚动用）。
+    void SetMouseWheel(float delta) { m_lastMouseWheelDelta = delta; }
+    // 聊天窗口渲染（RenderHUD 链尾调用；左下角，屏幕空间）。
+    // 实现于 ChatWindow.cpp（与 FlowPages.cpp 同模式拆分）。
+    void RenderChatWindow(const WorldClientController& world, float viewportWidth,
+                          float viewportHeight);
     // Settings 值（Audio 模块每帧读取；G 任务）。
     float MasterVolume() const { return m_masterVolume; }
     float MusicVolume() const { return m_musicVolume; }
@@ -143,6 +156,7 @@ public:
             WindowFullscreen, // 切换全屏（GameScene 执行）
             WindowResolution, // index = 分辨率档位
             FlowUi,           // Stage26：流程页动作（flowAction = FlowUiAction::Kind）
+            Chat,             // Stage27：聊天动作（index 1 = 发送草稿）
         };
         Kind kind = Kind::DialogueOption;
         int index = 0;
@@ -271,7 +285,12 @@ private:
     float m_lastMouseX = 0.0f;
     float m_lastMouseY = 0.0f;
     bool m_lastMouseClicked = false;
+    float m_lastMouseWheelDelta = 0.0f; // Stage27：滚轮增量（聊天历史滚动）
     std::vector<UiRequest> m_uiRequests;
+
+    // Stage27：聊天窗口状态（模型纯数据；组合串展示预览）。
+    ChatModel m_chat;
+    std::string m_chatComposition;
 
     void LoadClientSettings();
     void SaveClientSettings();

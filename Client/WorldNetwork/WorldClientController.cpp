@@ -88,6 +88,16 @@ void WorldClientController::SendSkillCast(std::uint32_t skillId, std::uint8_t ta
     m_client->SendSkillCast(++m_lastSkillRequestId, skillId, targetType, targetEntityId);
 }
 
+void WorldClientController::SendChat(std::uint8_t channel, const std::string& targetName,
+                                     const std::string& text) {
+    // Stage27 指令十三：requestId 单调递增（服务器防重放）；本地不预判成功——
+    // 以 ChatSendResponse 为准（失败显示中文文案）。
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_client->SendChat(++m_lastChatRequestId, channel, targetName, text);
+}
+
 void WorldClientController::Disconnect() {
     m_client->Disconnect(true);
     m_remotePlayers.Clear();   // 阶段12 指令五十九（客户端侧）：断开清空远程实体

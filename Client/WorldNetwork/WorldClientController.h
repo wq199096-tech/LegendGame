@@ -58,6 +58,9 @@ public:
     //（伤害/Mana/CD/完成时间全部服务器权威，指令一/二）。
     void SendSkillCast(std::uint32_t skillId, std::uint8_t targetType,
                        std::uint64_t targetEntityId);
+    // Stage27 指令十三：聊天请求（requestId 单调；只发意图四元组，sender 服务器权威）。
+    void SendChat(std::uint8_t channel, const std::string& targetName, const std::string& text);
+    std::uint64_t LastChatRequestId() const { return m_lastChatRequestId; }
     void Disconnect();
 
     WorldFlowState State() const { return m_state; }
@@ -213,6 +216,7 @@ private:
     std::uint64_t m_castStartSteadyMs = 0; // 本地展示计时（steady，仅进度条）
     std::uint32_t m_castDurationMs = 0;
     std::uint64_t m_lastSkillRequestId = 0;
+    std::uint64_t m_lastChatRequestId = 0; // Stage27 指令十三/十六
     // 阶段16 指令六十四：本地玩家状态容器。
     RemoteStatusEffectContainer m_localStatusEffects;
     // 阶段17 指令三十：本地成长数据（Level/Experience/ExpToNext/Gold）。

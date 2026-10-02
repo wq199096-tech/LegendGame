@@ -550,6 +550,31 @@ void VisualRuntime::OnWorldEvent(const WorldNetworkEvent& event,
             }
             break;
         }
+        // ------------------------------------------------------------------
+        // Stage27 指令十九/二十一：聊天事件 -> 聊天窗口模型（纯镜像；服务器权威）。
+        // ------------------------------------------------------------------
+        case WorldNetworkEvent::Type::ChatMessageEvent: {
+            ChatEntry entry;
+            entry.channel = event.chat.channel;
+            entry.senderName = event.chat.senderName;
+            entry.targetName = event.chat.targetName;
+            entry.text = event.chat.text;
+            entry.timestamp = event.chat.timestamp;
+            m_chat.AddMessage(entry);
+            break;
+        }
+        case WorldNetworkEvent::Type::ChatSendResponseEvent: {
+            if (!event.chat.success) {
+                // 指令二十一：错误红色；文案 = 服务器中文（空则本地映射兜底）。
+                ChatEntry entry;
+                entry.isError = true;
+                entry.text = !event.chat.errorMessage.empty()
+                                 ? event.chat.errorMessage
+                                 : legend::chat::ChatErrorUserText(event.chat.errorCode);
+                m_chat.AddMessage(entry);
+            }
+            break;
+        }
         default:
             break;
     }
@@ -1603,8 +1628,11 @@ void VisualRuntime::RenderHUD(const WorldClientController& world, const std::str
         const math::Vector2 refMouse(m_lastMouseX / scale, m_lastMouseY / scale);
         RenderWindows(world, viewportWidth, viewportHeight, scale, haveText, refMouse,
                       m_lastMouseClicked);
-        m_lastMouseClicked = false; // 消费本帧点击
     }
+
+    // ---- Stage27 指令十九：聊天窗口（左下角；最后绘制 = 最上层）----
+    RenderChatWindow(world, viewportWidth, viewportHeight);
+    m_lastMouseClicked = false; // 消费本帧点击（窗口 + 聊天共享一次点击帧）
 
     // ---- F9：性能/视觉统计（指令四十二/五十七：默认关闭，F9 开发开关）----
     if (mapDebug && haveText) {

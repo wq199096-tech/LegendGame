@@ -62,6 +62,8 @@ add_library(LegendClientUi STATIC
     Ui/PlayerFacingErrorCatalog.cpp
     Ui/CharacterVisualCatalog.cpp
     Ui/FlowUiModel.cpp
+    Ui/ChatUiTheme.cpp
+    Ui/ChatModel.cpp
 )
 target_include_directories(LegendClientUi PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendClientUi PUBLIC cxx_std_20)
@@ -83,6 +85,7 @@ add_executable(LegendClient
     Visuals/Font.cpp
     Visuals/VisualRuntime.cpp
     Visuals/FlowPages.cpp
+    Visuals/ChatWindow.cpp
     Source/ProgressionChecks.cpp
     Source/EquipmentChecks.cpp
     Source/SkillChecks.cpp

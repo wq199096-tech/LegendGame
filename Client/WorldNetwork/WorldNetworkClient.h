@@ -154,6 +154,9 @@ struct WorldNetworkEvent {
         MapSnapshotEvent,
         RespawnResponseEvent,
         PlayerRespawnedEvent,
+        // Stage27 指令十三：聊天事件
+        ChatSendResponseEvent,
+        ChatMessageEvent,
     };
     Type type = Type::Disconnected;
     std::string message;
@@ -296,6 +299,21 @@ struct WorldNetworkEvent {
     world::MapSnapshotPayload mapSnapshot;           // MapSnapshot
     world::RespawnResponsePayload respawn;           // RespawnResponse
     world::PlayerRespawnedPayload playerRespawned;   // PlayerRespawned
+    // Stage27：聊天事件数据（ChatSendResponse/ChatMessageEvent）。
+    struct ChatEventData {
+        std::uint64_t requestId = 0;        // ChatSendResponse
+        bool success = false;               // ChatSendResponse
+        std::uint16_t errorCode = 0;        // ChatErrorCode
+        std::string errorMessage;           // 服务器中文文案
+        std::uint64_t messageId = 0;        // ChatMessageEvent（服务器单调）
+        std::uint8_t channel = 0;           // ChatChannel
+        std::uint64_t senderCharacterId = 0;// System 消息为 0
+        std::string senderName;
+        std::string targetName;
+        std::string text;
+        std::uint64_t timestamp = 0;
+    };
+    ChatEventData chat;
 };
 
 // 阶段11 指令四十五/四十七/四十八/七十七/七十八：
@@ -371,6 +389,11 @@ public:
     // portalEntityId，禁止上传目标 map/坐标/费用）与 Respawn（requestId + mode）。
     void SendPortalUse(std::uint64_t requestId, std::uint64_t portalEntityId);
     void SendRespawn(std::uint64_t requestId, std::uint8_t respawnMode);
+
+    // Stage27 指令十三/十七：聊天请求——客户端只能发 requestId/channel/targetName/text；
+    // sender 身份由服务器根据 WorldSession 确定（禁止伪造 senderName/System）。
+    void SendChat(std::uint64_t requestId, std::uint8_t channel,
+                  const std::string& targetName, const std::string& text);
 
     void PollEvents(std::deque<WorldNetworkEvent>& out); // 主线程消费
     void UpdateHeartbeat(float deltaTime);
