@@ -92,18 +92,49 @@ function Diag([string]$Message) {
 }
 
 function Find-CrtUnderVcRoot([string]$VcRoot) {
-    if (-not $VcRoot) { return $null }
+    # Given a VS installation root, find the latest CRT dir that ships the 4
+    # required DLLs. Emits per-level Diag so a miss is pinpointable.
+    if (-not $VcRoot) { Diag 'CRT check: empty VcRoot'; return $null }
+    Diag "CRT check: VcRoot = $VcRoot"
     $redistBase = Join-Path $VcRoot 'VC\Redist\MSVC'
-    if (-not (Test-Path -LiteralPath $redistBase -PathType Container)) { return $null }
-    $latest = Get-ChildItem -LiteralPath $redistBase -Directory -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $latest) { return $null }
-    $crt = Get-ChildItem -LiteralPath (Join-Path $latest.FullName 'x64') -Directory `
-        -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $crt) { return $null }
-    return $crt.FullName
+    if (-not (Test-Path -LiteralPath $redistBase -PathType Container)) {
+        Diag "CRT check: MISSING $redistBase"
+        $vcDir = Join-Path $VcRoot 'VC'
+        if (Test-Path -LiteralPath $vcDir -PathType Container) {
+            $subs = Get-ChildItem -LiteralPath $vcDir -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.Name }
+            Diag "CRT check: actual subdirs under VC\: $($subs -join ', ')"
+        } else {
+            Diag "CRT check: no VC\ dir at all under VcRoot"
+        }
+        return $null
+    }
+    $vers = Get-ChildItem -LiteralPath $redistBase -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending
+    Diag "CRT check: redist versions: $(($vers | ForEach-Object { $_.Name }) -join ', ')"
+    foreach ($ver in $vers) {
+        $x64 = Join-Path $ver.FullName 'x64'
+        $crts = Get-ChildItem -LiteralPath $x64 -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending
+        Diag "CRT check: ver $($ver.Name) CRT dirs: $(($crts | ForEach-Object { $_.Name }) -join ', ')"
+        foreach ($crt in $crts) {
+            $dlls = Get-ChildItem -LiteralPath $crt.FullName -File -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.Name }
+            Diag "CRT check: files in $($crt.Name): $($dlls -join ', ')"
+            $ok = $true
+            foreach ($dll in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $crt.FullName $dll) -PathType Leaf)) {
+                    Diag "CRT check: MISSING $dll in $($crt.Name)"
+                    $ok = $false
+                }
+            }
+            if ($ok) { Diag "CRT check: HIT $($crt.FullName)"; return $crt.FullName }
+        }
+    }
+    Diag 'CRT check: no usable CRT dir under this VcRoot'
+    return $null
 }
+
 
 function Find-VcRedistCrtDir {
     # Locate the VC++ redist CRT directory (no hard-coded dev-machine paths,
