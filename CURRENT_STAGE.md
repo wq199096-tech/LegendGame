@@ -3,8 +3,13 @@
 ## Stage26（2026-10-01/02）— **completed（封板）**
 
 - **状态：completed（正式封板）**。PR #2 已合并 main（merge SHA a972063），
-  PR 分支 CI Run 36916004962 全绿，main CI Run 36918395388 七步骤 SUCCESS，
-  本机 GUI 人工验收 PASS（14 张截图）。等待 Stage27 指令。
+  本机 GUI 人工验收 PASS（14 张截图）。
+- CI 记录：PR 分支 Run 36916004962 SUCCESS；main merge 提交 Run 36918395388
+  SUCCESS；封板文档提交 7da42ae 的 Run 36944412540 在 CTest hard gate 失败
+  （ConcurrentDuplicateRegisterCheck：10 并发连接 10s 窗口在慢机冷启动下超时
+  → 计数缺口；同代码历史 run 全 PASS，纯慢机竞态）→ 修复 aa0b81d
+  （连接/响应等待 10s/20s → 30s，断言强度不变）→ **Run 36946200531 七步骤
+  SUCCESS，正式封板**。等待 Stage27 指令。
 - 交付内容（五大批次，分支 `stage26-production-client-entry`，基线 6f02d42）：
   1. **服务器规则层（批次 A）**：角色名 UTF-8 码点规则（2~12 码点，CJK+ASCII 白名单，
      严格解码拒绝截断/overlong/代理区）；visualId 持久化（DB Migration 6，
