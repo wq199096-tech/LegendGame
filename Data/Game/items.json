@@ -10,7 +10,7 @@
       "iconKey": "item_rusty_sword",
       "itemDefinitionId": 3001,
       "maxStack": 1,
-      "name": "Rusty Sword",
+      "name": "锈铁剑",
       "type": "Weapon"
     },
     {
@@ -23,7 +23,7 @@
       "iconKey": "item_cloth_armor",
       "itemDefinitionId": 3002,
       "maxStack": 1,
-      "name": "Cloth Armor",
+      "name": "布甲",
       "type": "Armor"
     },
     {
@@ -36,7 +36,7 @@
       "iconKey": "item_slime_core",
       "itemDefinitionId": 3003,
       "maxStack": 99,
-      "name": "Slime Core",
+      "name": "史莱姆核心",
       "type": "Material"
     },
     {
@@ -49,7 +49,7 @@
       "iconKey": "item_bronze_sword",
       "itemDefinitionId": 3010,
       "maxStack": 1,
-      "name": "Bronze Sword",
+      "name": "青铜剑",
       "type": "Weapon"
     },
     {
@@ -62,7 +62,7 @@
       "iconKey": "item_apprentice_staff",
       "itemDefinitionId": 3011,
       "maxStack": 1,
-      "name": "Apprentice Staff",
+      "name": "学徒法杖",
       "type": "Weapon"
     },
     {
@@ -75,7 +75,7 @@
       "iconKey": "item_spirit_talisman",
       "itemDefinitionId": 3012,
       "maxStack": 1,
-      "name": "Spirit Talisman",
+      "name": "灵符",
       "type": "Weapon"
     },
     {
@@ -88,7 +88,7 @@
       "iconKey": "item_traveler_armor",
       "itemDefinitionId": 3013,
       "maxStack": 1,
-      "name": "Traveler Armor",
+      "name": "行者护甲",
       "type": "Armor"
     }
   ],

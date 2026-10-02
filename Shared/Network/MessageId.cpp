@@ -111,6 +111,9 @@ const char* MessageIdName(std::uint16_t id) {
         case MessageId::RespawnRequest: return "RespawnRequest";
         case MessageId::RespawnResponse: return "RespawnResponse";
         case MessageId::PlayerRespawned: return "PlayerRespawned";
+        case MessageId::ChatSendRequest: return "ChatSendRequest";
+        case MessageId::ChatSendResponse: return "ChatSendResponse";
+        case MessageId::ChatMessageEvent: return "ChatMessageEvent";
         case MessageId::InternalServiceHandshake: return "InternalServiceHandshake";
         case MessageId::InternalServiceHandshakeAck: return "InternalServiceHandshakeAck";
         case MessageId::InternalHeartbeat: return "InternalHeartbeat";

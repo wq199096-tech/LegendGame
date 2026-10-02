@@ -15,7 +15,9 @@ public:
     // 指令三十四：不存在则由 Manager 创建；已存在则更新元数据与位置。
     void ApplySpawn(const world::PlayerSpawnPayload& spawn);
     // 指令三十六：只更新 server target，不瞬移 render（teleport 除外）。
-    void ApplySnapshot(float serverX, float serverY, std::uint64_t serverTime);
+    // Stage27 指令四：携带服务器权威朝向。
+    void ApplySnapshot(float serverX, float serverY, std::uint64_t serverTime,
+                       std::uint8_t direction);
     // 指令三十七/三十八：render = lerp(render, server, 1 - exp(-12*dt))；差 >300 直接 snap。
     void UpdateInterpolation(float deltaTime);
 
@@ -24,6 +26,9 @@ public:
     std::uint16_t ClassId() const { return m_classId; }
     std::uint16_t Gender() const { return m_gender; }
     std::uint32_t Level() const { return m_level; }
+    // Stage27 指令五：服务器权威造型（0/1 之外的合法值经 CharacterVisualCatalog 映射；
+    // 远程玩家禁止客户端按 classId 猜测外观）。
+    std::uint16_t VisualId() const { return m_visualId; }
     std::uint16_t MapId() const { return m_mapId; }
     float ServerX() const { return m_serverX; }
     float ServerY() const { return m_serverY; }
@@ -31,6 +36,8 @@ public:
     float RenderY() const { return m_renderY; }
     // 指令四十一：相邻两次服务器位置差估算移动（Walk/Idle；不同步动画帧，指令四十二）。
     bool IsMoving() const { return m_moving; }
+    // Stage27 指令四：服务器权威朝向（Direction8 0~7）。
+    std::uint8_t Direction() const { return m_direction; }
     bool Active() const { return m_active; }
     std::uint64_t LastSnapshotServerTime() const { return m_lastSnapshotServerTime; }
     // 阶段14 指令六十四：远程玩家 HP（CombatEvent/HealthSnapshot 更新，指令六十五）。
@@ -67,6 +74,8 @@ private:
     std::uint16_t m_classId = 0;
     std::uint16_t m_gender = 0;
     std::uint32_t m_level = 1;
+    std::uint16_t m_visualId = 1;  // Stage27 指令五：服务器权威造型
+    std::uint8_t m_direction = 0;  // Stage27 指令四：服务器权威朝向（Direction8）
     std::uint16_t m_mapId = 1;
     float m_serverX = 0.0f;
     float m_serverY = 0.0f;

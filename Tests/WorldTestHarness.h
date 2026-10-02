@@ -173,6 +173,16 @@ struct WorldTestServers {
     std::string worldDataDir;
     // 阶段23 23.26：Game 数据目录（空 = 生产默认 "Data/Game"；测试指向临时 JSON）。
     std::string gameDataDir;
+    // Stage27 指令三十五：聊天限流窗口（生产默认；测试可注入小窗口免长 sleep）。
+    int chatNearbyWindowMs = 1000;
+    int chatNearbyMaxPerWindow = 2;
+    int chatWorldWindowMs = 3000;
+    int chatWorldMaxPerWindow = 1;
+    int chatWhisperWindowMs = 1000;
+    int chatWhisperMaxPerWindow = 3;
+    int chatBurstWindowMs = 10000;
+    int chatBurstMaxMessages = 8;
+    float chatNearbyRadius = 1200.0f;
 
     bool StartLogin() {
         login = std::make_shared<LoginServer>(loginService);
@@ -212,6 +222,16 @@ struct WorldTestServers {
         world->GetConfig().questSnapshotIntervalMs = questSnapshotIntervalMs;
         world->GetConfig().npcSessionTtlSeconds = npcSessionTtlSeconds;
         world->GetConfig().legacyMap1TestSpawn = legacyMap1TestSpawn;
+        // Stage27 指令三十五：聊天限流窗口注入（Start 前设置）。
+        world->GetConfig().chatNearbyWindowMs = chatNearbyWindowMs;
+        world->GetConfig().chatNearbyMaxPerWindow = chatNearbyMaxPerWindow;
+        world->GetConfig().chatWorldWindowMs = chatWorldWindowMs;
+        world->GetConfig().chatWorldMaxPerWindow = chatWorldMaxPerWindow;
+        world->GetConfig().chatWhisperWindowMs = chatWhisperWindowMs;
+        world->GetConfig().chatWhisperMaxPerWindow = chatWhisperMaxPerWindow;
+        world->GetConfig().chatBurstWindowMs = chatBurstWindowMs;
+        world->GetConfig().chatBurstMaxMessages = chatBurstMaxMessages;
+        world->GetConfig().chatNearbyRadius = chatNearbyRadius;
         if (!worldDataDir.empty()) {
             world->GetConfig().worldDataDir = worldDataDir; // 阶段22：真实 Data 链路测试
         } else {

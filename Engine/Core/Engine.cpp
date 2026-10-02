@@ -19,7 +19,11 @@ bool Engine::Initialize(const std::string& windowTitle, int windowWidth, int win
         return true;
     }
 
-    debug::Logger::Init("Logs");
+    // Stage27 Multiplayer Chat Smoke：LEGEND_CLIENT_LOG_DIR 允许两个冒烟客户端
+    // 同目录运行时各写各的日志（默认 Logs 保持兼容）。
+    const char* logDir = SDL_getenv("LEGEND_CLIENT_LOG_DIR");
+    debug::Logger::Init(logDir != nullptr && logDir[0] != '\0' ? std::string(logDir)
+                                                               : std::string("Logs"));
     LOG_INFO("==================================================");
     LOG_INFO(std::string("LegendGame Engine V") + LEGEND_ENGINE_VERSION + " starting up.");
     LOG_INFO("==================================================");

@@ -297,7 +297,7 @@ std::string VisualDataCatalog::PortalVisualId(std::uint32_t portalId) const {
 
 std::string VisualDataCatalog::MapDisplayName(std::uint16_t mapId) const {
     const auto it = m_maps.find(mapId);
-    return it == m_maps.end() ? std::string("Unknown Map") : it->second.name;
+    return it == m_maps.end() ? std::string("未知地图") : it->second.name;
 }
 
 const MapDisplay* VisualDataCatalog::FindMapDisplay(std::uint16_t mapId) const {

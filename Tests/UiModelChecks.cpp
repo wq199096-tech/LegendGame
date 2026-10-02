@@ -179,12 +179,12 @@ void RunItemDisplayCatalogChecks() {
     }
     bool ok = loaded && catalog.Count() == 7;
     const ui::ItemDisplay* bronze = catalog.Find(3010);
-    ok = ok && bronze != nullptr && bronze->name == "Bronze Sword" &&
+    ok = ok && bronze != nullptr && bronze->name == "青铜剑" &&
          bronze->attackBonus == 8 && bronze->isEquipment() &&
          bronze->iconKey == "item_bronze_sword";
     const ui::ItemDisplay* core = catalog.Find(3003);
     ok = ok && core != nullptr && !core->isEquipment() && core->maxStack == 99;
-    ok = ok && catalog.DisplayName(3013) == "Traveler Armor" &&
+    ok = ok && catalog.DisplayName(3013) == "行者护甲" &&
          catalog.IconAsset(3012) == "item_spirit_talisman" &&
          catalog.Find(9999) == nullptr;
     Check("UiItemDisplayChecks: real Data items.json display fields (3010+)", ok);
@@ -200,7 +200,7 @@ void RunChapterDisplayCatalogChecks() {
     }
     bool ok = loaded && catalog.Count() == 1;
     std::string title;
-    ok = ok && catalog.ChapterCompletion(4006, title) && title == "The Restless Slimes";
+    ok = ok && catalog.ChapterCompletion(4006, title) && title == "不安分的史莱姆";
     std::string none;
     ok = ok && !catalog.ChapterCompletion(4005, none); // 非 finalQuest 不命中
     // 缺失目录 → 加载失败不致命（调用方降级空目录）。

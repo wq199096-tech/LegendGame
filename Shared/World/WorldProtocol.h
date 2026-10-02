@@ -45,6 +45,8 @@ struct EnterWorldResponsePayload {
     // 阶段15 指令六十九：进入世界返回玩家 Mana（阶段15 不持久化，恢复 100/100）。
     std::uint32_t currentMana = 100;
     std::uint32_t maxMana = 100;
+    // Stage27 指令五：本人造型（服务器权威；客户端不得自行猜测 visualId）。
+    std::uint16_t visualId = 1;
     std::uint16_t errorCode = 0; // WorldErrorCode
     std::string message;
 };
@@ -89,6 +91,8 @@ struct PlayerPositionSnapshotPayload {
 // ---------------------------------------------------------------------------
 
 // 指令二十二：PlayerSpawn(230)。阶段14 指令十六：增加 HP 字段。
+// Stage27 指令四/五：增加 visualId（持久化造型，服务器权威）+ direction
+//（Direction8 朝向；AOI 对端用真实外观渲染，禁止客户端按 classId 猜测）。
 struct PlayerSpawnPayload {
     std::uint64_t characterId = 0;
     std::string name;
@@ -102,6 +106,8 @@ struct PlayerSpawnPayload {
     std::uint32_t currentHp = 100;
     std::uint32_t maxHp = 100;
     bool alive = true;
+    std::uint16_t visualId = 1;
+    std::uint8_t direction = 0; // Direction8（0=South）
 };
 
 // 指令二十三：PlayerDespawn(231)，reason = PlayerDespawnReason。
@@ -112,12 +118,14 @@ struct PlayerDespawnPayload {
 
 // 指令二十四：RemotePlayerSnapshot(232)（阶段12 服务器只发 batch，保留单条协议）。
 // 阶段14 指令九十二：RemotePlayer batch 不加 HP——HP 走 CombatEvent + HealthSnapshot。
+// Stage27 指令四：快照携带 direction（服务器权威朝向）。
 struct RemotePlayerSnapshotPayload {
     std::uint64_t characterId = 0;
     float positionX = 0.0f;
     float positionY = 0.0f;
     std::uint32_t lastProcessedInputSequence = 0;
     std::uint64_t serverTime = 0;
+    std::uint8_t direction = 0;
 };
 
 // 指令二十五：RemotePlayerBatchSnapshot(233) 推荐形态。
@@ -126,6 +134,7 @@ struct RemotePlayerBatchEntry {
     float positionX = 0.0f;
     float positionY = 0.0f;
     std::uint32_t lastProcessedInputSequence = 0;
+    std::uint8_t direction = 0;
 };
 
 struct RemotePlayerBatchSnapshotPayload {

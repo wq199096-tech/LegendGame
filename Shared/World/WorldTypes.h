@@ -10,7 +10,9 @@ namespace legend::world {
 // World 协议版本：与阶段9 PacketHeader version 一致（WorldClientHello 校验）。
 // 阶段15 指令九十八：技能协议（260~266/CombatEvent source/EnterWorldResponse Mana）
 // -> 0.14(2) 提升到 0.15(3)。旧版本握手拒绝。
-inline constexpr std::uint16_t kWorldProtocolVersion = 3;
+// Stage27 指令四/五：PlayerSpawn/PlayerSnapshot/EnterWorldResponse 增加 visualId/
+// direction（远程玩家真实外观 + 朝向；服务器权威）-> 提升到 0.27(4)。旧版本握手拒绝。
+inline constexpr std::uint16_t kWorldProtocolVersion = 4;
 
 // 默认端口（指令三）：WorldServer 只绑定 127.0.0.1，DEV ONLY。
 inline constexpr std::uint16_t kWorldServerDefaultPort = 7200;

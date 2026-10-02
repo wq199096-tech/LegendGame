@@ -2,12 +2,12 @@
   "npcs": [
     {
       "dialogueId": 5001,
-      "dialogueText": "The slimes have been restless lately. Will you help us?",
-      "dialogueTitle": "Village Elder",
+      "dialogueText": "最近草原上的史莱姆躁动不安，你愿意帮帮我们吗？",
+      "dialogueTitle": "村长",
       "enabled": true,
       "interactionRange": 120.0,
       "mapId": 1,
-      "name": "Village Elder",
+      "name": "村长",
       "npcDefinitionId": 5001,
       "questIds": [
         4001,
@@ -25,12 +25,12 @@
     },
     {
       "dialogueId": 5002,
-      "dialogueText": "Welcome! Finest goods in the village.",
-      "dialogueTitle": "General Merchant",
+      "dialogueText": "欢迎光临！村里最齐全的货都在这儿。",
+      "dialogueTitle": "杂货商人",
       "enabled": true,
       "interactionRange": 120.0,
       "mapId": 1,
-      "name": "General Merchant",
+      "name": "杂货商人",
       "npcDefinitionId": 5002,
       "questIds": [],
       "shopId": 6001,
@@ -42,12 +42,12 @@
     },
     {
       "dialogueId": 5003,
-      "dialogueText": "I can take you anywhere, for a price.",
-      "dialogueTitle": "Wayfarer",
+      "dialogueText": "只要付点钱，我可以送你去任何地方。",
+      "dialogueTitle": "远行商人",
       "enabled": true,
       "interactionRange": 120.0,
       "mapId": 1,
-      "name": "Wayfarer",
+      "name": "远行商人",
       "npcDefinitionId": 5003,
       "questIds": [],
       "shopId": 0,
@@ -59,12 +59,12 @@
     },
     {
       "dialogueId": 5004,
-      "dialogueText": "Looking for adventure? The far plains await.",
-      "dialogueTitle": "Explorer Guide",
+      "dialogueText": "想去冒险吗？远郊平原在等着你。",
+      "dialogueTitle": "探险向导",
       "enabled": true,
       "interactionRange": 120.0,
       "mapId": 1,
-      "name": "Explorer Guide",
+      "name": "探险向导",
       "npcDefinitionId": 5004,
       "questIds": [
         4004

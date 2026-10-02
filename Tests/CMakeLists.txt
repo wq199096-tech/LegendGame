@@ -71,6 +71,8 @@ add_executable(LegendWorldTests
     ChapterOneChecks.cpp
     LeaveWorldChecks.cpp
     Stage26FlowChecks.cpp
+    Stage27ChatChecks.cpp
+    PlayerFacingLocalizationChecks.cpp
     FullServerTopologyCheck.cpp
     ../Tools/MapEditor/Source/WorldDocument.cpp
     ../Tools/MapEditor/Source/GameDataDocument.cpp

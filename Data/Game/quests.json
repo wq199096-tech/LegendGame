@@ -1,9 +1,9 @@
 {
   "quests": [
     {
-      "description": "The Training Slimes in the meadow have grown bold. Defeat 5 of them.",
+      "description": "草原上的史莱姆越发躁动，前往草原并击败5只史莱姆。",
       "minLevel": 1,
-      "name": "First Trouble",
+      "name": "初现异动",
       "objectives": [
         {
           "objectiveId": 40011,
@@ -25,9 +25,9 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "The slimes carry strange cores. Bring me 3 Slime Cores.",
+      "description": "史莱姆体内藏着奇异的核心，替村长带回3枚史莱姆核心。",
       "minLevel": 1,
-      "name": "Strange Cores",
+      "name": "奇异核心",
       "objectives": [
         {
           "objectiveId": 40021,
@@ -49,9 +49,9 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Grow stronger. Reach level 3.",
+      "description": "磨砺自己，让实力更上一层楼。达到3级。",
       "minLevel": 1,
-      "name": "Growing Stronger",
+      "name": "初试锋芒",
       "objectives": [
         {
           "objectiveId": 40031,
@@ -73,9 +73,9 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Explore the southern meadow (300,1500).",
+      "description": "向南探索史莱姆草原深处（约300,1500），看看那里藏着什么。",
       "minLevel": 1,
-      "name": "Explore the Meadow",
+      "name": "草原探索",
       "objectives": [
         {
           "areaRadius": 200.0,
@@ -101,9 +101,9 @@
       "turnInNpcDefinitionId": 5004
     },
     {
-      "description": "Slay 5 slimes, gather 2 cores, and set foot in the Ancient Ruins.",
+      "description": "击败5只史莱姆、收集2枚核心，并踏入远古遗迹一探究竟。",
       "minLevel": 3,
-      "name": "Deeper Threat",
+      "name": "深处的威胁",
       "objectives": [
         {
           "objectiveId": 40051,
@@ -141,9 +141,9 @@
       "turnInNpcDefinitionId": 5001
     },
     {
-      "description": "Something ancient stirs in the ruins. Defeat the Ancient Slime Guardian.",
+      "description": "遗迹深处似乎有什么古老的东西苏醒了。击败远古史莱姆守卫。",
       "minLevel": 3,
-      "name": "Ruins Investigation",
+      "name": "遗迹异变",
       "objectives": [
         {
           "objectiveId": 40061,

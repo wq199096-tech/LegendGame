@@ -106,6 +106,17 @@ int WorldServerMain(const legend::admin::ServerMainParams& params,
         }
         config.serviceToken = topology.sharedSecret;
         config.dbTimeout = std::chrono::milliseconds(topology.rpcTimeoutMilliseconds);
+        // Stage27 指令四十六：聊天参数（servers.json "chat" 节；LoadServerConfig 已校验）。
+        config.chatNearbyRadius = topology.chatNearbyRadius;
+        config.chatMaxCodePoints = topology.chatMaxCodePoints;
+        config.chatNearbyWindowMs = topology.chatNearbyWindowMs;
+        config.chatNearbyMaxPerWindow = topology.chatNearbyMaxPerWindow;
+        config.chatWorldWindowMs = topology.chatWorldWindowMs;
+        config.chatWorldMaxPerWindow = topology.chatWorldMaxPerWindow;
+        config.chatWhisperWindowMs = topology.chatWhisperWindowMs;
+        config.chatWhisperMaxPerWindow = topology.chatWhisperMaxPerWindow;
+        config.chatBurstWindowMs = topology.chatBurstWindowMs;
+        config.chatBurstMaxMessages = topology.chatBurstMaxMessages;
     }
 
     for (int i = 1; i < argc; ++i) {
@@ -124,6 +135,17 @@ int WorldServerMain(const legend::admin::ServerMainParams& params,
             }
             config.serviceToken = topology.sharedSecret;
             config.dbTimeout = std::chrono::milliseconds(topology.rpcTimeoutMilliseconds);
+            // Stage27 指令四十六：--config 重载分支同步读取聊天参数。
+            config.chatNearbyRadius = topology.chatNearbyRadius;
+            config.chatMaxCodePoints = topology.chatMaxCodePoints;
+            config.chatNearbyWindowMs = topology.chatNearbyWindowMs;
+            config.chatNearbyMaxPerWindow = topology.chatNearbyMaxPerWindow;
+            config.chatWorldWindowMs = topology.chatWorldWindowMs;
+            config.chatWorldMaxPerWindow = topology.chatWorldMaxPerWindow;
+            config.chatWhisperWindowMs = topology.chatWhisperWindowMs;
+            config.chatWhisperMaxPerWindow = topology.chatWhisperMaxPerWindow;
+            config.chatBurstWindowMs = topology.chatBurstWindowMs;
+            config.chatBurstMaxMessages = topology.chatBurstMaxMessages;
         } else if (arg == "--console" || arg == "--hidden") {
             continue; // Runner 模式开关：业务层无感
         } else if (arg == "--port" && i + 1 < argc) {
@@ -181,6 +203,35 @@ int WorldServerMain(const legend::admin::ServerMainParams& params,
                     event.characterId=characterId;event.message=entered?"world entered":"world left";event.extraJson="{}";
                     remoteLog->Emit(std::move(event));
                 }
+            },
+        // Stage27 指令十八：聊天审计 -> LogServer（ChatMessage 事件；不含密码/Token/Ticket；
+        // LogServer 不可用时 LogClient 本地缓冲重发，聊天不受影响）。
+        .onChatAudit =
+            [remoteLog](const legend::chat::ChatAuditRecord& record) {
+                if (!remoteLog) {
+                    return; // WorldServer 侧已 warning；聊天继续
+                }
+                legend::internal::LogEvent event;
+                event.timestampMs = record.timestampMs;
+                event.service = legend::internal::ServiceType::WorldServer;
+                event.level = 2;
+                event.eventType = legend::internal::LogEventType::ChatMessage;
+                event.characterId = record.senderCharacterId;
+                event.message = record.text;
+                // extraJson 携带频道/目标名/发送者名（文本放 message；注意项目
+                // 敏感词门禁：含 password/token 等字样的聊天会被 LogEvent 编码层
+                // 拒绝——Stage27 已知行为，聊天链路本身不受影响）。
+                std::string extra = "{\"channel\":" + std::to_string(record.channel) +
+                                    ",\"sender\":" + std::to_string(record.senderCharacterId);
+                if (!record.senderName.empty()) {
+                    extra += ",\"senderName\":\"" + record.senderName + "\"";
+                }
+                if (!record.targetName.empty()) {
+                    extra += ",\"target\":\"" + record.targetName + "\"";
+                }
+                extra += "}";
+                event.extraJson = std::move(extra);
+                remoteLog->Emit(std::move(event));
             },
     });
 

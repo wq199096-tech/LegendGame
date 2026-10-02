@@ -1,5 +1,7 @@
 #include "Client/WorldNetwork/WorldNetworkClient.h"
 
+#include "Shared/Chat/ChatProtocol.h"
+
 #include "Engine/Debug/Logger.h"
 #include "Shared/Network/ByteReader.h"
 #include "Shared/Network/Protocol.h"
@@ -398,6 +400,24 @@ void WorldNetworkClient::SendRespawn(std::uint64_t requestId, std::uint8_t respa
     }
 }
 
+void WorldNetworkClient::SendChat(std::uint64_t requestId, std::uint8_t channel,
+                                  const std::string& targetName, const std::string& text) {
+    // Stage27 指令十三：仅 WorldReady 后可发；只发意图四元组（sender 服务器权威）。
+    if (m_state.load() != WorldFlowState::WorldReady || !m_connection) {
+        return;
+    }
+    chat::ChatSendRequestPayload request;
+    request.requestId = requestId;
+    request.channel = channel;
+    request.targetName = targetName;
+    request.text = text;
+    Packet out;
+    out.header.messageId = static_cast<std::uint16_t>(MessageId::ChatSendRequest);
+    if (chat::EncodeChatSendRequest(request, out.payload)) {
+        m_connection->Send(out);
+    }
+}
+
 void WorldNetworkClient::PollEvents(std::deque<WorldNetworkEvent>& out) {
     std::lock_guard<std::mutex> lock(m_eventMutex);
     while (!m_events.empty()) {
@@ -529,6 +549,8 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             // 阶段15 指令六十九：进入世界返回玩家 Mana
             event.currentMana = response.currentMana;
             event.maxManaVal = response.maxMana;
+            // Stage27 指令五：本人造型（服务器权威）
+            event.visualId = response.visualId;
             event.errorCode = response.errorCode;
             event.message = response.message;
             PushEvent(std::move(event));
@@ -599,6 +621,9 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.currentHp = spawn.currentHp;
             event.maxHp = spawn.maxHp;
             event.alive = spawn.alive;
+            // Stage27 指令四/五：真实造型 + 朝向（服务器权威）
+            event.visualId = spawn.visualId;
+            event.direction = spawn.direction;
             PushEvent(std::move(event));
             return;
         }
@@ -629,7 +654,8 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             event.serverTime = snapshot.serverTime;
             event.batchPlayers.push_back({snapshot.characterId, snapshot.positionX,
                                           snapshot.positionY,
-                                          snapshot.lastProcessedInputSequence});
+                                          snapshot.lastProcessedInputSequence,
+                                          snapshot.direction});
             PushEvent(std::move(event));
             return;
         }
@@ -1525,6 +1551,44 @@ void WorldNetworkClient::OnPacket(const Packet& packet) {
             WorldNetworkEvent event;
             event.type = WorldNetworkEvent::Type::PlayerRespawnedEvent;
             event.playerRespawned = std::move(payload);
+            PushEvent(std::move(event));
+            return;
+        }
+        // ------------------------------------------------------------------
+        // Stage27 指令十三：聊天（SendResponse 提交结果 / MessageEvent 投递）。
+        // ------------------------------------------------------------------
+        case MessageId::ChatSendResponse: {
+            chat::ChatSendResponsePayload response;
+            std::string decodeError;
+            if (!chat::DecodeChatSendResponse(packet.payload.data(), packet.payload.size(),
+                                              response, decodeError)) {
+                return; // 畸形包丢弃
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ChatSendResponseEvent;
+            event.chat.requestId = response.requestId;
+            event.chat.success = response.success;
+            event.chat.errorCode = response.errorCode;
+            event.chat.errorMessage = response.message;
+            PushEvent(std::move(event));
+            return;
+        }
+        case MessageId::ChatMessageEvent: {
+            chat::ChatMessageEventPayload message;
+            std::string decodeError;
+            if (!chat::DecodeChatMessageEvent(packet.payload.data(), packet.payload.size(),
+                                              message, decodeError)) {
+                return;
+            }
+            WorldNetworkEvent event;
+            event.type = WorldNetworkEvent::Type::ChatMessageEvent;
+            event.chat.messageId = message.messageId;
+            event.chat.channel = message.channel;
+            event.chat.senderCharacterId = message.senderCharacterId;
+            event.chat.senderName = std::move(message.senderName);
+            event.chat.targetName = std::move(message.targetName);
+            event.chat.text = std::move(message.text);
+            event.chat.timestamp = message.timestamp;
             PushEvent(std::move(event));
             return;
         }

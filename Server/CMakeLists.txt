@@ -217,6 +217,8 @@ add_library(LegendWorldCore STATIC
     WorldServer/Portal/PortalRegistry.cpp
     WorldServer/Portal/PortalManager.cpp
     WorldServer/Portal/PortalSpatialGrid.cpp
+    # Stage27 指令四：服务器权威朝向（Direction8 纯函数，无 SDL/OpenGL 依赖）
+    ../Engine/Entity/Direction8.cpp
 )
 target_include_directories(LegendWorldCore PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(LegendWorldCore PUBLIC cxx_std_20)
