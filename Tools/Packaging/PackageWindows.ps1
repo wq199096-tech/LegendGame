@@ -83,6 +83,14 @@ function Require-Dir([string]$Path, [string]$Description) {
     }
 }
 
+function Diag([string]$Message) {
+    Write-Host $Message
+    # Mirror into Annotations so the lookup is diagnosable from the run page
+    # without admin log download.
+    $safe = $Message -replace "`r?`n", ' '
+    Write-Host "::notice::$safe"
+}
+
 function Find-CrtUnderVcRoot([string]$VcRoot) {
     if (-not $VcRoot) { return $null }
     $redistBase = Join-Path $VcRoot 'VC\Redist\MSVC'
@@ -101,23 +109,23 @@ function Find-VcRedistCrtDir {
     # Locate the VC++ redist CRT directory (no hard-coded dev-machine paths).
     # Strategy 1: vswhere.
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    Write-Host "CRT lookup: vswhere candidate = $vswhere"
+    Diag "CRT lookup: vswhere candidate = $vswhere"
     if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
         $installPath = (& $vswhere -latest -products * `
             -requires Microsoft.VisualStudio.Component.VC.Tools `
             -property installationPath 2>$null | Select-Object -First 1)
-        Write-Host "CRT lookup: vswhere installationPath = '$installPath'"
+        Diag "CRT lookup: vswhere installationPath = '$installPath'"
         $dir = Find-CrtUnderVcRoot $installPath
         if ($dir) { return $dir }
-        Write-Host 'CRT lookup: vswhere path yielded no CRT dir'
+        Diag 'CRT lookup: vswhere path yielded no CRT dir'
     } else {
-        Write-Host 'CRT lookup: vswhere.exe not found'
+        Diag 'CRT lookup: vswhere.exe not found'
     }
     # Strategy 2: well-known VS 2022 roots (glob over editions, still generic).
     foreach ($pf in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
         if (-not $pf) { continue }
         $root2022 = Join-Path $pf 'Microsoft Visual Studio\2022'
-        Write-Host "CRT lookup: scanning $root2022"
+        Diag "CRT lookup: scanning $root2022"
         if (-not (Test-Path -LiteralPath $root2022 -PathType Container)) { continue }
         foreach ($edition in (Get-ChildItem -LiteralPath $root2022 -Directory -ErrorAction SilentlyContinue)) {
             $dir = Find-CrtUnderVcRoot $edition.FullName
@@ -127,13 +135,13 @@ function Find-VcRedistCrtDir {
     # Strategy 3: VCToolsRedistDir env (set by some CI images; points at the
     # redist version dir, CRT lives under x64\Microsoft.VC*.CRT).
     if (${env:VCToolsRedistDir}) {
-        Write-Host "CRT lookup: trying VCToolsRedistDir = ${env:VCToolsRedistDir}"
+        Diag "CRT lookup: trying VCToolsRedistDir = ${env:VCToolsRedistDir}"
         $crt = Get-ChildItem -LiteralPath (Join-Path ${env:VCToolsRedistDir} 'x64') `
             -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending | Select-Object -First 1
         if ($crt) { return $crt.FullName }
     }
-    Write-Host 'CRT lookup: all strategies exhausted, no CRT dir found'
+    Diag 'CRT lookup: all strategies exhausted, no CRT dir found'
     return $null
 }
 
