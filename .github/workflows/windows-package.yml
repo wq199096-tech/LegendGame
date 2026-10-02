@@ -1,0 +1,396 @@
+# windows-package — Windows x64 distributable packaging pipeline.
+#
+# 设计说明（对应任务书第五节）：
+# - 测试门禁继续由 windows-build.yml 负责（Debug 全量门禁，不动）。
+# - 本 workflow 负责 Release 构建 + 全部冒烟复验 + 打包 + ZIP + artifact，
+#   仅在 main push 与 v* tag push 时运行（PR 只跑 windows-build.yml），
+#   Release 构建不可避免（Debug 包不可发布），这是与 Debug CI 的必要分工。
+# - 顺序遵循任务书第十八节：只有前面全部 PASS 才允许生成正式 artifact。
+name: windows-package
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  # PR #4 验证用：PR 的 base 是 stage27-player-identity-chat，文件一进分支就自动跑；
+  # 不影响 main/tag 正式逻辑。验证完成后可删除本段。
+  pull_request:
+    branches: [ stage27-player-identity-chat ]
+  # 手动触发：注意 GitHub 要求 workflow 文件必须在默认分支上才会显示 Run 按钮，
+  # 因此在文件合入 main 之前，手动触发不可用；合入 main 后可任意分支手动跑。
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string written into build-info.txt (tag builds always use the tag name)'
+        required: false
+        default: 'v0.27-dev'
+
+# tag 构建需要创建 GitHub Release。
+permissions:
+  contents: write
+
+env:
+  BIN_DIR: build/bin/Release
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (Release)
+        run: cmake -S . -B build
+
+      - name: Build (all targets, Release)
+        run: cmake --build build --config Release --parallel
+
+      # Client 冒烟需要 OpenGL 3.3——runner 只有 GDI Generic 1.1，
+      # 装 Mesa llvmpipe 软件渲染（同 windows-build.yml；注意此 DLL 仅供 CI，
+      # 打包脚本用白名单拷贝，绝不会进入用户包）。
+      - name: Install software OpenGL (Mesa llvmpipe) for client smoke
+        shell: pwsh
+        run: |
+          $ver = '26.2.3'
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$ver/mesa3d-$ver-release-msvc.7z"
+          $zip = "$env:RUNNER_TEMP/mesa.7z"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = '7z' }
+          & $sevenZip x $zip "-o$env:RUNNER_TEMP/mesa" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error 'mesa extract failed'; exit 1 }
+          $dst = $env:BIN_DIR
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/mesa/x64/opengl32.dll" $dst -Force
+          Copy-Item "$env:RUNNER_TEMP/mesa/x64/lib*.dll" $dst -Force
+          Get-ChildItem $dst -Filter *.dll | ForEach-Object { Write-Host $_.Name }
+          Write-Host 'MESA SOFTWARE GL INSTALLED'
+
+      - name: Verify artifacts (8 formal + 3 test executables, Release)
+        shell: pwsh
+        run: |
+          $exes = @(
+            "$env:BIN_DIR/LegendClient.exe",
+            "$env:BIN_DIR/LegendMapEditor.exe",
+            "$env:BIN_DIR/LegendGateway.exe",
+            "$env:BIN_DIR/LegendLoginServer.exe",
+            "$env:BIN_DIR/LegendWorldServer.exe",
+            "$env:BIN_DIR/LegendCharacterServer.exe",
+            "$env:BIN_DIR/LegendDbServer.exe",
+            "$env:BIN_DIR/LegendLogServer.exe",
+            "$env:BIN_DIR/LegendNetworkTests.exe",
+            "$env:BIN_DIR/LegendAccountTests.exe",
+            "$env:BIN_DIR/LegendWorldTests.exe"
+          )
+          foreach ($exe in $exes) {
+            if (-not (Test-Path $exe)) { Write-Error "$exe missing"; exit 1 }
+          }
+          Write-Host 'VERIFY 11 EXECUTABLES PASS (8 FORMAL + 3 TEST, Release)'
+
+      # CTest Runtime 硬门禁（禁止 continue-on-error；同 windows-build.yml）。
+      - name: Run runtime tests (CTest hard gate, Release)
+        shell: pwsh
+        run: |
+          ctest --test-dir build -C Release --output-on-failure 2>&1 | Tee-Object -FilePath ctest.log
+          $code = $LASTEXITCODE
+          exit $code
+      - name: Upload test log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-release
+          path: ctest.log
+          if-no-files-found: warn
+      - name: Runtime gate result
+        shell: pwsh
+        run: |
+          if (Select-String -Path ctest.log -Pattern 'tests failed|tests passed but with|errors while running' -Quiet) {
+            Write-Error 'Runtime tests failed'; exit 1
+          }
+          $last = Select-String -Path ctest.log -Pattern 'tests passed' | Select-Object -Last 1
+          if (-not $last) { Write-Error 'Runtime tests failed (no summary)'; exit 1 }
+          Write-Host $last.Line
+          Write-Host 'RUNTIME TESTS PASS (Release)'
+
+      - name: Server topology smoke (6 services, heartbeat window)
+        shell: pwsh
+        run: |
+          $bin = $env:BIN_DIR
+          $processes = @()
+          try {
+            foreach ($name in @('LegendDbServer','LegendLogServer','LegendLoginServer','LegendCharacterServer','LegendWorldServer','LegendGateway')) {
+              $processes += Start-Process -FilePath "$bin/$name.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+            }
+            $ports = @(7500,7600,7100,7400,7200,7300)
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $ready = $true
+              foreach ($port in $ports) {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                try { $tcp.Connect('127.0.0.1',$port) } catch { $ready = $false } finally { $tcp.Dispose() }
+              }
+              if (-not $ready) { Start-Sleep -Milliseconds 250 }
+            } until ($ready -or (Get-Date) -ge $deadline)
+            if (-not $ready) { Write-Error 'Topology ports did not become ready'; exit 1 }
+            $holdUntil = (Get-Date).AddSeconds(20)
+            while ((Get-Date) -lt $holdUntil) {
+              foreach ($proc in $processes) { if ($proc.HasExited) { Write-Error "service pid $($proc.Id) exited"; exit 1 } }
+              Start-Sleep -Milliseconds 500
+            }
+            Write-Host 'SERVER TOPOLOGY SMOKE PASS'
+          } finally {
+            foreach ($proc in $processes) { if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } }
+          }
+
+      - name: Vertical Slice runtime smoke (full 7-process chain)
+        shell: pwsh
+        run: |
+          function Dump-SmokeLogs([string]$reason) {
+            Write-Host "==== VsSmoke failure diagnostics: $reason ===="
+            foreach ($f in @('Logs/latest.log','Logs/Gateway/latest.log','Logs/World/latest.log','Logs/Character/latest.log','Logs/Login/latest.log','Logs/Db/latest.log','Logs/Log/latest.log')) {
+              if (Test-Path $f) {
+                Write-Host "---- $f (last 30 lines) ----"
+                Get-Content $f -Tail 30 | ForEach-Object { Write-Host $_ }
+              } else {
+                Write-Host "---- $f : MISSING ----"
+              }
+            }
+          }
+          $env:GALLIUM_DRIVER = 'llvmpipe'
+          $env:LEGEND_CLIENT_AUTO_ENTER = '1'
+          $env:LEGEND_CLIENT_VS_SMOKE = '1'
+          $bin = $env:BIN_DIR
+          Remove-Item Logs/latest.log -ErrorAction SilentlyContinue
+          $db = Start-Process -FilePath "$bin/LegendDbServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $logServer = Start-Process -FilePath "$bin/LegendLogServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $character = Start-Process -FilePath "$bin/LegendCharacterServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          try {
+            $ports = @(7500,7600,7100,7400,7200,7300)
+            $readyDeadline = (Get-Date).AddSeconds(30)
+            do {
+              $ready = $true
+              foreach ($port in $ports) {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                try { $tcp.Connect('127.0.0.1',$port) } catch { $ready = $false } finally { $tcp.Dispose() }
+              }
+              if (-not $ready) { Start-Sleep -Milliseconds 250 }
+            } until ($ready -or (Get-Date) -ge $readyDeadline)
+            if (-not $ready) {
+              Dump-SmokeLogs 'full topology readiness timeout (30s)'
+              Write-Error 'Full topology readiness failed'; exit 1
+            }
+            $client = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
+            $deadline = (Get-Date).AddSeconds(150)
+            while ((Get-Date) -lt $deadline -and -not $client.HasExited) {
+              Start-Sleep -Seconds 5
+            }
+            if (-not $client.HasExited) {
+              Dump-SmokeLogs 'client did not exit within 150s budget'
+              Stop-Process -Id $client.Id -Force
+              Write-Error 'VsSmoke client did not exit within budget'
+              exit 1
+            }
+            if ($client.ExitCode -ne 0) {
+              Dump-SmokeLogs "client exited with code $($client.ExitCode)"
+              Write-Error "VsSmoke client exit code $($client.ExitCode)"
+              exit 1
+            }
+            $log = Get-Content Logs/latest.log -Raw -ErrorAction SilentlyContinue
+            if (-not $log) { Dump-SmokeLogs 'client log missing'; Write-Error 'VsSmoke: log missing'; exit 1 }
+            if ($log -notmatch '\[VsSmoke\] entered-world') {
+              Dump-SmokeLogs 'entered-world marker missing (auto login -> world ready failed)'
+              Write-Error 'VsSmoke entered-world marker missing (auto login -> world ready failed)'
+              exit 1
+            }
+            if ($log -notmatch '\[VsSmoke\] pass') {
+              Dump-SmokeLogs 'pass marker missing (30s alive clean quit)'
+              Write-Error 'VsSmoke pass marker missing (30s alive clean quit)'
+              exit 1
+            }
+            Write-Host 'VERTICAL SLICE RUNTIME SMOKE PASS (db/log/login/character/world/gateway/client)'
+          } finally {
+            foreach ($proc in @($gateway, $world, $character, $login, $logServer, $db)) {
+              if ($proc -and -not $proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }
+
+      - name: Multiplayer chat smoke (8-process chain, 2 clients)
+        shell: pwsh
+        run: |
+          function Dump-SmokeLogs([string]$reason) {
+            Write-Host "==== ChatSmoke failure diagnostics: $reason ===="
+            foreach ($f in @('Logs/ChatClientA/latest.log','Logs/ChatClientB/latest.log','Logs/Gateway/latest.log','Logs/World/latest.log','Logs/Character/latest.log','Logs/Login/latest.log','Logs/Db/latest.log','Logs/Log/latest.log')) {
+              if (Test-Path $f) {
+                Write-Host "---- $f (last 25 lines) ----"
+                Get-Content $f -Tail 25 | ForEach-Object { Write-Host $_ }
+              } else {
+                Write-Host "---- $f : MISSING ----"
+              }
+            }
+          }
+          $env:GALLIUM_DRIVER = 'llvmpipe'
+          $env:LEGEND_CLIENT_AUTO_ENTER = '1'
+          $env:LEGEND_CLIENT_CHAT_SMOKE = '1'
+          $bin = $env:BIN_DIR
+          Remove-Item Logs -Recurse -Force -ErrorAction SilentlyContinue
+          $db = Start-Process -FilePath "$bin/LegendDbServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $logServer = Start-Process -FilePath "$bin/LegendLogServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $character = Start-Process -FilePath "$bin/LegendCharacterServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          try {
+            $ports = @(7500,7600,7100,7400,7200,7300)
+            $readyDeadline = (Get-Date).AddSeconds(30)
+            do {
+              $ready = $true
+              foreach ($port in $ports) {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                try { $tcp.Connect('127.0.0.1',$port) } catch { $ready = $false } finally { $tcp.Dispose() }
+              }
+              if (-not $ready) { Start-Sleep -Milliseconds 250 }
+            } until ($ready -or (Get-Date) -ge $readyDeadline)
+            if (-not $ready) {
+              Dump-SmokeLogs 'full topology readiness timeout (30s)'
+              Write-Error 'ChatSmoke: full topology readiness failed'; exit 1
+            }
+            $env:LEGEND_CLIENT_DEV_USER = 'chat_user_a'
+            $env:LEGEND_CLIENT_DEV_CHARNAME = 'HeroChatA'
+            $env:LEGEND_CLIENT_CHAT_TEXT = 'chat-a-hello-stage27'
+            $env:LEGEND_CLIENT_CHAT_EXPECT = 'chat-b-hello-stage27'
+            $env:LEGEND_CLIENT_LOG_DIR = 'Logs/ChatClientA'
+            $clientA = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
+            Start-Sleep -Seconds 2
+            $env:LEGEND_CLIENT_DEV_USER = 'chat_user_b'
+            $env:LEGEND_CLIENT_DEV_CHARNAME = 'HeroChatB'
+            $env:LEGEND_CLIENT_CHAT_TEXT = 'chat-b-hello-stage27'
+            $env:LEGEND_CLIENT_CHAT_EXPECT = 'chat-a-hello-stage27'
+            $env:LEGEND_CLIENT_LOG_DIR = 'Logs/ChatClientB'
+            $clientB = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
+            $deadline = (Get-Date).AddSeconds(240)
+            while ((Get-Date) -lt $deadline -and (-not $clientA.HasExited -or -not $clientB.HasExited)) {
+              Start-Sleep -Seconds 5
+            }
+            foreach ($pair in @(@('A', $clientA), @('B', $clientB))) {
+              $name = $pair[0]; $proc = $pair[1]
+              if (-not $proc.HasExited) {
+                Dump-SmokeLogs "client $name did not exit within 240s budget"
+                Stop-Process -Id $proc.Id -Force
+                Write-Error "ChatSmoke client $name did not exit within budget"
+                exit 1
+              }
+              if ($proc.ExitCode -ne 0) {
+                Dump-SmokeLogs "client $name exited with code $($proc.ExitCode)"
+                Write-Error "ChatSmoke client $name exit code $($proc.ExitCode)"
+                exit 1
+              }
+            }
+            foreach ($name in @('A','B')) {
+              $logPath = "Logs/ChatClient$name/latest.log"
+              $log = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+              if (-not $log) { Dump-SmokeLogs "client $name log missing"; Write-Error "ChatSmoke: client $name log missing"; exit 1 }
+              if ($log -notmatch '\[ChatSmoke\] sent') {
+                Dump-SmokeLogs "client $name sent marker missing (world chat not sent)"
+                Write-Error "ChatSmoke client $name sent marker missing"; exit 1
+              }
+              if ($log -notmatch '\[ChatSmoke\] received') {
+                Dump-SmokeLogs "client $name received marker missing (chat from the other client did not arrive)"
+                Write-Error "ChatSmoke client $name received marker missing"; exit 1
+              }
+              if ($log -notmatch '\[ChatSmoke\] pass') {
+                Dump-SmokeLogs "client $name pass marker missing"
+                Write-Error "ChatSmoke client $name pass marker missing"; exit 1
+              }
+            }
+            Write-Host 'MULTIPLAYER CHAT SMOKE PASS (db/log/login/character/world/gateway/clientA/clientB)'
+          } finally {
+            foreach ($proc in @($clientA, $clientB, $gateway, $world, $character, $login, $logServer, $db)) {
+              if ($proc -and -not $proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }
+
+      # 只有上面全部 PASS 才会走到这里：生成正式发布目录（含自检门禁）。
+      - name: Build distributable package
+        shell: pwsh
+        env:
+          PKG_VERSION_INPUT: ${{ github.event.inputs.version }}
+        run: |
+          # 版本号规则：tag 构建用 tag 名；手动触发用输入值；main push 用 v0.27-dev。
+          # SHA 永不进入文件名，只写进 build-info.txt。
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } elseif ($env:PKG_VERSION_INPUT) { $env:PKG_VERSION_INPUT } else { 'v0.27-dev' }
+          pwsh -File Tools/Packaging/PackageWindows.ps1 `
+            -BuildBinDir $env:BIN_DIR `
+            -DistDir 'dist/LegendGame-Windows-x64' `
+            -Version $version `
+            -CommitSha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # workflow 侧二次确认：目录与关键产出必须存在。
+          foreach ($p in @('dist/LegendGame-Windows-x64',
+                           'dist/LegendGame-Windows-x64/build-info.txt',
+                           'dist/LegendGame-Windows-x64/Start-LegendGame.bat',
+                           'dist/LegendGame-Windows-x64/Start-Client.bat',
+                           'dist/LegendGame-Windows-x64/Data',
+                           'dist/LegendGame-Windows-x64/Config',
+                           'dist/LegendGame-Windows-x64/Assets')) {
+            if (-not (Test-Path $p)) { Write-Error "package output missing: $p"; exit 1 }
+          }
+          $exeCount = (Get-ChildItem 'dist/LegendGame-Windows-x64/*.exe').Count
+          if ($exeCount -ne 8) { Write-Error "expected 8 formal exes, found $exeCount"; exit 1 }
+          Write-Host 'PACKAGE OUTPUT VERIFIED (8 exe + Data + Config + Assets + bats + build-info.txt)'
+
+      # ZIP 命名：main 构建 LegendGame-Windows-x64.zip；
+      # tag 构建 LegendGame-v0.27.0-Windows-x64.zip（SHA 只进 build-info.txt）。
+      # 用 7z 打包（字节原样拷贝，中文 JSON 不会被 PowerShell 转码损坏）。
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $zipName = "LegendGame-$($env:GITHUB_REF_NAME)-Windows-x64.zip"
+          } else {
+            $zipName = 'LegendGame-Windows-x64.zip'
+          }
+          $artifactName = 'LegendGame-Windows-x64'
+          "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ARTIFACT_NAME=$artifactName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = '7z' }
+          & $sevenZip a -tzip -mx=9 "dist/$zipName" ".\dist\LegendGame-Windows-x64" | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error 'zip creation failed'; exit 1 }
+          & $sevenZip l "dist/$zipName" | Select-Object -First 30 | ForEach-Object { Write-Host $_ }
+          Write-Host "ZIP CREATED: $zipName"
+
+      - name: Upload distributable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/${{ env.ZIP_NAME }}
+          retention-days: 30
+          if-no-files-found: error
+
+      # 仅 tag 构建创建 GitHub Release（main push / 手动触发禁止创建）。
+      - name: Create GitHub Release (tags only)
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $zip = "dist/$env:ZIP_NAME"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists, uploading asset."
+            gh release upload $tag $zip --clobber
+          } else {
+            gh release create $tag $zip `
+              --title "LegendGame $tag" `
+              --notes "Automated Windows x64 distributable build. Unzip and run Start-LegendGame.bat."
+          }
+          if ($LASTEXITCODE -ne 0) { Write-Error 'GitHub Release failed'; exit 1 }
+          Write-Host "GITHUB RELEASE READY: $tag"
