@@ -1165,10 +1165,12 @@ void RunConcurrentChecks(TestServers& servers) {
         for (int i = 0; i < kClients; ++i) {
             threads.emplace_back([&, i] {
                 auto& client = *clients[i];
-                client.ConnectAndWait(10000);
+                // 慢机加固：10 并发连接 + 服务器冷启动下 10s 连接窗口曾超时导致
+                // 计数缺口（CI Run 36944412540）——放宽等待，断言强度不变。
+                client.ConnectAndWait(30000);
                 client.account.SendRegister("dup_race_user", "DupRace123!");
                 NetworkEvent response;
-                if (client.WaitEvent(NetworkEvent::Type::RegisterResponse, response, 20000)) {
+                if (client.WaitEvent(NetworkEvent::Type::RegisterResponse, response, 30000)) {
                     if (response.success) {
                         ++successes;
                     } else if (response.errorCode ==
