@@ -106,30 +106,43 @@ function Find-CrtUnderVcRoot([string]$VcRoot) {
 }
 
 function Find-VcRedistCrtDir {
-    # Locate the VC++ redist CRT directory (no hard-coded dev-machine paths).
-    # Strategy 1: vswhere.
+    # Locate the VC++ redist CRT directory (no hard-coded dev-machine paths,
+    # no hard-coded VS major version).
+    # Strategy 1: vswhere, no -requires filter first (latest VS of any kind).
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     Diag "CRT lookup: vswhere candidate = $vswhere"
     if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
-        $installPath = (& $vswhere -latest -products * `
+        $installPath = (& $vswhere -latest -property installationPath 2>$null |
+            Select-Object -First 1)
+        Diag "CRT lookup: vswhere (no filter) installationPath = '$installPath'"
+        $dir = Find-CrtUnderVcRoot $installPath
+        if ($dir) { Diag "CRT lookup: HIT $dir"; return $dir }
+        $installPath2 = (& $vswhere -latest -products * `
             -requires Microsoft.VisualStudio.Component.VC.Tools `
             -property installationPath 2>$null | Select-Object -First 1)
-        Diag "CRT lookup: vswhere installationPath = '$installPath'"
-        $dir = Find-CrtUnderVcRoot $installPath
-        if ($dir) { return $dir }
-        Diag 'CRT lookup: vswhere path yielded no CRT dir'
+        Diag "CRT lookup: vswhere (VC.Tools filter) installationPath = '$installPath2'"
+        $dir = Find-CrtUnderVcRoot $installPath2
+        if ($dir) { Diag "CRT lookup: HIT $dir"; return $dir }
+        Diag 'CRT lookup: vswhere paths yielded no CRT dir'
     } else {
         Diag 'CRT lookup: vswhere.exe not found'
     }
-    # Strategy 2: well-known VS 2022 roots (glob over editions, still generic).
+    # Strategy 2: glob over ANY VS version/edition under Program Files.
     foreach ($pf in @(${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
         if (-not $pf) { continue }
-        $root2022 = Join-Path $pf 'Microsoft Visual Studio\2022'
-        Diag "CRT lookup: scanning $root2022"
-        if (-not (Test-Path -LiteralPath $root2022 -PathType Container)) { continue }
-        foreach ($edition in (Get-ChildItem -LiteralPath $root2022 -Directory -ErrorAction SilentlyContinue)) {
-            $dir = Find-CrtUnderVcRoot $edition.FullName
-            if ($dir) { return $dir }
+        $vsRoot = Join-Path $pf 'Microsoft Visual Studio'
+        if (-not (Test-Path -LiteralPath $vsRoot -PathType Container)) {
+            Diag "CRT lookup: missing $vsRoot"; continue
+        }
+        $vers = Get-ChildItem -LiteralPath $vsRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending
+        Diag "CRT lookup: under $vsRoot versions: $(($vers | ForEach-Object { $_.Name }) -join ', ')"
+        foreach ($ver in $vers) {
+            $editions = Get-ChildItem -LiteralPath $ver.FullName -Directory -ErrorAction SilentlyContinue
+            foreach ($ed in $editions) {
+                $dir = Find-CrtUnderVcRoot $ed.FullName
+                if ($dir) { Diag "CRT lookup: HIT $dir"; return $dir }
+            }
         }
     }
     # Strategy 3: VCToolsRedistDir env (set by some CI images; points at the
@@ -139,11 +152,12 @@ function Find-VcRedistCrtDir {
         $crt = Get-ChildItem -LiteralPath (Join-Path ${env:VCToolsRedistDir} 'x64') `
             -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending | Select-Object -First 1
-        if ($crt) { return $crt.FullName }
+        if ($crt) { Diag "CRT lookup: HIT $($crt.FullName)"; return $crt.FullName }
     }
     Diag 'CRT lookup: all strategies exhausted, no CRT dir found'
     return $null
 }
+
 
 Write-Host "=== LegendGame Windows packaging ==="
 Write-Host "RepoRoot   : $RepoRoot"
