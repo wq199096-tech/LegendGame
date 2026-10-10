@@ -92,6 +92,9 @@ enum class LogEventType : std::uint16_t {
     QuestComplete = 10,
     ServerError = 11,
     AdminAction = 12,
+    // Stage27 指令十八：聊天审计（message=text，characterId=发送者；
+    // extraJson 可含 channel/targetName；绝不含密码/Token/Ticket）。
+    ChatMessage = 13,
 };
 
 struct ServiceHandshake {

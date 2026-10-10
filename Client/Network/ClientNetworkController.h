@@ -74,6 +74,20 @@ private:
     static constexpr const char* kDevUsername = "dev_user";
     static constexpr const char* kDevPassword = "DevPass123!";
 
+public:
+    // Stage27 Multiplayer Chat Smoke：env 覆盖开发账号（两个冒烟客户端各用独立
+    // 账号，避免同角色重复上线拒绝）。LEGEND_CLIENT_DEV_USER / LEGEND_CLIENT_DEV_PASS。
+    static const char* DevUsername() {
+        const char* env = SDL_getenv("LEGEND_CLIENT_DEV_USER");
+        return env != nullptr && env[0] != '\0' ? env : kDevUsername;
+    }
+    static const char* DevPassword() {
+        const char* env = SDL_getenv("LEGEND_CLIENT_DEV_PASS");
+        return env != nullptr && env[0] != '\0' ? env : kDevPassword;
+    }
+
+private:
+
     // 阶段24：自动进世界（LEGEND_CLIENT_AUTO_ENTER=1；本地视觉冒烟链路）
     bool m_autoEnter = false;
     std::chrono::steady_clock::time_point m_autoEnterReadyAt{}; // 墙钟节流（非帧率）

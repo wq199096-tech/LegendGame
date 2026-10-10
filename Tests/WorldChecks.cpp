@@ -40,6 +40,8 @@ void RunChapterOneChecks(); // 阶段25：Chapter One 端到端（真实服务�
 void RunFullServerTopologyCheck(); // Stage25.5: config/topology contract
 int RunLeaveWorldChecks(WorldTestServers& servers); // Stage26 指令十七：主动离开世界
 int RunStage26FlowChecks(WorldTestServers& servers); // Stage26 指令三十六：玩家流程 E2E
+int RunStage27ChatChecks(WorldTestServers& servers); // Stage27：身份同步 + 聊天 E2E
+int RunPlayerFacingLocalizationChecks(); // Stage27 中文化专项：玩家可见文本简体中文
 }
 
 namespace {
@@ -894,6 +896,26 @@ int main() {
 
     RunWorldProtocolChecks();
     RunFullServerTopologyCheck();
+    RunPlayerFacingLocalizationChecks(); // Stage27 中文化专项（纯数据检查）
+
+    // ---- Stage27 指令四十：玩家身份同步 + 聊天 E2E（独立 servers 生命周期；
+    //      注入短限流窗口——指令三十五：明确时间控制，不靠长 sleep）。
+    //      放在套件序列最前（套件相互独立，顺序不影响结果）----
+    {
+        WorldTestServers servers;
+        servers.dbPath = TempDbPath("stage27_chat");
+        RemoveDb(servers.dbPath);
+        servers.chatNearbyWindowMs = 400;  // 测试窗口（生产默认 1000/2 条）
+        servers.chatWorldWindowMs = 400;   // 测试窗口（生产默认 3000/1 条）
+        servers.chatWhisperWindowMs = 300;
+        servers.chatBurstWindowMs = 5000;
+        servers.chatBurstMaxMessages = 8;
+        Check("Stage27LoginStartCheck", servers.StartLogin());
+        Check("Stage27WorldStartCheck", servers.StartWorld());
+
+        RunStage27ChatChecks(servers);
+        servers.StopAll();
+    }
 
     // ---- 阶段25：Chapter One E2E 与新角色出生检查最先执行（快速失败信号；
     //      独立 servers 生命周期，套件顺序不影响结果）----

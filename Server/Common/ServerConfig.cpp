@@ -80,6 +80,22 @@ bool LoadServerConfig(const std::string& path, ServerConfig& out, std::string& e
         if (root.contains("security")) {
             out.sharedSecret = root.at("security").value("serviceToken", std::string{});
         }
+        if (root.contains("chat")) {
+            // Stage27 指令四十六：聊天参数（可覆盖；校验在 ValidateServerConfig）。
+            const auto& chat = root.at("chat");
+            out.chatNearbyRadius = chat.value("nearbyRadius", out.chatNearbyRadius);
+            out.chatMaxCodePoints = chat.value("maxCodepoints", out.chatMaxCodePoints);
+            out.chatNearbyWindowMs = chat.value("nearbyWindowMs", out.chatNearbyWindowMs);
+            out.chatNearbyMaxPerWindow =
+                chat.value("nearbyMaxPerWindow", out.chatNearbyMaxPerWindow);
+            out.chatWorldWindowMs = chat.value("worldWindowMs", out.chatWorldWindowMs);
+            out.chatWorldMaxPerWindow = chat.value("worldMaxPerWindow", out.chatWorldMaxPerWindow);
+            out.chatWhisperWindowMs = chat.value("whisperWindowMs", out.chatWhisperWindowMs);
+            out.chatWhisperMaxPerWindow =
+                chat.value("whisperMaxPerWindow", out.chatWhisperMaxPerWindow);
+            out.chatBurstWindowMs = chat.value("burstWindowMs", out.chatBurstWindowMs);
+            out.chatBurstMaxMessages = chat.value("burstMaxMessages", out.chatBurstMaxMessages);
+        }
     } catch (const std::exception& ex) {
         error = "invalid server config: " + std::string(ex.what());
         return false;
@@ -125,6 +141,25 @@ bool ValidateServerConfig(const ServerConfig& config, std::string& error) {
     }
     if (config.rpcTimeoutMilliseconds < 100 || config.rpcTimeoutMilliseconds > 60000) {
         error = "rpc timeoutMilliseconds must be between 100 and 60000";
+        return false;
+    }
+    // Stage27 指令四十六：聊天参数校验（非法拒绝启动，不静默产生 0 窗口/0 条数）。
+    if (!(config.chatNearbyRadius > 0.0f && config.chatNearbyRadius <= 10000.0f)) {
+        error = "chat nearbyRadius must be between 0 and 10000";
+        return false;
+    }
+    if (config.chatMaxCodePoints < 1 || config.chatMaxCodePoints > 480) {
+        error = "chat maxCodepoints must be between 1 and 480";
+        return false;
+    }
+    const auto validRate = [](int windowMs, int maxPerWindow) {
+        return windowMs >= 100 && windowMs <= 60000 && maxPerWindow >= 1 && maxPerWindow <= 60;
+    };
+    if (!validRate(config.chatNearbyWindowMs, config.chatNearbyMaxPerWindow) ||
+        !validRate(config.chatWorldWindowMs, config.chatWorldMaxPerWindow) ||
+        !validRate(config.chatWhisperWindowMs, config.chatWhisperMaxPerWindow) ||
+        !validRate(config.chatBurstWindowMs, config.chatBurstMaxMessages)) {
+        error = "chat rate windows must be 100-60000 ms and maxPerWindow 1-60";
         return false;
     }
     return true;

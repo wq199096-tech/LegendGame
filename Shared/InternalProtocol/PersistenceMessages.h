@@ -234,6 +234,9 @@ struct WorldCharacterRow {
     float positionX = 0.0f;
     float positionY = 0.0f;
     bool deleted = false;
+    // Stage27 指令五：持久化造型（Migration 6 characters.visual_id）——WorldServer
+    // AOI PlayerSpawn 必须下发真实 visualId，禁止客户端按 classId 猜测。
+    std::uint16_t visualId = 1;
 };
 
 // LoadQuestState 结果（对应 QuestRepository::QuestRow/ObjectiveRow）。

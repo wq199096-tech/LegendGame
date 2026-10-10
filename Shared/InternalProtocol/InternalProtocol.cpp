@@ -63,7 +63,7 @@ bool IsValidDbOperation(DbOperation value) {
 }
 
 bool IsValidLogEventType(LogEventType value) {
-    return value >= LogEventType::LoginSuccess && value <= LogEventType::AdminAction;
+    return value >= LogEventType::LoginSuccess && value <= LogEventType::ChatMessage;
 }
 
 const char* ServiceTypeName(ServiceType value) {
@@ -92,6 +92,7 @@ const char* LogEventTypeName(LogEventType value) {
         case LogEventType::QuestComplete: return "QuestComplete";
         case LogEventType::ServerError: return "ServerError";
         case LogEventType::AdminAction: return "AdminAction";
+        case LogEventType::ChatMessage: return "ChatMessage";
         default: return "Unknown";
     }
 }

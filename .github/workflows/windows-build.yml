@@ -233,3 +233,104 @@ jobs:
               }
             }
           }
+
+      # Stage27 指令四十一：Multiplayer Chat Smoke（8 进程链：6 服务 + 双客户端）。
+      # 新增门禁，不删任何旧门禁。验证：两个客户端都 InWorld、
+      # 互发世界聊天、消息真实到达（[ChatSmoke] sent/received/pass 标记）。
+      - name: Multiplayer chat smoke (8-process chain, 2 clients)
+        shell: pwsh
+        run: |
+          function Dump-SmokeLogs([string]$reason) {
+            Write-Host "==== ChatSmoke failure diagnostics: $reason ===="
+            foreach ($f in @('Logs/ChatClientA/latest.log','Logs/ChatClientB/latest.log','Logs/Gateway/latest.log','Logs/World/latest.log','Logs/Character/latest.log','Logs/Login/latest.log','Logs/Db/latest.log','Logs/Log/latest.log')) {
+              if (Test-Path $f) {
+                Write-Host "---- $f (last 25 lines) ----"
+                Get-Content $f -Tail 25 | ForEach-Object { Write-Host $_ }
+              } else {
+                Write-Host "---- $f : MISSING ----"
+              }
+            }
+          }
+          $env:GALLIUM_DRIVER = 'llvmpipe'
+          $env:LEGEND_CLIENT_AUTO_ENTER = '1'
+          $env:LEGEND_CLIENT_CHAT_SMOKE = '1'
+          $bin = 'build/bin/Debug'
+          Remove-Item Logs -Recurse -Force -ErrorAction SilentlyContinue
+          $db = Start-Process -FilePath "$bin/LegendDbServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $logServer = Start-Process -FilePath "$bin/LegendLogServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $login = Start-Process -FilePath "$bin/LegendLoginServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $character = Start-Process -FilePath "$bin/LegendCharacterServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $world = Start-Process -FilePath "$bin/LegendWorldServer.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          $gateway = Start-Process -FilePath "$bin/LegendGateway.exe" -ArgumentList '--config','Config/servers.json','--console' -WorkingDirectory . -PassThru
+          try {
+            $ports = @(7500,7600,7100,7400,7200,7300)
+            $readyDeadline = (Get-Date).AddSeconds(30)
+            do {
+              $ready = $true
+              foreach ($port in $ports) {
+                $tcp = [System.Net.Sockets.TcpClient]::new()
+                try { $tcp.Connect('127.0.0.1',$port) } catch { $ready = $false } finally { $tcp.Dispose() }
+              }
+              if (-not $ready) { Start-Sleep -Milliseconds 250 }
+            } until ($ready -or (Get-Date) -ge $readyDeadline)
+            if (-not $ready) {
+              Dump-SmokeLogs 'full topology readiness timeout (30s)'
+              Write-Error 'ChatSmoke: full topology readiness failed'; exit 1
+            }
+            # 双客户端：各自独立账号/角色名/日志目录；互发世界聊天并等待对方文本。
+            $env:LEGEND_CLIENT_DEV_USER = 'chat_user_a'
+            $env:LEGEND_CLIENT_DEV_CHARNAME = 'HeroChatA'
+            $env:LEGEND_CLIENT_CHAT_TEXT = 'chat-a-hello-stage27'
+            $env:LEGEND_CLIENT_CHAT_EXPECT = 'chat-b-hello-stage27'
+            $env:LEGEND_CLIENT_LOG_DIR = 'Logs/ChatClientA'
+            $clientA = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
+            Start-Sleep -Seconds 2
+            $env:LEGEND_CLIENT_DEV_USER = 'chat_user_b'
+            $env:LEGEND_CLIENT_DEV_CHARNAME = 'HeroChatB'
+            $env:LEGEND_CLIENT_CHAT_TEXT = 'chat-b-hello-stage27'
+            $env:LEGEND_CLIENT_CHAT_EXPECT = 'chat-a-hello-stage27'
+            $env:LEGEND_CLIENT_LOG_DIR = 'Logs/ChatClientB'
+            $clientB = Start-Process -FilePath "$bin/LegendClient.exe" -WorkingDirectory . -PassThru
+            $deadline = (Get-Date).AddSeconds(240)
+            while ((Get-Date) -lt $deadline -and (-not $clientA.HasExited -or -not $clientB.HasExited)) {
+              Start-Sleep -Seconds 5
+            }
+            foreach ($pair in @(@('A', $clientA), @('B', $clientB))) {
+              $name = $pair[0]; $proc = $pair[1]
+              if (-not $proc.HasExited) {
+                Dump-SmokeLogs "client $name did not exit within 240s budget"
+                Stop-Process -Id $proc.Id -Force
+                Write-Error "ChatSmoke client $name did not exit within budget"
+                exit 1
+              }
+              if ($proc.ExitCode -ne 0) {
+                Dump-SmokeLogs "client $name exited with code $($proc.ExitCode)"
+                Write-Error "ChatSmoke client $name exit code $($proc.ExitCode)"
+                exit 1
+              }
+            }
+            foreach ($name in @('A','B')) {
+              $logPath = "Logs/ChatClient$name/latest.log"
+              $log = Get-Content $logPath -Raw -ErrorAction SilentlyContinue
+              if (-not $log) { Dump-SmokeLogs "client $name log missing"; Write-Error "ChatSmoke: client $name log missing"; exit 1 }
+              if ($log -notmatch '\[ChatSmoke\] sent') {
+                Dump-SmokeLogs "client $name sent marker missing (world chat not sent)"
+                Write-Error "ChatSmoke client $name sent marker missing"; exit 1
+              }
+              if ($log -notmatch '\[ChatSmoke\] received') {
+                Dump-SmokeLogs "client $name received marker missing (chat from the other client did not arrive)"
+                Write-Error "ChatSmoke client $name received marker missing"; exit 1
+              }
+              if ($log -notmatch '\[ChatSmoke\] pass') {
+                Dump-SmokeLogs "client $name pass marker missing"
+                Write-Error "ChatSmoke client $name pass marker missing"; exit 1
+              }
+            }
+            Write-Host 'MULTIPLAYER CHAT SMOKE PASS (db/log/login/character/world/gateway/clientA/clientB)'
+          } finally {
+            foreach ($proc in @($clientA, $clientB, $gateway, $world, $character, $login, $logServer, $db)) {
+              if ($proc -and -not $proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }

@@ -105,6 +105,8 @@ bool EncodeEnterWorldResponse(const EnterWorldResponsePayload& p, std::vector<st
         // 阶段15 指令六十九：玩家 Mana
         w.WriteUInt32(p.currentMana);
         w.WriteUInt32(p.maxMana);
+        // Stage27 指令五：本人造型（服务器权威）
+        w.WriteUInt16(p.visualId);
         w.WriteUInt16(p.errorCode);
         return w.WriteString(p.characterName) && w.WriteString(p.message);
     });
@@ -129,6 +131,7 @@ bool DecodeEnterWorldResponse(const std::uint8_t* data, std::size_t size,
         out.alive = r.ReadBool();
         out.currentMana = r.ReadUInt32();
         out.maxMana = r.ReadUInt32();
+        out.visualId = r.ReadUInt16();
         out.errorCode = r.ReadUInt16();
         (void)(r.ReadString(out.characterName) && r.ReadString(out.message));
     });
@@ -209,6 +212,9 @@ bool EncodePlayerSpawn(const PlayerSpawnPayload& p, std::vector<std::uint8_t>& o
         w.WriteUInt32(p.currentHp);
         w.WriteUInt32(p.maxHp);
         w.WriteBool(p.alive);
+        // Stage27 指令四/五：真实造型 + 朝向（服务器权威；远程玩家禁止按 classId 猜测）
+        w.WriteUInt16(p.visualId);
+        w.WriteUInt8(p.direction);
         return w.WriteString(p.name);
     });
 }
@@ -227,6 +233,8 @@ bool DecodePlayerSpawn(const std::uint8_t* data, std::size_t size, PlayerSpawnPa
         out.currentHp = r.ReadUInt32();
         out.maxHp = r.ReadUInt32();
         out.alive = r.ReadBool();
+        out.visualId = r.ReadUInt16();
+        out.direction = r.ReadUInt8();
         (void)(r.ReadString(out.name));
     });
 }
@@ -255,6 +263,7 @@ bool EncodeRemotePlayerSnapshot(const RemotePlayerSnapshotPayload& p,
         w.WriteFloat(p.positionY);
         w.WriteUInt32(p.lastProcessedInputSequence);
         w.WriteUInt64(p.serverTime);
+        w.WriteUInt8(p.direction);
         return true;
     });
 }
@@ -267,6 +276,7 @@ bool DecodeRemotePlayerSnapshot(const std::uint8_t* data, std::size_t size,
         out.positionY = r.ReadFloat();
         out.lastProcessedInputSequence = r.ReadUInt32();
         out.serverTime = r.ReadUInt64();
+        out.direction = r.ReadUInt8();
     });
 }
 
@@ -280,6 +290,7 @@ bool EncodeRemotePlayerBatchSnapshot(const RemotePlayerBatchSnapshotPayload& p,
             w.WriteFloat(entry.positionX);
             w.WriteFloat(entry.positionY);
             w.WriteUInt32(entry.lastProcessedInputSequence);
+            w.WriteUInt8(entry.direction);
         }
         return true;
     });
@@ -302,6 +313,7 @@ bool DecodeRemotePlayerBatchSnapshot(const std::uint8_t* data, std::size_t size,
             entry.positionX = r.ReadFloat();
             entry.positionY = r.ReadFloat();
             entry.lastProcessedInputSequence = r.ReadUInt32();
+            entry.direction = r.ReadUInt8();
             out.players.push_back(entry);
         }
     });

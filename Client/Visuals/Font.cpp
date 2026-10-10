@@ -1,4 +1,4 @@
-﻿#include "Client/Visuals/Font.h"
+#include "Client/Visuals/Font.h"
 
 #include "Engine/Debug/Logger.h"
 #include "Engine/Render/SpriteBatch.h"
@@ -303,13 +303,16 @@ void TextRenderer::DrawString(render::SpriteBatch& batch, const math::Vector2& p
     if (!m_ready || utf8Text.empty()) {
         return;
     }
+    // Stage27 指令三（CJK 输入实时显示修复）：必须"先测量（按需烘焙新字形）→
+    // 再上传图集 → 最后入队 quad"。此前上传发生在 MeasureText 之前：本次新烘焙
+    // 的字形停留在 CPU 图集，若随后同帧出现纹理切换（文本框边框/光标白纹理）
+    // 触发 SpriteBatch Flush，就会用陈旧 GPU 图集采样——新字形该帧透明。
+    const float scale = pixelHeight / static_cast<float>(m_bakePixelHeight);
+    const float totalWidth = MeasureText(utf8Text, pixelHeight);
     const_cast<TextRenderer*>(this)->UploadIfDirty();
     if (!m_atlasTexture.IsValid()) {
         return;
     }
-
-    const float scale = pixelHeight / static_cast<float>(m_bakePixelHeight);
-    const float totalWidth = MeasureText(utf8Text, pixelHeight);
     float penX = position.x;
     if (alignRight) {
         penX -= totalWidth;
@@ -368,7 +371,9 @@ void TextRenderer::DrawStringShadow(render::SpriteBatch& batch, const math::Vect
 }
 
 void TextRenderer::BeginFrame() {
-    // 兼容接口：上传在 DrawString 内惰性完成。
+    // Stage27 指令三：每帧渲染开始兜底上传脏图集（任何先 MeasureText/烘焙、
+    // 后绘制的路径都能保证 GPU 图集与 CPU 图集一致）。
+    UploadIfDirty();
 }
 
 } // namespace legend::client

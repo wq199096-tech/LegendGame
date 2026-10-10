@@ -1,6 +1,8 @@
 #include "Server/WorldServer/WorldServer.h"
 
 #include "Engine/Debug/Logger.h"
+#include "Engine/Entity/Direction8.h"
+#include "Engine/Math/Vector2.h"
 #include "Server/LoginServer/Account/Database/DatabaseSchema.h"
 #include "Server/WorldServer/Combat/CombatService.h"
 #include "Server/WorldServer/Combat/DamageCalculator.h"
@@ -439,6 +441,8 @@ void WorldServer::OnClientPacket(std::uint64_t connectionId, const Packet& packe
             HandlePortalUseRequest(connectionId, packet); // 阶段21 指令十九/二十一
         } else if (messageId == MessageId::RespawnRequest) {
             HandleRespawnRequest(connectionId, packet); // 阶段21 指令三十三
+        } else if (messageId == MessageId::ChatSendRequest) {
+            HandleChatSendRequest(connectionId, packet); // Stage27 指令十三
         }
     }
 }
@@ -461,6 +465,8 @@ void WorldServer::OnClientClosed(std::uint64_t connectionId, const std::error_co
     auto player = m_players.RemoveByConnection(connectionId);
     if (player) {
         m_mapManager.RemovePlayer(connectionId, player->MapId());
+        // Stage27 指令二十八：断线立即清理在线表（私聊离线判定即时生效）。
+        m_onlinePlayers.RemoveByCharacterId(player->CharacterId());
         // 阶段12 指令十九/五十九/六十：Grid 移除 + 通知所有能看到 B 的玩家 Despawn
         //（防 ghost player），并从他们的 visiblePlayers 清除。
         m_spatialGrid.RemovePlayer(player->CharacterId());
@@ -517,6 +523,8 @@ void WorldServer::HandleLeaveWorldRequest(std::uint64_t connectionId,
     auto removed = m_players.RemoveByConnection(connectionId);
     if (removed) {
         m_mapManager.RemovePlayer(connectionId, removed->MapId());
+        // Stage27 指令二十八：主动离开立即清理在线表。
+        m_onlinePlayers.RemoveByCharacterId(removed->CharacterId());
         m_spatialGrid.RemovePlayer(removed->CharacterId());
         NotifyPlayerGoneToObservers(removed->CharacterId(), PlayerDespawnReason::LeftWorld);
         OnTargetPlayerRemoved(removed->CharacterId());
@@ -818,6 +826,7 @@ void WorldServer::HandleConsumeResponse(const Packet& packet) {
                     load.row.mapId = rpcRow.mapId;
                     load.row.positionX = rpcRow.positionX;
                     load.row.positionY = rpcRow.positionY;
+                    load.row.visualId = rpcRow.visualId; // Stage27 指令五：持久化造型
                 }
                 // 第二段：持久化背包（角色有效才加载；失败清空——与 legacy 语义一致）。
                 self->m_persistence->AsyncRequest(
@@ -977,7 +986,7 @@ void WorldServer::ApplyEnterWorldLoad(std::uint64_t connectionId, std::uint64_t 
     }
     auto player = std::make_shared<PlayerSession>(connectionId, accountId, characterId,
                                                   row.name, row.classId, row.gender,
-                                                  row.level, mapId, x, y);
+                                                  row.level, mapId, x, y, row.visualId);
     if (row.mapId != mapId || row.positionX != x || row.positionY != y) {
         // 修正后的位置立即重新持久化（不能静默保留非法值）。
         SavePlayerPositionNow(characterId, mapId, x, y);
@@ -1004,6 +1013,19 @@ void WorldServer::ApplyEnterWorldLoad(std::uint64_t connectionId, std::uint64_t 
     // 阶段12 指令十二：进入 WorldManager/MapManager/SpatialGrid。
     m_spatialGrid.AddPlayer(player);
     session->SetState(WorldSessionState::InWorld);
+    // Stage27 指令二十九：登记在线玩家目录（私聊/玩家查找 O(1)）。
+    m_onlinePlayers.Add(player);
+    // Stage27 指令十二：进入世界系统消息（ServerSystemMessage API 复用）。
+    {
+        chat::ChatMessageEventPayload welcome;
+        welcome.messageId = m_nextChatMessageId++;
+        welcome.channel = static_cast<std::uint8_t>(chat::ChatChannel::System);
+        welcome.text = "欢迎进入LegendGame";
+        welcome.timestamp = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        SendChatMessageEvent(player, welcome);
+    }
     SendEnterWorldSuccess(connectionId, requestId, player);
     // 阶段18 指令二十八：应用持久化背包/装备（Snapshot 在进场后下发）。
     ApplyLoadedItems(player, load.itemRows);
@@ -1093,6 +1115,8 @@ void WorldServer::SendEnterWorldSuccess(std::uint64_t connectionId, std::uint64_
     // 阶段15 指令六十九：进入世界返回玩家 Mana（不持久化，恢复 100/100）。
     out.currentMana = player->CurrentMana();
     out.maxMana = player->MaxMana();
+    // Stage27 指令五：本人造型（服务器权威；客户端不得自行猜测 visualId）。
+    out.visualId = player->VisualId();
     out.errorCode = static_cast<std::uint16_t>(WorldErrorCode::None);
     out.message = "ok";
     Packet packet;
@@ -1159,6 +1183,13 @@ void WorldServer::HandleMoveInput(std::uint64_t connectionId, const Packet& pack
     const bool moved = WorldMapManager::ApplyMoveInput(
         *player, moveMap != nullptr ? *moveMap : kFallbackMap, input.inputSequence,
         input.directionX, input.directionY, input.deltaTime);
+    // Stage27 指令四：服务器权威朝向（非零方向输入即更新；AOI 对端拿真实朝向）。
+    if (input.directionX != 0.0f || input.directionY != 0.0f) {
+        const legend::entity::Direction8 dir = legend::entity::DirectionFromVector(
+            legend::math::Vector2(input.directionX, input.directionY),
+            static_cast<legend::entity::Direction8>(player->Direction()));
+        player->SetDirection(static_cast<std::uint8_t>(dir));
+    }
     const bool actuallyMoved =
         player->PositionX() != prevX || player->PositionY() != prevY;
     if (actuallyMoved && player->IsCasting()) {
@@ -1173,6 +1204,276 @@ void WorldServer::HandleMoveInput(std::uint64_t connectionId, const Packet& pack
         // 服务器权威位置——Client 不能伪造"我到了"，指令一百零七）。
         HandleQuestPlayerMoved(player);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage27：聊天（指令八~十八）。校验链（服务器权威，全部 io 线程）：
+//   InWorld 状态 -> requestId 防重放 -> channel 合法性（System 拒绝）->
+//   文本校验（120 码点/UTF-8 严格/控制字符/空与纯空格）-> Whisper 目标 ->
+//   限流（频道窗口 + 跨频道突发）-> 路由广播 -> 审计。
+// 指令四十二：Nearby 用 SpatialGrid 空间索引；World 遍历在线 session；
+//   Whisper 查 OnlinePlayerDirectory——全部内存操作，不访问 SQLite。
+// ---------------------------------------------------------------------------
+void WorldServer::HandleChatSendRequest(std::uint64_t connectionId,
+                                        const legend::network::Packet& packet) {
+    chat::ChatSendRequestPayload request;
+    std::string decodeError;
+    if (!chat::DecodeChatSendRequest(packet.payload.data(), packet.payload.size(), request,
+                                     decodeError)) {
+        // 指令三十六：畸形包只断当前 Client（不能断整个 WorldServer）。
+        LOG_INFO("[Chat] Malformed ChatSendRequest from #" + std::to_string(connectionId));
+        std::shared_ptr<WorldSession> session;
+        {
+            std::lock_guard<std::mutex> lock(m_sessionsMutex);
+            auto it = m_sessions.find(connectionId);
+            if (it != m_sessions.end()) {
+                session = it->second;
+            }
+        }
+        if (session) {
+            std::lock_guard<std::mutex> lock(m_sessionsMutex);
+            m_sessions.erase(connectionId);
+            session->Disconnect();
+        }
+        return;
+    }
+    auto player = m_players.FindByConnection(connectionId);
+    if (!player) {
+        // 未进入世界（状态机外）——拒绝但不断连（客户端渲染层不会出现该路径）。
+        SendChatSendResponse(nullptr, request.requestId, false, chat::ChatErrorCode::NotInWorld);
+        return;
+    }
+    const auto now = chat::SteadyClock::now();
+
+    // 指令十六：防重放——重复 requestId 不重复广播；成功请求幂等回执。
+    if (player->IsRecentChatRequest(request.requestId)) {
+        LOG_INFO("[Chat] duplicate chat requestId " + std::to_string(request.requestId) +
+                 " from #" + player->CharacterName());
+        SendChatSendResponse(player, request.requestId, true, chat::ChatErrorCode::None);
+        return;
+    }
+
+    const auto finishReject = [&](chat::ChatErrorCode code) {
+        LOG_INFO("[Chat] rejected player=" + player->CharacterName() + " channel=" +
+                 std::to_string(request.channel) + " code=" + chat::ChatErrorCodeName(
+                     static_cast<std::uint16_t>(code)));
+        SendChatSendResponse(player, request.requestId, false, code);
+    };
+
+    // 指令八/十二：channel 必须合法；System 只能服务器产生。
+    if (!chat::IsValidChatChannelValue(request.channel)) {
+        finishReject(chat::ChatErrorCode::InvalidChannel);
+        return;
+    }
+    if (static_cast<chat::ChatChannel>(request.channel) == chat::ChatChannel::System) {
+        finishReject(chat::ChatErrorCode::SystemChannelForbidden);
+        return;
+    }
+
+    // 指令十四/二十七：文本校验（UTF-8 严格/120 码点/控制字符/空与纯空格）。
+    if (!chat::IsValidChatText(request.text,
+                               static_cast<std::size_t>(m_config.chatMaxCodePoints))) {
+        // 细分空消息与非法字符，超长单独判断（玩家可读文案更精确）。
+        if (request.text.empty()) {
+            finishReject(chat::ChatErrorCode::EmptyText);
+            return;
+        }
+        std::size_t codePoints = 0;
+        std::size_t i = 0;
+        bool hasControl = false;
+        bool validUtf8 = true;
+        while (i < request.text.size()) {
+            std::uint32_t cp = 0;
+            if (!legend::account::detail::DecodeUtf8CodePoint(request.text, i, cp)) {
+                validUtf8 = false;
+                break;
+            }
+            if (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F)) {
+                hasControl = true;
+            }
+            ++codePoints;
+        }
+        if (!validUtf8 || hasControl) {
+            finishReject(chat::ChatErrorCode::InvalidUtf8);
+            return;
+        }
+        if (codePoints > static_cast<std::size_t>(m_config.chatMaxCodePoints)) {
+            finishReject(chat::ChatErrorCode::TextTooLong);
+            return;
+        }
+        finishReject(chat::ChatErrorCode::EmptyText); // 纯空格
+        return;
+    }
+
+    // 指令十一：私聊目标（必须在线；按角色名查 OnlinePlayerDirectory）。
+    std::shared_ptr<PlayerSession> whisperTarget;
+    if (static_cast<chat::ChatChannel>(request.channel) == chat::ChatChannel::Whisper) {
+        if (!chat::IsValidChatTargetName(request.targetName)) {
+            finishReject(chat::ChatErrorCode::TargetInvalid);
+            return;
+        }
+        whisperTarget = m_onlinePlayers.FindByCharacterName(request.targetName);
+        if (!whisperTarget) {
+            finishReject(chat::ChatErrorCode::TargetOffline); // "该玩家当前不在线"
+            return;
+        }
+    }
+
+    // 指令十五：限流（频道窗口 + 跨频道突发；服务器权威）。
+    const int channelValue = static_cast<int>(request.channel);
+    int windowMs = 0;
+    int maxPerWindow = 0;
+    switch (static_cast<chat::ChatChannel>(request.channel)) {
+        case chat::ChatChannel::Nearby:
+            windowMs = m_config.chatNearbyWindowMs;
+            maxPerWindow = m_config.chatNearbyMaxPerWindow;
+            break;
+        case chat::ChatChannel::World:
+            windowMs = m_config.chatWorldWindowMs;
+            maxPerWindow = m_config.chatWorldMaxPerWindow;
+            break;
+        case chat::ChatChannel::Whisper:
+            windowMs = m_config.chatWhisperWindowMs;
+            maxPerWindow = m_config.chatWhisperMaxPerWindow;
+            break;
+        default:
+            break;
+    }
+    const auto& channelSends =
+        player->ChatChannelSends()[static_cast<std::size_t>(channelValue)];
+    if (!player->IsChatRateAllowedAt(channelSends, now, windowMs, maxPerWindow) ||
+        !player->IsChatRateAllowedAt(player->ChatRecentSends(), now,
+                                     m_config.chatBurstWindowMs,
+                                     m_config.chatBurstMaxMessages)) {
+        finishReject(chat::ChatErrorCode::RateLimited); // "发言过于频繁，请稍后再试"
+        return;
+    }
+
+    // 允许：推进限流状态 + 记录成功 requestId（防重放只缓存成功请求）。
+    player->TouchChatSent(channelValue, now);
+    player->RememberChatRequest(request.requestId);
+
+    // 组装广播事件（指令十三：服务器权威 sender；绝不发账号名/Token）。
+    chat::ChatMessageEventPayload event;
+    event.messageId = m_nextChatMessageId++;
+    event.channel = request.channel;
+    event.senderCharacterId = player->CharacterId();
+    event.senderName = player->CharacterName();
+    event.targetName = request.targetName;
+    event.text = request.text;
+    event.timestamp = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    switch (static_cast<chat::ChatChannel>(request.channel)) {
+        case chat::ChatChannel::Nearby: {
+            // 指令九：同地图 + kNearbyChatRadius 内（服务器计算距离；排除自己）。
+            auto candidates = m_spatialGrid.QueryNearbyPlayers(
+                player->PositionX(), player->PositionY(), m_config.chatNearbyRadius,
+                player->CharacterId());
+            const float radiusSq = m_config.chatNearbyRadius * m_config.chatNearbyRadius;
+            for (const auto& candidate : candidates) {
+                if (candidate.player->MapId() != player->MapId() ||
+                    candidate.distanceSquared > radiusSq) {
+                    continue; // 指令三十四：跨地图即使坐标一样也收不到
+                }
+                SendChatMessageEvent(candidate.player, event);
+            }
+            SendChatMessageEvent(player, event); // 发送者本人一定收到回显
+            break;
+        }
+        case chat::ChatChannel::World: {
+            // 指令十：全部 InWorld 玩家（单 WorldServer；不查数据库）。
+            for (const auto& online : m_players.SnapshotPlayers()) {
+                SendChatMessageEvent(online, event);
+            }
+            break;
+        }
+        case chat::ChatChannel::Whisper: {
+            // 指令十一：只有 A/B 收到（C 不收到）；目标必须在线（上方已校验）。
+            if (whisperTarget && whisperTarget != player) {
+                SendChatMessageEvent(whisperTarget, event);
+            }
+            SendChatMessageEvent(player, event);
+            break;
+        }
+        default:
+            break;
+    }
+
+    // 指令四十四：正常日志（不打印 Token/Ticket/密码）。
+    LOG_INFO("[Chat] sent player=" + player->CharacterName() + " channel=" +
+             std::to_string(request.channel) + " len=" + std::to_string(request.text.size()));
+    // 提交成功回执（客户端以 ChatSendResponse 为准；防重放重复请求的幂等回执
+    // 也走同一接口——重复请求在上方提前返回）。
+    SendChatSendResponse(player, request.requestId, true, chat::ChatErrorCode::None);
+    // 指令十八：审计（LogServer 不可用由 EmitChatAudit 内部 warning 兜底）。
+    chat::ChatAuditRecord audit;
+    audit.timestampMs = event.timestamp;
+    audit.senderCharacterId = event.senderCharacterId;
+    audit.senderName = event.senderName;
+    audit.channel = event.channel;
+    audit.targetName = event.targetName;
+    audit.text = event.text;
+    EmitChatAudit(audit);
+}
+
+void WorldServer::BroadcastSystemMessage(const std::string& text) {
+    // 指令十二/十四：System 只能服务器产生；文本同样过校验（服务器自身纪律）。
+    if (!chat::IsValidChatText(text, static_cast<std::size_t>(m_config.chatMaxCodePoints))) {
+        LOG_WARN("[Chat] system message rejected by text validation (len=" +
+                 std::to_string(text.size()) + ")");
+        return;
+    }
+    chat::ChatMessageEventPayload event;
+    event.messageId = m_nextChatMessageId++;
+    event.channel = static_cast<std::uint8_t>(chat::ChatChannel::System);
+    event.senderCharacterId = 0;
+    event.senderName.clear();
+    event.text = text;
+    event.timestamp = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    for (const auto& online : m_players.SnapshotPlayers()) {
+        SendChatMessageEvent(online, event);
+    }
+    LOG_INFO("[Chat] system message broadcast len=" + std::to_string(text.size()));
+}
+
+void WorldServer::SendChatSendResponse(const std::shared_ptr<PlayerSession>& player,
+                                       std::uint64_t requestId, bool success,
+                                       chat::ChatErrorCode code) {
+    if (!player) {
+        return;
+    }
+    chat::ChatSendResponsePayload out;
+    out.requestId = requestId;
+    out.success = success;
+    out.errorCode = static_cast<std::uint16_t>(code);
+    out.message = success ? "" : chat::ChatErrorUserText(static_cast<std::uint16_t>(code));
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::ChatSendResponse);
+    if (chat::EncodeChatSendResponse(out, packet.payload)) {
+        SendPacketToPlayer(player, packet);
+    }
+}
+
+void WorldServer::SendChatMessageEvent(const std::shared_ptr<PlayerSession>& receiver,
+                                       const chat::ChatMessageEventPayload& event) {
+    Packet packet;
+    packet.header.messageId = static_cast<std::uint16_t>(MessageId::ChatMessageEvent);
+    if (chat::EncodeChatMessageEvent(event, packet.payload)) {
+        SendPacketToPlayer(receiver, packet);
+    }
+}
+
+void WorldServer::EmitChatAudit(const chat::ChatAuditRecord& record) {
+    // 指令十八：LogServer 暂不可用 -> 仅 warning，聊天本身不停止。
+    if (!m_hooks.onChatAudit) {
+        LOG_WARN("[Chat] audit hook missing — chat continues without LogServer audit.");
+        return;
+    }
+    m_hooks.onChatAudit(record);
 }
 
 void WorldServer::ScheduleSnapshotTimer() {
@@ -1867,6 +2168,9 @@ void WorldServer::SendPlayerSpawn(const std::shared_ptr<PlayerSession>& receiver
     payload.currentHp = target->CurrentHp();
     payload.maxHp = target->MaxHp();
     payload.alive = target->Alive();
+    // Stage27 指令四/五：真实造型 + 朝向（服务器权威）。
+    payload.visualId = target->VisualId();
+    payload.direction = target->Direction();
     Packet out;
     out.header.messageId = static_cast<std::uint16_t>(MessageId::PlayerSpawn);
     if (EncodePlayerSpawn(payload, out.payload)) {
@@ -1900,7 +2204,7 @@ void WorldServer::SendRemoteBatches(const std::shared_ptr<PlayerSession>& player
             continue; // 可见集短暂残留（下个 AOI tick 清理）
         }
         entries.push_back({remote->CharacterId(), remote->PositionX(), remote->PositionY(),
-                           remote->LastProcessedInputSequence()});
+                           remote->LastProcessedInputSequence(), remote->Direction()});
     }
     // 指令二十六/六十三：单 batch <= 128，超过拆包。
     for (std::size_t offset = 0; offset < entries.size(); offset += kRemoteBatchMaxPlayers) {

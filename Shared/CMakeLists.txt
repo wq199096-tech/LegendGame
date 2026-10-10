@@ -14,6 +14,7 @@ add_library(LegendSharedNetwork STATIC
     InternalProtocol/InternalProtocol.cpp
     InternalProtocol/PersistenceMessages.cpp
     Account/AccountProtocol.cpp
+    Chat/ChatProtocol.cpp
     World/WorldProtocol.cpp
     Monster/MonsterProtocol.cpp
     Combat/CombatProtocol.cpp

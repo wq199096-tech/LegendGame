@@ -17,7 +17,8 @@ void RemotePlayerManager::HandleBatch(const world::RemotePlayerBatchSnapshotPayl
         if (it == m_players.end()) {
             continue; // 指令四十八/八十七：未知 characterId snapshot 丢弃（不创建实体）
         }
-        it->second.ApplySnapshot(entry.positionX, entry.positionY, batch.serverTime);
+        it->second.ApplySnapshot(entry.positionX, entry.positionY, batch.serverTime,
+                                 entry.direction);
     }
     // 指令七十二：记录最后 batch 大小（F12 Debug）。
     m_lastBatchSize = static_cast<std::uint32_t>(batch.players.size());

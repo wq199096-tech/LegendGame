@@ -61,6 +61,8 @@ public:
     void RequestFocusField(FlowField field);
     // Esc 收编（指令三十五）：注册页→登录页；创建页→大厅；确认框→关闭；其余无操作。
     void HandleEsc();
+    // Stage27 指令三：每帧喂入当前 IME 组合串（仅展示预览，不落字段缓冲）。
+    void SetCompositionText(const std::string& composition);
 
     // 文本输入（GameScene 每帧喂入；作用于当前焦点字段）。
     void FeedTextInput(const std::vector<std::string>& utf8Chunks, bool backspace);

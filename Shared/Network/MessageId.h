@@ -133,6 +133,11 @@ enum class MessageId : std::uint16_t {
     RespawnRequest = 346,
     RespawnResponse = 347,
     PlayerRespawned = 348,
+    // Stage27 指令十三：聊天（350~352；349 留空作安全间隔。此前游戏消息段最大
+    // PlayerRespawned=348，1000+ 为 Stage25.5 内部协议段，客户端永不路由）。
+    ChatSendRequest = 350,
+    ChatSendResponse = 351,
+    ChatMessageEvent = 352,
     // Stage25.5: private server-to-server protocol. Clients are never routed to these IDs.
     InternalServiceHandshake = 1000,
     InternalServiceHandshakeAck = 1001,
@@ -299,6 +304,9 @@ inline bool IsValidMessageId(std::uint16_t id) {
         case MessageId::RespawnRequest:
         case MessageId::RespawnResponse:
         case MessageId::PlayerRespawned:
+        case MessageId::ChatSendRequest:
+        case MessageId::ChatSendResponse:
+        case MessageId::ChatMessageEvent:
         case MessageId::InternalServiceHandshake:
         case MessageId::InternalServiceHandshakeAck:
         case MessageId::InternalHeartbeat:

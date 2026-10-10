@@ -17,7 +17,7 @@
       "modelId": 1,
       "monsterDefinitionId": 1,
       "moveSpeed": 80.0,
-      "name": "Training Slime",
+      "name": "史莱姆",
       "patrolRadius": 180.0,
       "visualId": "training_slime"
     },
@@ -38,7 +38,7 @@
       "modelId": 1,
       "monsterDefinitionId": 2001,
       "moveSpeed": 45.0,
-      "name": "Ancient Slime Guardian",
+      "name": "远古史莱姆守卫",
       "patrolRadius": 120.0,
       "visualId": "ancient_guardian"
     }

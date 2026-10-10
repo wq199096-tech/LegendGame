@@ -519,6 +519,13 @@ void ClientFlowController::HandleEsc() {
     }
 }
 
+void ClientFlowController::SetCompositionText(const std::string& composition) {
+    // Stage27 指令三：仅展示的组合预览（GameScene 每帧从 InputManager 喂入）。
+    if (m_model.compositionText != composition) {
+        m_model.compositionText = composition;
+    }
+}
+
 void ClientFlowController::FeedTextInput(const std::vector<std::string>& utf8Chunks,
                                          bool backspace) {
     std::string* target = nullptr;

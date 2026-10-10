@@ -5,6 +5,7 @@
 #include "Server/WorldServer/Quest/PlayerQuestContainer.h"
 #include "Server/WorldServer/Status/StatusEffectContainer.h"
 
+#include "Shared/Chat/ChatConstants.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Monster/MonsterTypes.h"
 #include "Shared/Progression/ProgressionTypes.h"
@@ -54,9 +55,12 @@ public:
 class PlayerSession {
 public:
     PlayerSession() = default;
+    // Stage27 指令五：visualId 来自 CharacterServer/DbServer 持久化角色数据
+    //（服务器权威）；默认 1 兼容旧测试构造。
     PlayerSession(std::uint64_t connectionId, std::uint64_t accountId, std::uint64_t characterId,
                   const std::string& characterName, std::uint16_t classId, std::uint16_t gender,
-                  std::uint32_t level, std::uint16_t mapId, float positionX, float positionY);
+                  std::uint32_t level, std::uint16_t mapId, float positionX, float positionY,
+                  std::uint16_t visualId = 1);
 
     std::uint64_t ConnectionId() const { return m_connectionId; }
     std::uint64_t AccountId() const { return m_accountId; }
@@ -65,6 +69,7 @@ public:
     std::uint16_t ClassId() const { return m_classId; }
     std::uint16_t Gender() const { return m_gender; }
     std::uint32_t Level() const { return m_level; }
+    std::uint16_t VisualId() const { return m_visualId; }
     std::uint16_t MapId() const { return m_mapId; }
     // 阶段20 指令六十五：NPC 传送服务器权威更新 mapId（Client 不能决定）。
     void SetMapId(std::uint16_t mapId) { m_mapId = mapId; m_persistence.positionDirty = true; }
@@ -81,6 +86,11 @@ public:
     void SetLastProcessedInputSequence(std::uint32_t sequence) {
         m_lastProcessedInputSequence = sequence;
     }
+
+    // Stage27 指令四：服务器权威朝向（Direction8；移动输入非零向量时更新，
+    // AOI Spawn/Snapshot 下发给对端做初始朝向）。
+    std::uint8_t Direction() const { return m_direction; }
+    void SetDirection(std::uint8_t direction) { m_direction = direction; }
 
     bool IsPositionDirty() const { return m_dirtyPosition || m_persistence.positionDirty; }
     void SetPositionDirty(bool dirty) { m_dirtyPosition = dirty; m_persistence.positionDirty = dirty; }
@@ -183,6 +193,49 @@ public:
         m_recentAttackRequestIds[m_recentAttackRequestCursor] = requestId;
         m_recentAttackRequestCursor =
             (m_recentAttackRequestCursor + 1) % m_recentAttackRequestIds.size();
+    }
+
+    // ------------------------------------------------------------------
+    // Stage27 指令十五/十六：聊天限流状态 + 防重放（服务器权威；runtime only）。
+    // 纯函数判定在 Shared/Chat/ChatConstants.h（IsChatOffCooldown/IsChatBurstAllowed，
+    // 时间点由调用方注入，测试无需 sleep）；这里只持有状态并推进。
+    // ------------------------------------------------------------------
+    bool IsRecentChatRequest(std::uint64_t requestId) const {
+        for (const auto id : m_recentChatRequestIds) {
+            if (id == requestId) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void RememberChatRequest(std::uint64_t requestId) {
+        m_recentChatRequestIds[m_recentChatRequestCursor] = requestId;
+        m_recentChatRequestCursor =
+            (m_recentChatRequestCursor + 1) % m_recentChatRequestIds.size();
+    }
+
+    // 频道/突发窗口判定（不动状态；调用方在允许后手动 Touch）。
+    // times = 该频道（或跨频道突发）的最近发送时间记录。
+    bool IsChatRateAllowedAt(const std::deque<chat::ChatTimePoint>& times,
+                             chat::ChatTimePoint now, int windowMs, int maxMessages) const {
+        return chat::IsChatRateAllowed(now, times, windowMs, maxMessages);
+    }
+    // 白盒访问器（WorldServer 限流判定用；仅 io 线程访问）。
+    const std::array<std::deque<chat::ChatTimePoint>, 8>& ChatChannelSends() const {
+        return m_chatChannelSends;
+    }
+    const std::deque<chat::ChatTimePoint>& ChatRecentSends() const { return m_chatRecentSends; }
+    // 允许后推进状态：记录频道发送 + 跨频道突发窗口记录。
+    void TouchChatSent(int channelValue, chat::ChatTimePoint now) {
+        m_chatChannelSends[static_cast<std::size_t>(channelValue)].push_back(now);
+        m_chatRecentSends.push_back(now);
+        // 环形容量上限防退化（服务器窗口 <= 60s；8 条突发 * 8 频道余量足够）。
+        while (m_chatChannelSends[static_cast<std::size_t>(channelValue)].size() > 64) {
+            m_chatChannelSends[static_cast<std::size_t>(channelValue)].pop_front();
+        }
+        while (m_chatRecentSends.size() > 64) {
+            m_chatRecentSends.pop_front();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -444,6 +497,8 @@ private:
     std::uint16_t m_gender = 0;
     std::uint32_t m_level = 1;
     std::uint16_t m_mapId = 1;
+    std::uint16_t m_visualId = 1;   // Stage27 指令五：持久化造型（服务器权威）
+    std::uint8_t m_direction = 0;   // Stage27 指令四：朝向（Direction8，默认 South）
     float m_positionX = 0.0f;
     float m_positionY = 0.0f;
     std::uint32_t m_lastProcessedInputSequence = 0;
@@ -468,6 +523,13 @@ private:
     std::uint64_t m_combatTargetEntityId = 0;
     std::array<std::uint64_t, kAttackRequestHistorySize> m_recentAttackRequestIds{};
     std::size_t m_recentAttackRequestCursor = 0;
+
+    // Stage27：聊天限流/防重放状态（runtime only，指令十五/十六）。
+    // m_chatChannelSends 以 channel wire 值（1~4）为下标，记录各频道发送时间。
+    std::array<std::uint64_t, chat::kChatRequestHistorySize> m_recentChatRequestIds{};
+    std::size_t m_recentChatRequestCursor = 0;
+    std::array<std::deque<chat::ChatTimePoint>, 8> m_chatChannelSends{};
+    std::deque<chat::ChatTimePoint> m_chatRecentSends; // 跨频道突发窗口（指令十五）
 
     // 阶段15：技能字段（runtime only，不持久化——重启/重进恢复默认）。
     std::uint32_t m_maxMana = kPlayerMaxMana;     // 指令十一：100

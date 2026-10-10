@@ -88,6 +88,16 @@ void WorldClientController::SendSkillCast(std::uint32_t skillId, std::uint8_t ta
     m_client->SendSkillCast(++m_lastSkillRequestId, skillId, targetType, targetEntityId);
 }
 
+void WorldClientController::SendChat(std::uint8_t channel, const std::string& targetName,
+                                     const std::string& text) {
+    // Stage27 指令十三：requestId 单调递增（服务器防重放）；本地不预判成功——
+    // 以 ChatSendResponse 为准（失败显示中文文案）。
+    if (!IsWorldReady()) {
+        return;
+    }
+    m_client->SendChat(++m_lastChatRequestId, channel, targetName, text);
+}
+
 void WorldClientController::Disconnect() {
     m_client->Disconnect(true);
     m_remotePlayers.Clear();   // 阶段12 指令五十九（客户端侧）：断开清空远程实体
@@ -214,6 +224,9 @@ void WorldClientController::HandleEvent(const WorldNetworkEvent& event) {
             spawn.currentHp = event.currentHp;
             spawn.maxHp = event.maxHp;
             spawn.alive = event.alive;
+            // Stage27 指令四/五：真实造型 + 朝向（服务器权威）
+            spawn.visualId = static_cast<std::uint16_t>(event.visualId);
+            spawn.direction = event.direction;
             m_remotePlayers.HandleSpawn(spawn);
             LOG_DEBUG("[World] PlayerSpawn #" + std::to_string(event.characterId) + " " +
                       event.characterName);
@@ -1153,8 +1166,7 @@ std::string WorldClientController::MapStatusText() const {
                                   : 0.0;
         char buf[160];
         std::snprintf(buf, sizeof(buf),
-                      "[YOU DIED] Respawn in %.1fs | R = Current Map Respawn (%uG) | T = Town "
-                      "Respawn (Free)\n",
+                      "你已死亡，%.1f 秒后可复活 | R = 本图复活（%u 金币）| T = 返回城镇复活（免费）\n",
                       remain, static_cast<unsigned>(legend::world::kRespawnCurrentMapGoldCost));
         text += buf;
     } else if (m_localRespawnTime.time_since_epoch().count() != 0) {
@@ -1162,8 +1174,9 @@ std::string WorldClientController::MapStatusText() const {
             std::chrono::duration<double>(std::chrono::steady_clock::now() - m_localRespawnTime)
                 .count();
         if (sinceRespawn < legend::world::kRespawnProtectionSeconds) {
-            text += "[Respawn Protection] " +
-                    std::to_string(legend::world::kRespawnProtectionSeconds - sinceRespawn) + "s\n";
+            text += "复活保护中，剩余 " +
+                    std::to_string(legend::world::kRespawnProtectionSeconds - sinceRespawn) +
+                    " 秒\n";
         }
     }
     return text;

@@ -20,6 +20,7 @@
 #include "Server/WorldServer/Npc/NpcManager.h"
 #include "Server/WorldServer/Npc/NpcSpatialGrid.h"
 #include "Server/WorldServer/Npc/NpcInteractionService.h"
+#include "Server/WorldServer/OnlinePlayerDirectory.h"
 #include "Server/WorldServer/Portal/PortalManager.h"
 #include "Server/WorldServer/Portal/PortalSpatialGrid.h"
 #include "Server/WorldServer/Progression/ProgressionService.h"
@@ -34,6 +35,7 @@
 #include "Server/WorldServer/WorldMapManager.h"
 #include "Server/WorldServer/WorldSession.h"
 
+#include "Shared/Chat/ChatProtocol.h"
 #include "Shared/Combat/CombatProtocol.h"
 #include "Shared/Combat/CombatTypes.h"
 #include "Shared/Dialogue/DialogueProtocol.h"
@@ -148,11 +150,26 @@ public:
         std::uint16_t dbPort = 0;
         std::string serviceToken;
         std::chrono::milliseconds dbTimeout{5000};
+        // Stage27 指令四十六：聊天配置（Config/servers.json "chat" 节覆盖；语义 =
+        // 窗口内允许条数：附近 1s/2 条、世界 3s/1 条、私聊 1s/3 条、突发 10s/8 条；
+        // 非法值在 ServerConfig 校验拒绝启动——不静默产生 0 窗口/0 条数）。
+        float chatNearbyRadius = chat::kNearbyChatRadius;   // 附近聊天半径（world units）
+        int chatMaxCodePoints = static_cast<int>(chat::kChatMaxCodePoints); // 120 码点
+        int chatNearbyWindowMs = chat::kChatNearbyWindowMs;
+        int chatNearbyMaxPerWindow = chat::kChatNearbyMaxPerWindow;
+        int chatWorldWindowMs = chat::kChatWorldWindowMs;
+        int chatWorldMaxPerWindow = chat::kChatWorldMaxPerWindow;
+        int chatWhisperWindowMs = chat::kChatWhisperWindowMs;
+        int chatWhisperMaxPerWindow = chat::kChatWhisperMaxPerWindow;
+        int chatBurstWindowMs = chat::kChatBurstWindowMs;
+        int chatBurstMaxMessages = chat::kChatBurstMaxMessages;
     };
 
     struct Hooks {
         std::function<void(bool connected)> onLoginConnectionChanged;
         std::function<void(std::uint64_t characterId, bool entered)> onPlayerChanged;
+        // Stage27 指令十八：聊天审计（WorldServer -> LogServer；不含密码/Token/Ticket）。
+        std::function<void(const chat::ChatAuditRecord&)> onChatAudit;
     };
 
     explicit WorldServer(legend::net::NetworkService& service);
@@ -391,7 +408,6 @@ public:
     // 指令六十五~六十七：服务器权威传送（Teleport Option 触发）。
     bool TestTeleportPlayer(std::uint64_t characterId, std::uint16_t mapId, float x, float y);
 
-    // ------------------------------------------------------------------
     // 阶段21：多地图 / Portal / 复活（100% 服务器权威；Client 只表达意图）。
     // ------------------------------------------------------------------
     // Portal 访问器（测试/运维白盒）。
@@ -403,6 +419,23 @@ public:
     bool TestSetPlayerLevel(std::uint64_t characterId, std::uint32_t level);
     // 测试白盒：设置金币（Portal/复活 Gold 验证布景用；不写 DB，内存权威值）。
     bool TestSetPlayerGold(std::uint64_t characterId, std::int64_t gold);
+
+    // ------------------------------------------------------------------
+    // Stage27：聊天（指令八~十八；100% 服务器权威，Client 不能决定接收者）。
+    // ------------------------------------------------------------------
+    // 请求入口（io 线程）：校验链 = 状态机 -> 防重放 -> channel -> 文本 ->
+    // 目标（Whisper）-> 限流/突发 -> 路由（Nearby=空间索引 / World=在线表 /
+    // Whisper=OnlinePlayerDirectory）。指令四十二：不访问 SQLite 查在线玩家。
+    void HandleChatSendRequest(std::uint64_t connectionId,
+                               const legend::network::Packet& packet);
+    // System 频道 API（指令十二：只能服务器产生；后续运营系统复用）。
+    // 全服广播 + 审计；stageId/messageId 单调。
+    void BroadcastSystemMessage(const std::string& text);
+    // 在线玩家目录访问器（测试/运维白盒；指令二十九）。
+    std::shared_ptr<PlayerSession> FindOnlineByCharacterName(const std::string& name) const {
+        return m_onlinePlayers.FindByCharacterName(name);
+    }
+    std::size_t OnlinePlayerCount() const { return m_onlinePlayers.Size(); }
 
 private:
     // 阶段21：Portal 生成与 AOI。
@@ -575,6 +608,14 @@ private:
     void SendPacketToPlayer(const std::shared_ptr<PlayerSession>& player,
                             const legend::network::Packet& packet);
 
+    // Stage27：聊天发送（响应/事件/审计）。
+    void SendChatSendResponse(const std::shared_ptr<PlayerSession>& player,
+                              std::uint64_t requestId, bool success,
+                              chat::ChatErrorCode code);
+    void SendChatMessageEvent(const std::shared_ptr<PlayerSession>& receiver,
+                              const chat::ChatMessageEventPayload& event);
+    void EmitChatAudit(const chat::ChatAuditRecord& record);
+
     // 阶段13：怪物（指令十五/三十/三十一/六十五/六十九/七十/一百零六）
     void SpawnInitialMonsters();
     void ScheduleMonsterAiTick();
@@ -707,6 +748,10 @@ private:
     NpcSpatialGrid m_npcGrid;
     std::uint64_t m_nextDialogueSessionId = 1; // 指令二十一：dialogueSessionId 单调
     std::uint64_t m_nextShopSessionId = 1;     // 指令四十：shopSessionId 单调
+
+    // Stage27：聊天（指令二十九：在线目录；messageId 单调 runtime only）。
+    OnlinePlayerDirectory m_onlinePlayers;
+    std::uint64_t m_nextChatMessageId = 1;
 
     // 阶段21：多地图 / Portal 系统（Map/Portal Registry 单例；Portal 静态不移动）。
     PortalManager m_portals;
